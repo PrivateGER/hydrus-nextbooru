@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(if not exist \"src\\lib\" mkdir \"src\\lib\")",
+      "Bash(npx prisma generate:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(docker compose:*)",
+      "Bash(npm run build:*)",
+      "Bash(dir \"C:\\Users\\Latte\\WebstormProjects\\booru\" /b)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

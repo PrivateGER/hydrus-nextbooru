@@ -1,0 +1,195 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum Rating {
+  UNRATED
+  SAFE
+  QUESTIONABLE
+  EXPLICIT
+}
+
+enum TagCategory {
+  GENERAL
+  ARTIST
+  CHARACTER
+  COPYRIGHT
+  META
+}
+
+enum SourceType {
+  PIXIV
+  TWITTER
+  DEVIANTART
+  DANBOORU
+  GELBOORU
+  TITLE     // Grouped by normalized filename/title
+  OTHER
+}
+
+enum ThumbnailSize {
+  GRID    // 300px - for gallery grid
+  PREVIEW // 600px - for hover/detail view
+}
+
+enum ThumbnailStatus {
+  PENDING    // Not yet generated
+  PROCESSING // Currently generating
+  COMPLETE   // All sizes ready
+  FAILED     // Use Hydrus fallback
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model Post {
+  id           Int      @id @default(autoincrement())
+  hydrusFileId Int      @unique
+  hash         String   @unique @db.Char(64)
+
+  // File info
+  filePath      String
+  thumbnailPath String?
+  mimeType      String
+  extension     String
+  fileSize      Int
+  width         Int?
+  height        Int?
+  duration      Int? // milliseconds for video/audio
+  hasAudio      Boolean  @default(false)
+  blurhash      String?
+
+  // Metadata
+  rating     Rating   @default(UNRATED)
+  sourceUrls String[] // Known URLs from Hydrus
+
+  // Timestamps
+  importedAt DateTime // When imported to Hydrus
+  syncedAt   DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Thumbnail generation status
+  thumbnailStatus ThumbnailStatus @default(PENDING)
+
+  // Relations
+  tags       PostTag[]
+  groups     PostGroup[]
+  thumbnails Thumbnail[]
+  notes      Note[]
+
+  @@index([rating])
+  @@index([importedAt])
+  @@index([mimeType])
+}
+
+model Tag {
+  id       Int         @id @default(autoincrement())
+  name     String
+  category TagCategory
+
+  posts PostTag[]
+
+  @@unique([name, category])
+  @@index([name])
+  @@index([category])
+}
+
+model PostTag {
+  postId Int
+  tagId  Int
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId])
+}
+
+model Group {
+  id         Int        @id @default(autoincrement())
+  sourceType SourceType // PIXIV, TWITTER, etc.
+  sourceId   String     // The pixiv/twitter post ID
+
+  posts PostGroup[]
+
+  @@unique([sourceType, sourceId])
+  @@index([sourceType])
+}
+
+model PostGroup {
+  postId   Int
+  groupId  Int
+  position Int   @default(0) // Order within the group
+  post     Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  group    Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([postId, groupId])
+  @@index([groupId])
+}
+
+model Note {
+  id      Int    @id @default(autoincrement())
+  postId  Int
+  post    Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  name    String // Note name/label from Hydrus
+  content String // Note text content
+
+  @@unique([postId, name])
+  @@index([postId])
+}
+
+// ============================================
+// SYNC STATE (for tracking sync operations)
+// ============================================
+
+model SyncState {
+  id            Int       @id @default(autoincrement())
+  lastSyncedAt  DateTime?
+  lastSyncCount Int       @default(0)
+  status        String    @default("idle") // idle, running, completed, error
+  errorMessage  String?
+
+  // Progress tracking
+  totalFiles     Int @default(0)
+  processedFiles Int @default(0)
+  currentBatch   Int @default(0)
+  totalBatches   Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// THUMBNAIL GENERATION
+// ============================================
+
+model Thumbnail {
+  id     Int           @id @default(autoincrement())
+  postId Int
+  post   Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  size   ThumbnailSize
+
+  format   String // "webp"
+  width    Int
+  height   Int
+  fileSize Int    // bytes
+  path     String // Relative path from THUMBNAIL_PATH
+
+  generatedAt DateTime @default(now())
+
+  @@unique([postId, size])
+  @@index([postId])
+}

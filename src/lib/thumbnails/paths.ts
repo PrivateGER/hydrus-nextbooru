@@ -1,0 +1,40 @@
+import { join } from "path";
+import { ThumbnailSize } from "./types";
+
+/**
+ * Get the base path for thumbnail storage.
+ * Defaults to ./data/thumbnails relative to project root.
+ */
+export function getThumbnailBasePath(): string {
+  return process.env.THUMBNAIL_PATH || join(process.cwd(), "data", "thumbnails");
+}
+
+/**
+ * Get the full path for a generated thumbnail.
+ * Structure: {base}/{size}/{prefix}/{hash}.webp
+ */
+export function getThumbnailPath(hash: string, size: ThumbnailSize): string {
+  const basePath = getThumbnailBasePath();
+  const prefix = hash.substring(0, 2).toLowerCase();
+  const sizeDir = size === "GRID" ? "grid" : "preview";
+  return join(basePath, sizeDir, prefix, `${hash}.webp`);
+}
+
+/**
+ * Get the relative path for storage in database.
+ * Structure: {size}/{prefix}/{hash}.webp
+ */
+export function getThumbnailRelativePath(hash: string, size: ThumbnailSize): string {
+  const prefix = hash.substring(0, 2).toLowerCase();
+  const sizeDir = size === "GRID" ? "grid" : "preview";
+  return join(sizeDir, prefix, `${hash}.webp`);
+}
+
+/**
+ * Get the Hydrus thumbnail path for fallback.
+ */
+export function getHydrusThumbnailPath(hash: string): string {
+  const basePath = process.env.HYDRUS_FILES_PATH || "";
+  const prefix = hash.substring(0, 2).toLowerCase();
+  return join(basePath, `t${prefix}`, `${hash}.thumbnail`);
+}
