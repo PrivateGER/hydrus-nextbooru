@@ -9,7 +9,8 @@
       "Bash(dir \"C:\\Users\\Latte\\WebstormProjects\\booru\" /b)",
       "Bash(find:*)",
       "Bash(ls:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm test)"
     ],
     "deny": [],
     "ask": []
