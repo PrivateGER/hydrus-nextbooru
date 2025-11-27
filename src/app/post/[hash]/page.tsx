@@ -211,24 +211,29 @@ export default async function PostPage({ params }: PostPageProps) {
                   View source
                 </a>
               </h2>
-              <div className="flex flex-wrap gap-2">
+              <div className="columns-3 gap-2 sm:columns-4 md:columns-5 lg:columns-6">
                 {group.posts.map((pg) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
-                    className={`relative overflow-hidden rounded ${
+                    className={`relative mb-2 block overflow-hidden rounded-lg bg-zinc-700 break-inside-avoid transition-transform hover:scale-[1.02] ${
                       pg.post.hash === post.hash
                         ? "ring-2 ring-blue-500"
-                        : "hover:ring-2 hover:ring-zinc-500"
+                        : "hover:ring-2 hover:ring-blue-500"
                     }`}
                   >
                     <img
                       src={`/api/thumbnails/${pg.post.hash}`}
                       alt=""
-                      className="h-20 w-20 object-cover"
+                      className="w-full h-auto"
+                      style={
+                        pg.post.width && pg.post.height
+                          ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
+                          : { aspectRatio: "1" }
+                      }
                     />
-                    <span className="absolute bottom-0 right-0 bg-black/70 px-1 text-xs">
-                      {pg.position + 1}
+                    <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
+                      {pg.position}
                     </span>
                   </Link>
                 ))}

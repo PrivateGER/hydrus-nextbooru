@@ -4,6 +4,7 @@ import { HydrusClient } from "./client";
 import type { HydrusFileMetadata } from "./types";
 import { parseTag, normalizeTagForStorage } from "./tag-mapper";
 import { parseSourceUrls } from "./url-parser";
+import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma } from "@/generated/prisma/client";
 
 /**
@@ -79,17 +80,28 @@ function collectTagsFromBatch(files: HydrusFileMetadata[]): Map<string, { name: 
 
 /**
  * Pre-extract all unique groups from a batch of files.
+ * Includes both URL-based groups and title-based groups.
  * Returns a Map of "SOURCETYPE:sourceId" -> { sourceType, sourceId }
  */
 function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, { sourceType: SourceType; sourceId: string }> {
   const allGroups = new Map<string, { sourceType: SourceType; sourceId: string }>();
 
   for (const file of files) {
+    // URL-based groups
     const sources = parseSourceUrls(file.known_urls || []);
     for (const source of sources) {
       const key = `${source.sourceType}:${source.sourceId}`;
       if (!allGroups.has(key)) {
         allGroups.set(key, { sourceType: source.sourceType as SourceType, sourceId: source.sourceId });
+      }
+    }
+
+    // Title-based groups (from title: tags)
+    const titleGroups = extractTitleGroups(file);
+    for (const titleGroup of titleGroups) {
+      const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
+      if (!allGroups.has(key)) {
+        allGroups.set(key, { sourceType: titleGroup.sourceType, sourceId: titleGroup.sourceId });
       }
     }
   }
@@ -346,7 +358,7 @@ async function processFileSafe(
   // Parse source URLs and lookup group IDs
   const sourceUrls = metadata.known_urls || [];
   const parsedSources = parseSourceUrls(sourceUrls);
-  const groupData: { groupId: number; position: number; originalUrl: string }[] = [];
+  const groupData: { groupId: number; position: number }[] = [];
   const missingGroups: string[] = [];
 
   for (const source of parsedSources) {
@@ -354,7 +366,19 @@ async function processFileSafe(
     const groupId = lookups.groupIds.get(key);
     if (groupId !== undefined) {
       const position = extractPositionFromUrl(source.originalUrl);
-      groupData.push({ groupId, position, originalUrl: source.originalUrl });
+      groupData.push({ groupId, position });
+    } else {
+      missingGroups.push(key);
+    }
+  }
+
+  // Add title-based groups
+  const titleGroups = extractTitleGroups(metadata);
+  for (const titleGroup of titleGroups) {
+    const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
+    const groupId = lookups.groupIds.get(key);
+    if (groupId !== undefined) {
+      groupData.push({ groupId, position: titleGroup.position });
     } else {
       missingGroups.push(key);
     }
@@ -617,19 +641,20 @@ function extractTags(metadata: HydrusFileMetadata): ReturnType<typeof parseTag>[
 }
 
 /**
- * Extract position number from URL (e.g., _p1 from pixiv URLs)
+ * Extract position number from URL (e.g., _p0 from pixiv URLs)
+ * Returns 1-indexed position for consistency with title-based grouping
  */
 function extractPositionFromUrl(url: string): number {
-  // Pixiv: 12345678_p0.png
+  // Pixiv: 12345678_p0.png (0-indexed in URL, convert to 1-indexed)
   const pixivMatch = url.match(/_p(\d+)/);
   if (pixivMatch) {
-    return parseInt(pixivMatch[1], 10);
+    return parseInt(pixivMatch[1], 10) + 1;
   }
 
-  // Twitter: media index from the URL
+  // Twitter: media index from the URL (0-indexed, convert to 1-indexed)
   const twitterMatch = url.match(/\/media\/.*?(\d+)/);
   if (twitterMatch) {
-    return parseInt(twitterMatch[1], 10);
+    return parseInt(twitterMatch[1], 10) + 1;
   }
 
   return 0;

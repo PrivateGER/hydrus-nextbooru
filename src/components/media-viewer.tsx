@@ -20,12 +20,12 @@ export function MediaViewer({
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
 
   return (
-    <div className="group relative flex items-center justify-center rounded-lg bg-zinc-800">
+    <div className="group relative inline-block rounded-lg bg-zinc-800">
       {/* Previous button */}
       {prevPostHash !== undefined && (
         <Link
           href={`/post/${prevPostHash}`}
-          className="absolute left-4 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+          className="absolute left-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
           aria-label="Previous image"
         >
           <svg
@@ -52,7 +52,7 @@ export function MediaViewer({
           controls
           autoPlay
           loop
-          className="max-h-[80vh] w-auto rounded"
+          className="max-h-[85vh] max-w-full rounded"
         >
           Your browser does not support the video tag.
         </video>
@@ -61,7 +61,7 @@ export function MediaViewer({
           <img
             src={`/api/files/${hash}`}
             alt=""
-            className="max-h-[80vh] w-auto rounded"
+            className="max-h-[85vh] max-w-full rounded"
           />
         </a>
       ) : (
@@ -74,7 +74,7 @@ export function MediaViewer({
       {nextPostHash !== undefined && (
         <Link
           href={`/post/${nextPostHash}`}
-          className="absolute right-4 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+          className="absolute right-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
           aria-label="Next image"
         >
           <svg
