@@ -103,12 +103,14 @@ export default async function PostPage({ params }: PostPageProps) {
   };
 
   return (
-    <div className="flex gap-6">
-      {/* Left sidebar - Tags */}
-      <TagSidebar tags={tags} />
+    <div className="flex flex-col lg:flex-row gap-6">
+      {/* Sidebar - Tags (appears below content on mobile, left on desktop) */}
+      <div className="order-last lg:order-first">
+        <TagSidebar tags={tags} />
+      </div>
 
       {/* Main content */}
-      <div className="flex-1 space-y-6">
+      <div className="flex-1 min-w-0 space-y-6">
         {/* Media viewer */}
         <MediaViewer
           hash={post.hash}
@@ -211,7 +213,7 @@ export default async function PostPage({ params }: PostPageProps) {
                   View source
                 </a>
               </h2>
-              <div className="columns-3 gap-2 sm:columns-4 md:columns-5 lg:columns-6">
+              <div className="columns-2 gap-2 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6">
                 {group.posts.map((pg) => (
                   <Link
                     key={pg.post.hash}

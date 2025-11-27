@@ -63,7 +63,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
   };
 
   return (
-    <aside className="w-64 shrink-0 space-y-4">
+    <aside className="w-full lg:w-64 lg:shrink-0 space-y-4">
       {CATEGORY_ORDER.map((category) => {
         const categoryTags = grouped[category];
         if (!categoryTags || categoryTags.length === 0) return null;

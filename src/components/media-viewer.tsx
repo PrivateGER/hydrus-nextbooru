@@ -25,7 +25,7 @@ export function MediaViewer({
       {prevPostHash !== undefined && (
         <Link
           href={`/post/${prevPostHash}`}
-          className="absolute left-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+          className="absolute left-2 lg:left-4 top-1/2 z-10 flex h-10 w-10 lg:h-12 lg:w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity hover:bg-black/80 lg:opacity-0 lg:group-hover:opacity-100"
           aria-label="Previous image"
         >
           <svg
@@ -74,7 +74,7 @@ export function MediaViewer({
       {nextPostHash !== undefined && (
         <Link
           href={`/post/${nextPostHash}`}
-          className="absolute right-4 top-1/2 z-10 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+          className="absolute right-2 lg:right-4 top-1/2 z-10 flex h-10 w-10 lg:h-12 lg:w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity hover:bg-black/80 lg:opacity-0 lg:group-hover:opacity-100"
           aria-label="Next image"
         >
           <svg
@@ -96,7 +96,7 @@ export function MediaViewer({
 
       {/* Position indicator (shows on hover when in group) */}
       {hasNavigation && (
-        <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-sm text-white opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="absolute bottom-2 lg:bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-sm text-white lg:opacity-0 transition-opacity lg:group-hover:opacity-100">
           {prevPostHash === undefined ? "First" : nextPostHash === undefined ? "Last" : ""}
         </div>
       )}

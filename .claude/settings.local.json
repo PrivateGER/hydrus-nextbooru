@@ -6,7 +6,8 @@
       "Bash(npx prisma migrate:*)",
       "Bash(docker compose:*)",
       "Bash(npm run build:*)",
-      "Bash(dir \"C:\\Users\\Latte\\WebstormProjects\\booru\" /b)"
+      "Bash(dir \"C:\\Users\\Latte\\WebstormProjects\\booru\" /b)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
