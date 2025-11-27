@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { decode } from "blurhash";
 
 interface MediaViewerProps {
   hash: string;
   mimeType: string;
+  width?: number | null;
+  height?: number | null;
+  blurhash?: string | null;
   prevPostHash?: string;
   nextPostHash?: string;
 }
@@ -12,12 +17,45 @@ interface MediaViewerProps {
 export function MediaViewer({
   hash,
   mimeType,
+  width,
+  height,
+  blurhash,
   prevPostHash,
   nextPostHash,
 }: MediaViewerProps) {
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
+
+  const [previewLoaded, setPreviewLoaded] = useState(false);
+  const [fullLoaded, setFullLoaded] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fullLoadedRef = useRef(false);
+
+  // Render blurhash to canvas
+  useEffect(() => {
+    if (!blurhash || !canvasRef.current) return;
+    try {
+      const pixels = decode(blurhash, 32, 32);
+      const ctx = canvasRef.current.getContext("2d");
+      if (!ctx) return;
+      const imageData = ctx.createImageData(32, 32);
+      imageData.data.set(pixels);
+      ctx.putImageData(imageData, 0, 0);
+    } catch {
+      // Invalid blurhash
+    }
+  }, [blurhash]);
+
+  // Reset loading states when hash changes
+  useEffect(() => {
+    setPreviewLoaded(false);
+    setFullLoaded(false);
+    fullLoadedRef.current = false;
+  }, [hash]);
+
+  // Calculate aspect ratio for stable container sizing
+  const aspectRatio = width && height ? width / height : 16 / 9;
 
   return (
     <div className="group relative inline-block rounded-lg bg-zinc-800">
@@ -57,11 +95,56 @@ export function MediaViewer({
           Your browser does not support the video tag.
         </video>
       ) : isImage ? (
-        <a href={`/api/files/${hash}`} target="_blank" rel="noopener noreferrer">
+        <a
+          href={`/api/files/${hash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative block overflow-hidden rounded"
+          style={{
+            maxHeight: "85vh",
+            maxWidth: "100%",
+            aspectRatio: `${aspectRatio}`,
+            width: width && height ? `min(100%, min(85vh * ${aspectRatio}, ${width}px))` : "auto",
+          }}
+        >
+          {/* Layer 1: Blurhash placeholder */}
+          {blurhash && (
+            <canvas
+              ref={canvasRef}
+              width={32}
+              height={32}
+              className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+                previewLoaded ? "opacity-0" : "opacity-100"
+              }`}
+            />
+          )}
+
+          {/* Layer 2: Preview thumbnail (600px) */}
+          <img
+            src={`/api/thumbnails/${hash}?size=preview`}
+            alt=""
+            onLoad={() => {
+              // Only show preview if full image hasn't loaded yet
+              if (!fullLoadedRef.current) {
+                setPreviewLoaded(true);
+              }
+            }}
+            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
+              previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
+            }`}
+          />
+
+          {/* Layer 3: Full resolution image */}
           <img
             src={`/api/files/${hash}`}
             alt=""
-            className="max-h-[85vh] max-w-full rounded"
+            onLoad={() => {
+              fullLoadedRef.current = true;
+              setFullLoaded(true);
+            }}
+            className={`h-full w-full object-contain transition-opacity duration-300 ${
+              fullLoaded ? "opacity-100" : "opacity-0"
+            }`}
           />
         </a>
       ) : (

@@ -7,6 +7,7 @@ import { FileDetails } from "@/components/post/file-details";
 import { KeyboardNavigation } from "@/components/post/keyboard-navigation";
 import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parser";
 import { SourceLink } from "@/components/source-link";
+import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
 
 interface PostPageProps {
@@ -139,6 +140,9 @@ export default async function PostPage({ params }: PostPageProps) {
         <MediaViewer
           hash={post.hash}
           mimeType={post.mimeType}
+          width={post.width}
+          height={post.height}
+          blurhash={post.blurhash}
           prevPostHash={prevPostHash}
           nextPostHash={nextPostHash}
         />
@@ -195,19 +199,39 @@ export default async function PostPage({ params }: PostPageProps) {
         {groups.map((group) => {
           if (group.posts.length <= 1) return null;
 
+          const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
+
           return (
             <div key={group.id} className="rounded-lg bg-zinc-800 p-4">
-              <h2 className="mb-3 text-lg font-semibold">
-                {group.sourceType} #{group.sourceId}
-                <a
-                  href={getCanonicalSourceUrl(group.sourceType, group.sourceId)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ml-2 text-sm font-normal text-blue-400 hover:underline"
+              <div className="mb-3 flex items-center gap-2">
+                <Link href={`/groups/${group.id}`} className="hover:opacity-80 transition-opacity">
+                  <SourceBadge sourceType={group.sourceType} />
+                </Link>
+                {sourceUrl ? (
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-400 hover:underline"
+                  >
+                    View source
+                  </a>
+                ) : group.sourceType === "TITLE" ? (
+                  <Link
+                    href={`/groups/${group.id}`}
+                    className="text-sm text-zinc-300 truncate max-w-xs hover:text-white transition-colors"
+                    title={group.sourceId}
+                  >
+                    {group.sourceId}
+                  </Link>
+                ) : null}
+                <Link
+                  href={`/groups/${group.id}`}
+                  className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
                 >
-                  View source
-                </a>
-              </h2>
+                  {group.posts.length} images
+                </Link>
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                 {group.posts.map((pg) => (
                   <Link
@@ -230,7 +254,7 @@ export default async function PostPage({ params }: PostPageProps) {
                       }
                     />
                     <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                      {pg.position}
+                      {pg.position || "?"}
                     </span>
                   </Link>
                 ))}

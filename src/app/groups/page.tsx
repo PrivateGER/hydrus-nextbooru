@@ -145,16 +145,21 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
               className="rounded-lg bg-zinc-800 p-4"
             >
               <div className="mb-3 flex items-center gap-3">
-                <span
-                  className={`rounded px-2 py-0.5 text-xs font-medium ${SOURCE_TYPE_COLORS[group.sourceType]}`}
+                <Link
+                  href={`/groups/${group.id}`}
+                  className="flex items-center gap-3 hover:opacity-80 transition-opacity"
                 >
-                  {group.sourceType}
-                </span>
-                <span className="font-mono text-sm text-zinc-400">
-                  {group.sourceType === SourceType.TITLE
-                    ? `#${group.sourceId}`
-                    : group.sourceId}
-                </span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs font-medium ${SOURCE_TYPE_COLORS[group.sourceType]}`}
+                  >
+                    {group.sourceType}
+                  </span>
+                  <span className="font-mono text-sm text-zinc-400">
+                    {group.sourceType === SourceType.TITLE
+                      ? `#${group.sourceId}`
+                      : group.sourceId}
+                  </span>
+                </Link>
                 <span className="text-sm text-zinc-500">
                   {postCount} posts
                 </span>
@@ -189,14 +194,17 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                       }
                     />
                     <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                      {pg.position}
+                      {pg.position || "?"}
                     </span>
                   </Link>
                 ))}
                 {postCount > 10 && (
-                  <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400">
+                  <Link
+                    href={`/groups/${group.id}`}
+                    className="flex h-48 w-24 shrink-0 items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400 hover:bg-zinc-600 transition-colors"
+                  >
                     +{postCount - 10}
-                  </div>
+                  </Link>
                 )}
               </div>
             </div>

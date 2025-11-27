@@ -55,6 +55,12 @@ export default function RootLayout({
                 Tags
               </Link>
               <Link
+                href="/tree"
+                className="text-sm font-medium text-zinc-300 hover:text-white"
+              >
+                Tree
+              </Link>
+              <Link
                 href="/groups"
                 className="text-sm font-medium text-zinc-300 hover:text-white"
               >
