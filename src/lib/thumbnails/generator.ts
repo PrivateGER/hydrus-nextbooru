@@ -11,6 +11,7 @@ import {
 } from "./types";
 import { getThumbnailPath, getThumbnailRelativePath } from "./paths";
 import { extractVideoFrame, isFfmpegAvailable } from "./video-extractor";
+import { buildFilePath } from "@/lib/hydrus/paths";
 
 // Cache ffmpeg availability check
 let ffmpegAvailable: boolean | null = null;
@@ -38,6 +39,7 @@ export async function generateThumbnail(
   const outputPath = getThumbnailPath(post.hash, size);
   const relativePath = getThumbnailRelativePath(post.hash, size);
   const maxDimension = THUMBNAIL_DIMENSIONS[size];
+  const filePath = buildFilePath(post.hash, post.extension);
 
   try {
     // Ensure output directory exists
@@ -58,7 +60,7 @@ export async function generateThumbnail(
 
       // Extract frame from video
       try {
-        inputSource = await extractVideoFrame(post.filePath);
+        inputSource = await extractVideoFrame(filePath);
       } catch (err) {
         console.error(
           `Failed to extract video frame for ${post.hash}:`,
@@ -71,7 +73,7 @@ export async function generateThumbnail(
         };
       }
     } else {
-      inputSource = post.filePath;
+      inputSource = filePath;
     }
 
     // Process with Sharp

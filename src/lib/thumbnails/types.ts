@@ -20,7 +20,7 @@ export interface ThumbnailResult {
 export interface PostForThumbnail {
   id: number;
   hash: string;
-  filePath: string;
+  extension: string;
   mimeType: string;
   thumbnailStatus: ThumbnailStatus;
 }

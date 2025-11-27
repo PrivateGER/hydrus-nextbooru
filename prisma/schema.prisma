@@ -60,9 +60,7 @@ model Post {
   hydrusFileId Int      @unique
   hash         String   @unique @db.Char(64)
 
-  // File info
-  filePath      String
-  thumbnailPath String?
+  // File info (paths computed at runtime from hash + extension + HYDRUS_FILES_PATH)
   mimeType      String
   extension     String
   fileSize      Int

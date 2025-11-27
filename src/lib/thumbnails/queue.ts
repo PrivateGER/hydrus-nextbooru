@@ -33,7 +33,7 @@ export async function ensureThumbnail(
         select: {
           id: true,
           hash: true,
-          filePath: true,
+          extension: true,
           mimeType: true,
           thumbnailStatus: true,
           thumbnails: {
@@ -104,7 +104,7 @@ export async function batchGenerateThumbnails(options: {
     select: {
       id: true,
       hash: true,
-      filePath: true,
+      extension: true,
       mimeType: true,
       thumbnailStatus: true,
     },

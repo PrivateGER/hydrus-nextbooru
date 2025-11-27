@@ -1,31 +1,10 @@
 import { prisma } from "@/lib/db";
-import { join } from "path";
 import { HydrusClient } from "./client";
 import type { HydrusFileMetadata } from "./types";
 import { parseTag, normalizeTagForStorage } from "./tag-mapper";
 import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma } from "@/generated/prisma/client";
-
-/**
- * Build file path from hash using Hydrus folder structure:
- * f[first two chars of hash]/[hash].[ext]
- */
-function buildFilePath(hash: string, extension: string): string {
-  const basePath = process.env.HYDRUS_FILES_PATH || "";
-  const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `f${prefix}`, `${hash}${extension}`);
-}
-
-/**
- * Build thumbnail path from hash using Hydrus folder structure:
- * t[first two chars of hash]/[hash].thumbnail
- */
-function buildThumbnailPath(hash: string): string {
-  const basePath = process.env.HYDRUS_FILES_PATH || "";
-  const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `t${prefix}`, `${hash}.thumbnail`);
-}
 
 const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -314,9 +293,6 @@ async function processFileSafe(
   metadata: HydrusFileMetadata,
   lookups: BatchLookups
 ): Promise<void> {
-  const filePath = buildFilePath(metadata.hash, metadata.ext);
-  const thumbnailPath = buildThumbnailPath(metadata.hash);
-
   // Get import time from file services
   let importedAt = new Date();
   const fileServices = metadata.file_services.current;
@@ -397,8 +373,6 @@ async function processFileSafe(
       create: {
         hydrusFileId: metadata.file_id,
         hash: metadata.hash,
-        filePath,
-        thumbnailPath,
         mimeType: metadata.mime,
         extension: metadata.ext,
         fileSize: metadata.size,
@@ -411,8 +385,6 @@ async function processFileSafe(
         importedAt,
       },
       update: {
-        filePath,
-        thumbnailPath,
         mimeType: metadata.mime,
         extension: metadata.ext,
         fileSize: metadata.size,

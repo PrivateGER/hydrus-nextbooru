@@ -1,21 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createReadStream, statSync } from "fs";
 import { Readable } from "stream";
-import { join } from "path";
 import { prisma } from "@/lib/db";
+import { buildFilePath } from "@/lib/hydrus/paths";
 
 // Valid SHA256 hash pattern
 const HASH_PATTERN = /^[a-f0-9]{64}$/i;
-
-/**
- * Build file path from hash using Hydrus folder structure:
- * f[first two chars of hash]/[hash].[ext]
- */
-function buildFilePath(hash: string, extension: string): string {
-  const basePath = process.env.HYDRUS_FILES_PATH || "";
-  const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `f${prefix}`, `${hash}${extension}`);
-}
 
 export async function GET(
   request: NextRequest,

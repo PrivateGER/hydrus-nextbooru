@@ -1,5 +1,6 @@
 import { join } from "path";
 import { ThumbnailSize } from "./types";
+import { buildThumbnailPath as buildHydrusThumbnailPath } from "@/lib/hydrus/paths";
 
 /**
  * Get the base path for thumbnail storage.
@@ -34,7 +35,5 @@ export function getThumbnailRelativePath(hash: string, size: ThumbnailSize): str
  * Get the Hydrus thumbnail path for fallback.
  */
 export function getHydrusThumbnailPath(hash: string): string {
-  const basePath = process.env.HYDRUS_FILES_PATH || "";
-  const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `t${prefix}`, `${hash}.thumbnail`);
+  return buildHydrusThumbnailPath(hash);
 }
