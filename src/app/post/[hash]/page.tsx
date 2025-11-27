@@ -5,7 +5,8 @@ import { TagSidebar } from "@/components/tag-sidebar";
 import { MediaViewer } from "@/components/media-viewer";
 import { FileDetails } from "@/components/post/file-details";
 import { KeyboardNavigation } from "@/components/post/keyboard-navigation";
-import { getCanonicalSourceUrl, getDisplaySourceUrls } from "@/lib/hydrus/url-parser";
+import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parser";
+import { SourceLink } from "@/components/source-link";
 import { TagCategory } from "@/generated/prisma/enums";
 
 interface PostPageProps {
@@ -161,22 +162,15 @@ export default async function PostPage({ params }: PostPageProps) {
 
         {/* Source URLs */}
         {(() => {
-          const displayUrls = getDisplaySourceUrls(post.sourceUrls);
-          if (displayUrls.length === 0) return null;
+          const sources = getDisplaySources(post.sourceUrls);
+          if (sources.length === 0) return null;
           return (
             <div className="rounded-lg bg-zinc-800 p-4">
               <h2 className="mb-3 text-lg font-semibold">Sources</h2>
-              <ul className="space-y-1 text-sm">
-                {displayUrls.map((url, i) => (
+              <ul className="space-y-2 text-sm">
+                {sources.map((source, i) => (
                   <li key={i}>
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 hover:underline break-all"
-                    >
-                      {url}
-                    </a>
+                    <SourceLink source={source} />
                   </li>
                 ))}
               </ul>

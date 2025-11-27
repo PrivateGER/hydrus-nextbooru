@@ -160,7 +160,7 @@ const IMAGE_HOST_PATTERNS = [
   /^cdn\.donmai\.us$/i,
   /^img\d*\.gelbooru\.com$/i,
   /^wimg\.rule34\.xxx$/i,
-  /^images-wixmp-.*\.wixmp\.com$/i,
+  /\.wixmp\.com$/i, // DeviantArt CDN
 ];
 
 // URL patterns that are API/ajax endpoints (not useful for users)
@@ -193,14 +193,41 @@ function isUselessUrl(url: string): boolean {
   }
 }
 
+export interface DisplaySource {
+  type: SourceType | null;
+  sourceId: string | null;
+  url: string;
+  label: string;
+}
+
+/**
+ * Get display label for a source type
+ */
+function getSourceLabel(type: SourceType): string {
+  switch (type) {
+    case SourceType.PIXIV:
+      return "Pixiv";
+    case SourceType.TWITTER:
+      return "Twitter";
+    case SourceType.DEVIANTART:
+      return "DeviantArt";
+    case SourceType.DANBOORU:
+      return "Danbooru";
+    case SourceType.GELBOORU:
+      return "Gelbooru";
+    default:
+      return "Source";
+  }
+}
+
 /**
  * Filter and canonicalize source URLs for display
  * - Converts recognized URLs to their canonical form
  * - Removes duplicate sources (same source type + ID)
  * - Filters out direct image links and API endpoints
  */
-export function getDisplaySourceUrls(urls: string[]): string[] {
-  const results: string[] = [];
+export function getDisplaySources(urls: string[]): DisplaySource[] {
+  const results: DisplaySource[] = [];
   const seen = new Set<string>();
 
   for (const url of urls) {
@@ -212,12 +239,33 @@ export function getDisplaySourceUrls(urls: string[]): string[] {
       const key = `${parsed.sourceType}:${parsed.sourceId}`;
       if (!seen.has(key)) {
         seen.add(key);
-        results.push(getCanonicalSourceUrl(parsed.sourceType, parsed.sourceId));
+        results.push({
+          type: parsed.sourceType,
+          sourceId: parsed.sourceId,
+          url: getCanonicalSourceUrl(parsed.sourceType, parsed.sourceId),
+          label: getSourceLabel(parsed.sourceType),
+        });
       }
     } else if (!isUselessUrl(url) && !seen.has(url)) {
       // Keep unknown URLs that aren't useless
       seen.add(url);
-      results.push(url);
+      // Extract domain for label
+      try {
+        const domain = new URL(url).hostname.replace(/^www\./, "");
+        results.push({
+          type: null,
+          sourceId: null,
+          url,
+          label: domain,
+        });
+      } catch {
+        results.push({
+          type: null,
+          sourceId: null,
+          url,
+          label: "Link",
+        });
+      }
     }
   }
 
