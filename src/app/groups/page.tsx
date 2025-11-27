@@ -170,18 +170,18 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                 )}
               </div>
 
-              {/* Post thumbnails - masonry layout */}
-              <div className="columns-3 gap-2 sm:columns-4 md:columns-5 lg:columns-6">
+              {/* Post thumbnails - horizontal filmstrip */}
+              <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                 {group.posts.map((pg) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
-                    className="group/thumb relative mb-2 block overflow-hidden rounded-lg bg-zinc-700 break-inside-avoid transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500"
+                    className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500"
                   >
                     <img
                       src={`/api/thumbnails/${pg.post.hash}`}
                       alt=""
-                      className="w-full h-auto"
+                      className="h-48 w-auto"
                       style={
                         pg.post.width && pg.post.height
                           ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
@@ -194,7 +194,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                   </Link>
                 ))}
                 {postCount > 10 && (
-                  <div className="mb-2 flex aspect-square items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400 break-inside-avoid">
+                  <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400">
                     +{postCount - 10}
                   </div>
                 )}

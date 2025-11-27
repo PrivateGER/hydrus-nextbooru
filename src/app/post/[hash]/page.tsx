@@ -3,7 +3,10 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { TagSidebar } from "@/components/tag-sidebar";
 import { MediaViewer } from "@/components/media-viewer";
+import { QuickInfoBar } from "@/components/post/quick-info-bar";
+import { KeyboardNavigation } from "@/components/post/keyboard-navigation";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
+import { TagCategory } from "@/generated/prisma/enums";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -87,30 +90,61 @@ export default async function PostPage({ params }: PostPageProps) {
     }
   }
 
-  // Format file size
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
+  // Build download filename: artist_character_hash_pagenum.ext
+  const sanitize = (str: string) =>
+    str
+      .replace(/[<>:"/\\|?*]/g, "")
+      .replace(/\s+/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 30);
 
-  // Format duration
-  const formatDuration = (ms: number) => {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-  };
+  // Prefer artist tags that aren't purely numeric (IDs)
+  const artistTags = tags.filter((t) => t.category === TagCategory.ARTIST);
+  const artistTag =
+    artistTags.find((t) => !/^\d+$/.test(t.name))?.name ||
+    artistTags[0]?.name;
+
+  // Get first character tag
+  const characterTag = tags.find((t) => t.category === TagCategory.CHARACTER)?.name;
+
+  // Get page number from first group (if in a multi-post group)
+  const pageNum = groups.find((g) => g.posts.length > 1)?.currentPosition;
+
+  const downloadFilename = [
+    artistTag && sanitize(artistTag),
+    characterTag && sanitize(characterTag),
+    post.hash.slice(0, 8),
+    pageNum !== undefined && `p${pageNum}`,
+  ]
+    .filter(Boolean)
+    .join("_") + `.${post.extension}`;
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
+      {/* Keyboard navigation handler */}
+      <KeyboardNavigation
+        prevPostHash={prevPostHash}
+        nextPostHash={nextPostHash}
+      />
+
       {/* Sidebar - Tags (appears below content on mobile, left on desktop) */}
       <div className="order-last lg:order-first">
         <TagSidebar tags={tags} />
       </div>
 
       {/* Main content */}
-      <div className="flex-1 min-w-0 space-y-6">
+      <div className="flex-1 min-w-0 space-y-4">
+        {/* Quick info bar */}
+        <QuickInfoBar
+          hash={post.hash}
+          mimeType={post.mimeType}
+          width={post.width}
+          height={post.height}
+          fileSize={post.fileSize}
+          duration={post.duration}
+          downloadFilename={downloadFilename}
+        />
+
         {/* Media viewer */}
         <MediaViewer
           hash={post.hash}
@@ -119,32 +153,16 @@ export default async function PostPage({ params }: PostPageProps) {
           nextPostHash={nextPostHash}
         />
 
-        {/* File info */}
-        <div className="rounded-lg bg-zinc-800 p-4">
-          <h2 className="mb-3 text-lg font-semibold">File Information</h2>
-          <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-            <div>
-              <dt className="text-zinc-400">Size</dt>
-              <dd>{formatFileSize(post.fileSize)}</dd>
-            </div>
-            {post.width && post.height && (
-              <div>
-                <dt className="text-zinc-400">Dimensions</dt>
-                <dd>
-                  {post.width} x {post.height}
-                </dd>
-              </div>
-            )}
+        {/* File details */}
+        <details className="rounded-lg bg-zinc-800">
+          <summary className="cursor-pointer p-4 text-lg font-semibold hover:bg-zinc-700/50">
+            File Details
+          </summary>
+          <dl className="grid grid-cols-2 gap-2 px-4 pb-4 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-zinc-400">Type</dt>
               <dd>{post.mimeType}</dd>
             </div>
-            {post.duration && (
-              <div>
-                <dt className="text-zinc-400">Duration</dt>
-                <dd>{formatDuration(post.duration)}</dd>
-              </div>
-            )}
             <div>
               <dt className="text-zinc-400">Imported</dt>
               <dd>{post.importedAt.toLocaleDateString()}</dd>
@@ -155,8 +173,12 @@ export default async function PostPage({ params }: PostPageProps) {
                 <dd>Yes</dd>
               </div>
             )}
+            <div className="col-span-2 sm:col-span-3">
+              <dt className="text-zinc-400">Hash</dt>
+              <dd className="font-mono text-xs break-all">{post.hash}</dd>
+            </div>
           </dl>
-        </div>
+        </details>
 
         {/* Source URLs */}
         {post.sourceUrls.length > 0 && (
@@ -196,7 +218,7 @@ export default async function PostPage({ params }: PostPageProps) {
           </div>
         )}
 
-        {/* Related images from groups */}
+        {/* Related images from groups - horizontal filmstrip */}
         {groups.map((group) => {
           if (group.posts.length <= 1) return null;
 
@@ -213,12 +235,12 @@ export default async function PostPage({ params }: PostPageProps) {
                   View source
                 </a>
               </h2>
-              <div className="columns-2 gap-2 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6">
+              <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
                 {group.posts.map((pg) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
-                    className={`relative mb-2 block overflow-hidden rounded-lg bg-zinc-700 break-inside-avoid transition-transform hover:scale-[1.02] ${
+                    className={`relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] ${
                       pg.post.hash === post.hash
                         ? "ring-2 ring-blue-500"
                         : "hover:ring-2 hover:ring-blue-500"
@@ -227,7 +249,7 @@ export default async function PostPage({ params }: PostPageProps) {
                     <img
                       src={`/api/thumbnails/${pg.post.hash}`}
                       alt=""
-                      className="w-full h-auto"
+                      className="h-24 w-auto"
                       style={
                         pg.post.width && pg.post.height
                           ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
@@ -245,11 +267,22 @@ export default async function PostPage({ params }: PostPageProps) {
         })}
 
         {/* Navigation */}
-        <div className="flex justify-between text-sm">
+        <div className="flex items-center justify-between text-sm">
           <Link href="/" className="text-blue-400 hover:underline">
             &larr; Back to gallery
           </Link>
-          <span className="text-zinc-500">{post.hash.substring(0, 12)}...</span>
+          <div className="flex items-center gap-4 text-zinc-500">
+            {prevPostHash && (
+              <Link href={`/post/${prevPostHash}`} className="hover:text-zinc-300">
+                &larr; Prev
+              </Link>
+            )}
+            {nextPostHash && (
+              <Link href={`/post/${nextPostHash}`} className="hover:text-zinc-300">
+                Next &rarr;
+              </Link>
+            )}
+          </div>
         </div>
       </div>
     </div>

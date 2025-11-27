@@ -7,7 +7,9 @@
       "Bash(docker compose:*)",
       "Bash(npm run build:*)",
       "Bash(dir \"C:\\Users\\Latte\\WebstormProjects\\booru\" /b)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
