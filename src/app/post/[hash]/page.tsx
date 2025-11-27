@@ -9,6 +9,7 @@ import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parse
 import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
+import { filterBlacklistedTags } from "@/lib/tag-blacklist";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -67,7 +68,7 @@ export default async function PostPage({ params }: PostPageProps) {
     notFound();
   }
 
-  const tags = post.tags.map((pt) => pt.tag);
+  const tags = filterBlacklistedTags(post.tags.map((pt) => pt.tag));
 
   // Get group info for related images
   const groups = post.groups.map((pg) => ({

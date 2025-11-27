@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
+import { withBlacklistFilter } from "@/lib/tag-blacklist";
 
 const VALID_CATEGORIES = Object.values(TagCategory);
 const VALID_SORT = ["count", "name", "-count", "-name"] as const;
@@ -18,18 +19,21 @@ export async function GET(request: NextRequest) {
   const skip = (page - 1) * limit;
 
   // Build where clause
-  const where: Prisma.TagWhereInput = {};
+  const baseWhere: Prisma.TagWhereInput = {};
 
   if (query) {
-    where.name = {
+    baseWhere.name = {
       contains: query,
       mode: "insensitive",
     };
   }
 
   if (category && VALID_CATEGORIES.includes(category)) {
-    where.category = category;
+    baseWhere.category = category;
   }
+
+  // Apply blacklist filter
+  const where = withBlacklistFilter(baseWhere);
 
   // Build order clause
   let orderBy: Prisma.TagOrderByWithRelationInput;

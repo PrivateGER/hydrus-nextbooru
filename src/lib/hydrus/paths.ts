@@ -1,4 +1,4 @@
-import { join } from "path";
+import { sep } from "path";
 
 /**
  * Build file path from hash using Hydrus folder structure:
@@ -7,7 +7,7 @@ import { join } from "path";
 export function buildFilePath(hash: string, extension: string): string {
   const basePath = process.env.HYDRUS_FILES_PATH || "";
   const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `f${prefix}`, `${hash}${extension}`);
+  return basePath ? `${basePath}${sep}f${prefix}${sep}${hash}${extension}` : `f${prefix}${sep}${hash}${extension}`;
 }
 
 /**
@@ -17,5 +17,5 @@ export function buildFilePath(hash: string, extension: string): string {
 export function buildThumbnailPath(hash: string): string {
   const basePath = process.env.HYDRUS_FILES_PATH || "";
   const prefix = hash.substring(0, 2).toLowerCase();
-  return join(basePath, `t${prefix}`, `${hash}.thumbnail`);
+  return basePath ? `${basePath}${sep}t${prefix}${sep}${hash}.thumbnail` : `t${prefix}${sep}${hash}.thumbnail`;
 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
+import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -16,19 +18,19 @@ export async function GET(request: NextRequest) {
 
   // If no tags are selected, return top tags or search results
   if (selectedTags.length === 0) {
-    const whereClause: Record<string, unknown> = {};
+    const baseWhere: Prisma.TagWhereInput = {};
     if (category) {
-      whereClause.category = category;
+      baseWhere.category = category as Prisma.EnumTagCategoryFilter;
     }
     if (query) {
-      whereClause.name = {
+      baseWhere.name = {
         contains: query,
         mode: "insensitive",
       };
     }
 
     const tags = await prisma.tag.findMany({
-      where: whereClause,
+      where: withBlacklistFilter(baseWhere),
       select: {
         id: true,
         name: true,
@@ -87,7 +89,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Find all tags that appear on these posts (excluding already selected)
-  const whereClause: Record<string, unknown> = {
+  const baseWhere: Prisma.TagWhereInput = {
     NOT: {
       name: {
         in: selectedTags,
@@ -102,18 +104,18 @@ export async function GET(request: NextRequest) {
   };
 
   if (category) {
-    whereClause.category = category;
+    baseWhere.category = category as Prisma.EnumTagCategoryFilter;
   }
 
   if (query) {
-    whereClause.name = {
+    baseWhere.name = {
       contains: query,
       mode: "insensitive",
     };
   }
 
   const tags = await prisma.tag.findMany({
-    where: whereClause,
+    where: withBlacklistFilter(baseWhere),
     select: {
       id: true,
       name: true,
@@ -128,13 +130,15 @@ export async function GET(request: NextRequest) {
   });
 
   // Sort by count and limit
-  const sortedTags = tags
-    .map((tag) => ({
-      id: tag.id,
-      name: tag.name,
-      category: tag.category,
-      count: tag.posts.length,
-    }))
+  // Note: We still filter in-memory as a safety net for complex queries
+  const mappedTags = tags.map((tag) => ({
+    id: tag.id,
+    name: tag.name,
+    category: tag.category,
+    count: tag.posts.length,
+  }));
+
+  const sortedTags = filterBlacklistedTags(mappedTags)
     .filter((tag) => tag.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);

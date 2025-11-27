@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -20,12 +21,12 @@ export async function GET(request: NextRequest) {
   // If no tags are selected, use simple search
   if (selectedTags.length === 0) {
     const tags = await prisma.tag.findMany({
-      where: {
+      where: withBlacklistFilter({
         name: {
           contains: query,
           mode: "insensitive",
         },
-      },
+      }),
       select: {
         id: true,
         name: true,
@@ -78,7 +79,7 @@ export async function GET(request: NextRequest) {
 
   // Find tags that match the query and exist on these posts, with count
   const tags = await prisma.tag.findMany({
-    where: {
+    where: withBlacklistFilter({
       name: {
         contains: query,
         mode: "insensitive",
@@ -96,7 +97,7 @@ export async function GET(request: NextRequest) {
           postId: { in: postIds },
         },
       },
-    },
+    }),
     select: {
       id: true,
       name: true,
@@ -111,13 +112,16 @@ export async function GET(request: NextRequest) {
   });
 
   // Sort by count (descending) and limit
-  const sortedTags = tags
-    .map((tag) => ({
-      id: tag.id,
-      name: tag.name,
-      category: tag.category,
-      count: tag.posts.length,
-    }))
+  // Note: We still filter in-memory here because the query already has complex
+  // conditions and the result set is small (limited by postIds)
+  const mappedTags = tags.map((tag) => ({
+    id: tag.id,
+    name: tag.name,
+    category: tag.category,
+    count: tag.posts.length,
+  }));
+
+  const sortedTags = filterBlacklistedTags(mappedTags)
     .filter((tag) => tag.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
 import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
+import { withBlacklistFilter } from "@/lib/tag-blacklist";
 
 const TAGS_PER_PAGE = 100;
 
@@ -53,18 +54,21 @@ async function getTags(options: {
   const { query, category, sort, page } = options;
   const skip = (page - 1) * TAGS_PER_PAGE;
 
-  const where: Prisma.TagWhereInput = {};
+  const baseWhere: Prisma.TagWhereInput = {};
 
   if (query) {
-    where.name = {
+    baseWhere.name = {
       contains: query,
       mode: "insensitive",
     };
   }
 
   if (category) {
-    where.category = category;
+    baseWhere.category = category;
   }
+
+  // Apply blacklist filter
+  const where = withBlacklistFilter(baseWhere);
 
   let orderBy: Prisma.TagOrderByWithRelationInput;
   switch (sort) {
@@ -114,10 +118,16 @@ async function getTags(options: {
 }
 
 async function getCategoryCounts() {
-  const counts = await prisma.tag.groupBy({
-    by: ["category"],
-    _count: { _all: true },
-  });
+  // Get counts per category, excluding blacklisted tags
+  const categories = Object.values(TagCategory);
+  const counts = await Promise.all(
+    categories.map(async (cat) => {
+      const count = await prisma.tag.count({
+        where: withBlacklistFilter({ category: cat }),
+      });
+      return { category: cat, count };
+    })
+  );
 
   const result: Record<TagCategory | "ALL", number> = {
     ALL: 0,
@@ -129,8 +139,8 @@ async function getCategoryCounts() {
   };
 
   for (const item of counts) {
-    result[item.category] = item._count._all;
-    result.ALL += item._count._all;
+    result[item.category] = item.count;
+    result.ALL += item.count;
   }
 
   return result;

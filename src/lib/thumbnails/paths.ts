@@ -1,4 +1,4 @@
-import { join } from "path";
+import { sep } from "path";
 import { ThumbnailSize } from "./types";
 import { buildThumbnailPath as buildHydrusThumbnailPath } from "@/lib/hydrus/paths";
 
@@ -7,7 +7,7 @@ import { buildThumbnailPath as buildHydrusThumbnailPath } from "@/lib/hydrus/pat
  * Defaults to ./data/thumbnails relative to project root.
  */
 export function getThumbnailBasePath(): string {
-  return process.env.THUMBNAIL_PATH || join(process.cwd(), "data", "thumbnails");
+  return process.env.THUMBNAIL_PATH || `${process.cwd()}${sep}data${sep}thumbnails`;
 }
 
 /**
@@ -18,7 +18,7 @@ export function getThumbnailPath(hash: string, size: ThumbnailSize): string {
   const basePath = getThumbnailBasePath();
   const prefix = hash.substring(0, 2).toLowerCase();
   const sizeDir = size === "GRID" ? "grid" : "preview";
-  return join(basePath, sizeDir, prefix, `${hash}.webp`);
+  return `${basePath}${sep}${sizeDir}${sep}${prefix}${sep}${hash}.webp`;
 }
 
 /**
@@ -28,7 +28,7 @@ export function getThumbnailPath(hash: string, size: ThumbnailSize): string {
 export function getThumbnailRelativePath(hash: string, size: ThumbnailSize): string {
   const prefix = hash.substring(0, 2).toLowerCase();
   const sizeDir = size === "GRID" ? "grid" : "preview";
-  return join(sizeDir, prefix, `${hash}.webp`);
+  return `${sizeDir}${sep}${prefix}${sep}${hash}.webp`;
 }
 
 /**
