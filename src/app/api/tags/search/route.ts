@@ -52,32 +52,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Progressive filtering: find tags that co-occur with all selected tags
-  // First, find post IDs that have ALL selected tags
-  const postsWithSelectedTags = await prisma.post.findMany({
-    where: {
-      AND: selectedTags.map((tagName) => ({
-        tags: {
-          some: {
-            tag: {
-              name: {
-                equals: tagName,
-                mode: "insensitive",
-              },
-            },
-          },
-        },
-      })),
-    },
-    select: { id: true },
-  });
-
-  const postIds = postsWithSelectedTags.map((p) => p.id);
-
-  if (postIds.length === 0) {
-    return NextResponse.json({ tags: [] });
-  }
-
-  // Find tags that match the query and exist on these posts, with count
+  // Use a single query with filtered _count for efficiency
   const tags = await prisma.tag.findMany({
     where: withBlacklistFilter({
       name: {
@@ -94,7 +69,20 @@ export async function GET(request: NextRequest) {
       // Only tags that appear on posts with all selected tags
       posts: {
         some: {
-          postId: { in: postIds },
+          post: {
+            AND: selectedTags.map((tagName) => ({
+              tags: {
+                some: {
+                  tag: {
+                    name: {
+                      equals: tagName,
+                      mode: "insensitive",
+                    },
+                  },
+                },
+              },
+            })),
+          },
         },
       },
     }),
@@ -102,29 +90,46 @@ export async function GET(request: NextRequest) {
       id: true,
       name: true,
       category: true,
-      posts: {
-        where: {
-          postId: { in: postIds },
+      _count: {
+        select: {
+          posts: {
+            where: {
+              post: {
+                AND: selectedTags.map((tagName) => ({
+                  tags: {
+                    some: {
+                      tag: {
+                        name: {
+                          equals: tagName,
+                          mode: "insensitive",
+                        },
+                      },
+                    },
+                  },
+                })),
+              },
+            },
+          },
         },
-        select: { postId: true },
       },
     },
+    orderBy: {
+      posts: { _count: "desc" },
+    },
+    take: limit * 2, // Take more to account for blacklist filtering
   });
 
-  // Sort by count (descending) and limit
-  // Note: We still filter in-memory here because the query already has complex
-  // conditions and the result set is small (limited by postIds)
+  // Apply blacklist filter and map results
   const mappedTags = tags.map((tag) => ({
     id: tag.id,
     name: tag.name,
     category: tag.category,
-    count: tag.posts.length,
+    count: tag._count.posts,
   }));
 
-  const sortedTags = filterBlacklistedTags(mappedTags)
+  const filteredTags = filterBlacklistedTags(mappedTags)
     .filter((tag) => tag.count > 0)
-    .sort((a, b) => b.count - a.count)
     .slice(0, limit);
 
-  return NextResponse.json({ tags: sortedTags });
+  return NextResponse.json({ tags: filteredTags });
 }
