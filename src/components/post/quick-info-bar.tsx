@@ -4,6 +4,7 @@ import { DownloadButton } from "@/components/download-button";
 
 interface QuickInfoBarProps {
   hash: string;
+  extension: string;
   mimeType: string;
   width: number | null;
   height: number | null;
@@ -40,6 +41,7 @@ function getMediaTypeColor(mimeType: string): string {
 
 export function QuickInfoBar({
   hash,
+  extension,
   mimeType,
   width,
   height,
@@ -82,6 +84,7 @@ export function QuickInfoBar({
       {/* Download button - icon only on mobile, with text on desktop */}
       <DownloadButton
         hash={hash}
+        extension={extension}
         filename={downloadFilename}
         showTextOnLg
       />

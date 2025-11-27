@@ -184,8 +184,9 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                     className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500"
                   >
                     <img
-                      src={`/api/thumbnails/${pg.post.hash}`}
+                      src={`/api/thumbnails/${pg.post.hash}.webp`}
                       alt=""
+                      loading="lazy"
                       className="h-48 w-auto"
                       style={
                         pg.post.width && pg.post.height

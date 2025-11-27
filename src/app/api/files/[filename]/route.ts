@@ -4,23 +4,30 @@ import { Readable } from "stream";
 import { prisma } from "@/lib/db";
 import { buildFilePath } from "@/lib/hydrus/paths";
 
-// Valid SHA256 hash pattern
-const HASH_PATTERN = /^[a-f0-9]{64}$/i;
+// Valid filename pattern: {64-char hash}.{extension}
+const FILENAME_PATTERN = /^([a-f0-9]{64})(\.\w+)$/i;
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ hash: string }> }
+  { params }: { params: Promise<{ filename: string }> }
 ) {
-  const { hash } = await params;
+  const { filename } = await params;
 
-  // Validate hash format
-  if (!HASH_PATTERN.test(hash)) {
-    return NextResponse.json({ error: "Invalid hash format" }, { status: 400 });
+  // Parse and validate filename
+  const match = FILENAME_PATTERN.exec(filename);
+  if (!match) {
+    return NextResponse.json(
+      { error: "Invalid filename format. Expected {hash}.{extension}" },
+      { status: 400 }
+    );
   }
+
+  const hash = match[1].toLowerCase();
+  const requestedExt = match[2].toLowerCase(); // includes the dot
 
   // Look up the post in the database
   const post = await prisma.post.findUnique({
-    where: { hash: hash.toLowerCase() },
+    where: { hash },
     select: {
       extension: true,
       mimeType: true,
@@ -32,8 +39,16 @@ export async function GET(
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
 
+  // Validate extension matches (both include the dot)
+  if (requestedExt !== post.extension.toLowerCase()) {
+    return NextResponse.json(
+      { error: "Extension mismatch" },
+      { status: 400 }
+    );
+  }
+
   // Build file path from hash and extension
-  const filePath = buildFilePath(hash.toLowerCase(), post.extension);
+  const filePath = buildFilePath(hash, post.extension);
 
   try {
     // Get file stats

@@ -84,7 +84,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       {/* Thumbnail image */}
       {!error ? (
         <img
-          src={`/api/thumbnails/${hash}`}
+          src={`/api/thumbnails/${hash}.webp`}
           alt=""
           className={
             isMasonry

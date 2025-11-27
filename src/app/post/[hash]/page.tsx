@@ -139,6 +139,7 @@ export default async function PostPage({ params }: PostPageProps) {
         {/* Media viewer */}
         <MediaViewer
           hash={post.hash}
+          extension={post.extension}
           mimeType={post.mimeType}
           width={post.width}
           height={post.height}
@@ -185,6 +186,7 @@ export default async function PostPage({ params }: PostPageProps) {
         {/* File details */}
         <FileDetails
           hash={post.hash}
+          extension={post.extension}
           mimeType={post.mimeType}
           width={post.width}
           height={post.height}
@@ -244,7 +246,7 @@ export default async function PostPage({ params }: PostPageProps) {
                     }`}
                   >
                     <img
-                      src={`/api/thumbnails/${pg.post.hash}`}
+                      src={`/api/thumbnails/${pg.post.hash}.webp`}
                       alt=""
                       className="h-24 w-auto"
                       style={

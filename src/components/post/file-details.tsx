@@ -4,6 +4,7 @@ import { DownloadButton } from "@/components/download-button";
 
 interface FileDetailsProps {
   hash: string;
+  extension: string;
   mimeType: string;
   width: number | null;
   height: number | null;
@@ -29,6 +30,7 @@ function formatDuration(ms: number): string {
 
 export function FileDetails({
   hash,
+  extension,
   mimeType,
   width,
   height,
@@ -51,7 +53,7 @@ export function FileDetails({
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
         <span className="flex-1">File Details</span>
-        <DownloadButton hash={hash} filename={downloadFilename} />
+        <DownloadButton hash={hash} extension={extension} filename={downloadFilename} />
       </summary>
       <dl className="grid grid-cols-2 gap-2 px-4 pb-4 text-sm sm:grid-cols-3">
         <div>

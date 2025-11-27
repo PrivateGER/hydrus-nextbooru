@@ -2,6 +2,7 @@
 
 interface DownloadButtonProps {
   hash: string;
+  extension: string;
   filename: string;
   className?: string;
   showTextOnLg?: boolean;
@@ -9,13 +10,14 @@ interface DownloadButtonProps {
 
 export function DownloadButton({
   hash,
+  extension,
   filename,
   className = "",
   showTextOnLg = false,
 }: DownloadButtonProps) {
   const handleDownload = () => {
     const link = document.createElement("a");
-    link.href = `/api/download/${hash}`;
+    link.href = `/api/download/${hash}${extension}`;
     link.download = filename;
     document.body.appendChild(link);
     link.click();

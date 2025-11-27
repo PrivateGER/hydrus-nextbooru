@@ -5,7 +5,8 @@ import { prisma } from "@/lib/db";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { TagCategory } from "@/generated/prisma/enums";
 
-const HASH_PATTERN = /^[a-f0-9]{64}$/i;
+// Valid filename pattern: {64-char hash}.{extension}
+const FILENAME_PATTERN = /^([a-f0-9]{64})(\.\w+)$/i;
 
 function sanitizeFilename(str: string): string {
   return str
@@ -43,16 +44,24 @@ function buildDownloadFilename(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ hash: string }> }
+  { params }: { params: Promise<{ filename: string }> }
 ) {
-  const { hash } = await params;
+  const { filename } = await params;
 
-  if (!HASH_PATTERN.test(hash)) {
-    return NextResponse.json({ error: "Invalid hash format" }, { status: 400 });
+  // Parse and validate filename
+  const match = FILENAME_PATTERN.exec(filename);
+  if (!match) {
+    return NextResponse.json(
+      { error: "Invalid filename format. Expected {hash}.{extension}" },
+      { status: 400 }
+    );
   }
 
+  const hash = match[1].toLowerCase();
+  const requestedExt = match[2].toLowerCase(); // includes the dot
+
   const post = await prisma.post.findUnique({
-    where: { hash: hash.toLowerCase() },
+    where: { hash },
     select: {
       extension: true,
       mimeType: true,
@@ -85,6 +94,14 @@ export async function GET(
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
 
+  // Validate extension matches (both include the dot)
+  if (requestedExt !== post.extension.toLowerCase()) {
+    return NextResponse.json(
+      { error: "Extension mismatch" },
+      { status: 400 }
+    );
+  }
+
   // Find tags by category
   // Prefer artist tags that aren't purely numeric (IDs)
   const artistTags = post.tags.filter((t) => t.tag.category === TagCategory.ARTIST);
@@ -99,8 +116,8 @@ export async function GET(
   const groupWithPosition = post.groups.find((g) => g.group._count.posts > 1);
   const pageNum = groupWithPosition?.position;
 
-  const filename = buildDownloadFilename(hash, post.extension, artistTag, characterTag, pageNum);
-  const filePath = buildFilePath(hash.toLowerCase(), post.extension);
+  const downloadFilename = buildDownloadFilename(hash, post.extension, artistTag, characterTag, pageNum);
+  const filePath = buildFilePath(hash, post.extension);
 
   try {
     const stats = statSync(filePath);
@@ -112,7 +129,7 @@ export async function GET(
       headers: {
         "Content-Type": post.mimeType,
         "Content-Length": String(stats.size),
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `attachment; filename="${downloadFilename}"`,
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     });

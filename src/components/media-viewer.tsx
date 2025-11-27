@@ -6,6 +6,7 @@ import { decode } from "blurhash";
 
 interface MediaViewerProps {
   hash: string;
+  extension: string;
   mimeType: string;
   width?: number | null;
   height?: number | null;
@@ -16,6 +17,7 @@ interface MediaViewerProps {
 
 export function MediaViewer({
   hash,
+  extension,
   mimeType,
   width,
   height,
@@ -30,7 +32,8 @@ export function MediaViewer({
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const fullLoadedRef = useRef(false);
+  const previewRef = useRef<HTMLImageElement>(null);
+  const fullRef = useRef<HTMLImageElement>(null);
 
   // Render blurhash to canvas
   useEffect(() => {
@@ -47,11 +50,14 @@ export function MediaViewer({
     }
   }, [blurhash]);
 
-  // Reset loading states when hash changes
+  // Reset loading states when hash changes, but check if already cached
   useEffect(() => {
-    setPreviewLoaded(false);
-    setFullLoaded(false);
-    fullLoadedRef.current = false;
+    // Check if images are already loaded (cached)
+    const previewComplete = previewRef.current?.complete && previewRef.current.naturalWidth > 0;
+    const fullComplete = fullRef.current?.complete && fullRef.current.naturalWidth > 0;
+
+    setPreviewLoaded(previewComplete ?? false);
+    setFullLoaded(fullComplete ?? false);
   }, [hash]);
 
   // Calculate aspect ratio for stable container sizing
@@ -86,7 +92,7 @@ export function MediaViewer({
       {/* Media content */}
       {isVideo ? (
         <video
-          src={`/api/files/${hash}`}
+          src={`/api/files/${hash}${extension}`}
           controls
           autoPlay
           loop
@@ -96,7 +102,7 @@ export function MediaViewer({
         </video>
       ) : isImage ? (
         <a
-          href={`/api/files/${hash}`}
+          href={`/api/files/${hash}${extension}`}
           target="_blank"
           rel="noopener noreferrer"
           className="relative block overflow-hidden rounded"
@@ -121,11 +127,12 @@ export function MediaViewer({
 
           {/* Layer 2: Preview thumbnail (600px) */}
           <img
-            src={`/api/thumbnails/${hash}?size=preview`}
+            ref={previewRef}
+            src={`/api/thumbnails/${hash}.webp?size=preview`}
             alt=""
             onLoad={() => {
               // Only show preview if full image hasn't loaded yet
-              if (!fullLoadedRef.current) {
+              if (!fullLoaded) {
                 setPreviewLoaded(true);
               }
             }}
@@ -136,12 +143,10 @@ export function MediaViewer({
 
           {/* Layer 3: Full resolution image */}
           <img
-            src={`/api/files/${hash}`}
+            ref={fullRef}
+            src={`/api/files/${hash}${extension}`}
             alt=""
-            onLoad={() => {
-              fullLoadedRef.current = true;
-              setFullLoaded(true);
-            }}
+            onLoad={() => setFullLoaded(true)}
             className={`h-full w-full object-contain transition-opacity duration-300 ${
               fullLoaded ? "opacity-100" : "opacity-0"
             }`}
