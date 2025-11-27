@@ -6,6 +6,7 @@ import { isTagBlacklisted } from "@/lib/tag-blacklist";
 import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma } from "@/generated/prisma/client";
+import { invalidateSearchCaches } from "@/lib/cache";
 
 const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -537,6 +538,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     }
 
     progress.phase = "complete";
+    invalidateSearchCaches();
     await updateSyncState({
       status: "completed",
       count: progress.processedFiles,

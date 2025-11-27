@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
+import { tagIdCache, postIdsCache } from "@/lib/cache";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -52,7 +53,65 @@ export async function GET(request: NextRequest) {
   }
 
   // Progressive filtering: find tags that co-occur with all selected tags
-  // Use a single query with filtered _count for efficiency
+
+  // Step 1: Find tag IDs for selected tags (with caching)
+  const selectedTagIds: number[] = [];
+  const uncachedTagNames: string[] = [];
+
+  for (const tagName of selectedTags) {
+    const cachedId = tagIdCache.get(tagName);
+    if (cachedId !== undefined) {
+      selectedTagIds.push(cachedId);
+    } else {
+      uncachedTagNames.push(tagName);
+    }
+  }
+
+  // Fetch any uncached tag IDs
+  if (uncachedTagNames.length > 0) {
+    const tagRecords = await prisma.tag.findMany({
+      where: {
+        name: { in: uncachedTagNames, mode: "insensitive" },
+      },
+      select: { id: true, name: true },
+    });
+
+    for (const tag of tagRecords) {
+      tagIdCache.set(tag.name.toLowerCase(), tag.id);
+      selectedTagIds.push(tag.id);
+    }
+  }
+
+  // If not all selected tags exist, no results possible
+  if (selectedTagIds.length !== selectedTags.length) {
+    return NextResponse.json({ tags: [] });
+  }
+
+  // Step 2: Find posts that have ALL selected tags (with caching)
+  const sortedTagIds = [...selectedTagIds].sort((a, b) => a - b);
+  const postIdsCacheKey = sortedTagIds.join(",");
+
+  let postIds = postIdsCache.get(postIdsCacheKey);
+
+  if (!postIds) {
+    const postsWithAllTags = await prisma.postTag.groupBy({
+      by: ["postId"],
+      where: {
+        tagId: { in: selectedTagIds },
+      },
+      having: {
+        tagId: { _count: { equals: selectedTagIds.length } },
+      },
+    });
+    postIds = postsWithAllTags.map((p) => p.postId);
+    postIdsCache.set(postIdsCacheKey, postIds);
+  }
+
+  if (postIds.length === 0) {
+    return NextResponse.json({ tags: [] });
+  }
+
+  // Step 3: Find tags matching query that appear on these posts
   const tags = await prisma.tag.findMany({
     where: withBlacklistFilter({
       name: {
@@ -60,29 +119,11 @@ export async function GET(request: NextRequest) {
         mode: "insensitive",
       },
       // Exclude already selected tags
-      NOT: {
-        name: {
-          in: selectedTags,
-          mode: "insensitive",
-        },
-      },
-      // Only tags that appear on posts with all selected tags
+      id: { notIn: selectedTagIds },
+      // Only tags on posts with all selected tags
       posts: {
         some: {
-          post: {
-            AND: selectedTags.map((tagName) => ({
-              tags: {
-                some: {
-                  tag: {
-                    name: {
-                      equals: tagName,
-                      mode: "insensitive",
-                    },
-                  },
-                },
-              },
-            })),
-          },
+          postId: { in: postIds },
         },
       },
     }),
@@ -94,20 +135,7 @@ export async function GET(request: NextRequest) {
         select: {
           posts: {
             where: {
-              post: {
-                AND: selectedTags.map((tagName) => ({
-                  tags: {
-                    some: {
-                      tag: {
-                        name: {
-                          equals: tagName,
-                          mode: "insensitive",
-                        },
-                      },
-                    },
-                  },
-                })),
-              },
+              postId: { in: postIds },
             },
           },
         },
@@ -116,7 +144,7 @@ export async function GET(request: NextRequest) {
     orderBy: {
       posts: { _count: "desc" },
     },
-    take: limit * 2, // Take more to account for blacklist filtering
+    take: limit * 2,
   });
 
   // Apply blacklist filter and map results
