@@ -3,9 +3,9 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { TagSidebar } from "@/components/tag-sidebar";
 import { MediaViewer } from "@/components/media-viewer";
-import { QuickInfoBar } from "@/components/post/quick-info-bar";
+import { FileDetails } from "@/components/post/file-details";
 import { KeyboardNavigation } from "@/components/post/keyboard-navigation";
-import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
+import { getCanonicalSourceUrl, getDisplaySourceUrls } from "@/lib/hydrus/url-parser";
 import { TagCategory } from "@/generated/prisma/enums";
 
 interface PostPageProps {
@@ -134,17 +134,6 @@ export default async function PostPage({ params }: PostPageProps) {
 
       {/* Main content */}
       <div className="flex-1 min-w-0 space-y-4">
-        {/* Quick info bar */}
-        <QuickInfoBar
-          hash={post.hash}
-          mimeType={post.mimeType}
-          width={post.width}
-          height={post.height}
-          fileSize={post.fileSize}
-          duration={post.duration}
-          downloadFilename={downloadFilename}
-        />
-
         {/* Media viewer */}
         <MediaViewer
           hash={post.hash}
@@ -152,54 +141,6 @@ export default async function PostPage({ params }: PostPageProps) {
           prevPostHash={prevPostHash}
           nextPostHash={nextPostHash}
         />
-
-        {/* File details */}
-        <details className="rounded-lg bg-zinc-800">
-          <summary className="cursor-pointer p-4 text-lg font-semibold hover:bg-zinc-700/50">
-            File Details
-          </summary>
-          <dl className="grid grid-cols-2 gap-2 px-4 pb-4 text-sm sm:grid-cols-3">
-            <div>
-              <dt className="text-zinc-400">Type</dt>
-              <dd>{post.mimeType}</dd>
-            </div>
-            <div>
-              <dt className="text-zinc-400">Imported</dt>
-              <dd>{post.importedAt.toLocaleDateString()}</dd>
-            </div>
-            {post.hasAudio && (
-              <div>
-                <dt className="text-zinc-400">Audio</dt>
-                <dd>Yes</dd>
-              </div>
-            )}
-            <div className="col-span-2 sm:col-span-3">
-              <dt className="text-zinc-400">Hash</dt>
-              <dd className="font-mono text-xs break-all">{post.hash}</dd>
-            </div>
-          </dl>
-        </details>
-
-        {/* Source URLs */}
-        {post.sourceUrls.length > 0 && (
-          <div className="rounded-lg bg-zinc-800 p-4">
-            <h2 className="mb-3 text-lg font-semibold">Sources</h2>
-            <ul className="space-y-1 text-sm">
-              {post.sourceUrls.map((url, i) => (
-                <li key={i}>
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 hover:underline"
-                  >
-                    {url}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
 
         {/* Notes */}
         {post.notes.length > 0 && (
@@ -217,6 +158,44 @@ export default async function PostPage({ params }: PostPageProps) {
             </div>
           </div>
         )}
+
+        {/* Source URLs */}
+        {(() => {
+          const displayUrls = getDisplaySourceUrls(post.sourceUrls);
+          if (displayUrls.length === 0) return null;
+          return (
+            <div className="rounded-lg bg-zinc-800 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Sources</h2>
+              <ul className="space-y-1 text-sm">
+                {displayUrls.map((url, i) => (
+                  <li key={i}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 hover:underline break-all"
+                    >
+                      {url}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })()}
+
+        {/* File details */}
+        <FileDetails
+          hash={post.hash}
+          mimeType={post.mimeType}
+          width={post.width}
+          height={post.height}
+          fileSize={post.fileSize}
+          duration={post.duration}
+          hasAudio={post.hasAudio}
+          importedAt={post.importedAt}
+          downloadFilename={downloadFilename}
+        />
 
         {/* Related images from groups - horizontal filmstrip */}
         {groups.map((group) => {

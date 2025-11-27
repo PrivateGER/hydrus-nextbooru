@@ -152,3 +152,74 @@ export function getCanonicalSourceUrl(sourceType: SourceType, sourceId: string):
       return "";
   }
 }
+
+// Domains that host direct image files (not useful as source links)
+const IMAGE_HOST_PATTERNS = [
+  /^i\.pximg\.net$/i,
+  /^pbs\.twimg\.com$/i,
+  /^cdn\.donmai\.us$/i,
+  /^img\d*\.gelbooru\.com$/i,
+  /^wimg\.rule34\.xxx$/i,
+  /^images-wixmp-.*\.wixmp\.com$/i,
+];
+
+// URL patterns that are API/ajax endpoints (not useful for users)
+const API_ENDPOINT_PATTERNS = [
+  /\/ajax\//i,
+  /\/api\//i,
+  /\?.*format=json/i,
+];
+
+/**
+ * Check if a URL is a direct image host or API endpoint
+ */
+function isUselessUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    // Check if it's an image CDN
+    if (IMAGE_HOST_PATTERNS.some(p => p.test(parsed.hostname))) {
+      return true;
+    }
+
+    // Check if it's an API endpoint
+    if (API_ENDPOINT_PATTERNS.some(p => p.test(url))) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return true; // Invalid URLs are useless
+  }
+}
+
+/**
+ * Filter and canonicalize source URLs for display
+ * - Converts recognized URLs to their canonical form
+ * - Removes duplicate sources (same source type + ID)
+ * - Filters out direct image links and API endpoints
+ */
+export function getDisplaySourceUrls(urls: string[]): string[] {
+  const results: string[] = [];
+  const seen = new Set<string>();
+
+  for (const url of urls) {
+    // Try to parse as a known source
+    const parsed = parseSourceUrl(url);
+
+    if (parsed) {
+      // Use canonical URL for known sources
+      const key = `${parsed.sourceType}:${parsed.sourceId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push(getCanonicalSourceUrl(parsed.sourceType, parsed.sourceId));
+      }
+    } else if (!isUselessUrl(url) && !seen.has(url)) {
+      // Keep unknown URLs that aren't useless
+      seen.add(url);
+      results.push(url);
+    }
+  }
+
+  return results;
+}

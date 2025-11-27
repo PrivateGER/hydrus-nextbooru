@@ -72,8 +72,8 @@ export async function GET(
       groups: {
         include: {
           group: {
-            select: {
-              posts: { select: { id: true } },
+            include: {
+              _count: { select: { posts: true } },
             },
           },
         },
@@ -96,7 +96,7 @@ export async function GET(
   const characterTag = post.tags.find((t) => t.tag.category === TagCategory.CHARACTER)?.tag.name;
 
   // Get page number from first multi-post group
-  const groupWithPosition = post.groups.find((g) => g.group.posts.length > 1);
+  const groupWithPosition = post.groups.find((g) => g.group._count.posts > 1);
   const pageNum = groupWithPosition?.position;
 
   const filename = buildDownloadFilename(hash, post.extension, artistTag, characterTag, pageNum);
