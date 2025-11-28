@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createReadStream, statSync, existsSync } from "fs";
+import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import { Readable } from "stream";
 import { join } from "path";
 import { prisma } from "@/lib/db";
@@ -23,14 +24,26 @@ function sizeParamToEnum(size: SizeParam): ThumbnailSize {
 }
 
 /**
- * Serve a file with streaming and cache headers.
+ * Serve a file with streaming and cache headers (async).
  */
-function serveFile(
+async function serveFile(
   filePath: string,
   contentType: string,
-  source: "generated" | "hydrus"
-): NextResponse {
-  const stats = statSync(filePath);
+  hash: string,
+  source: "generated" | "hydrus",
+  request: NextRequest
+): Promise<NextResponse> {
+  const stats = await stat(filePath);
+
+  // ETag based on hash (immutable content-addressed files)
+  const etag = `"${hash}-${source}"`;
+
+  // Check If-None-Match for 304 response
+  const ifNoneMatch = request.headers.get("if-none-match");
+  if (ifNoneMatch === etag) {
+    return new NextResponse(null, { status: 304 });
+  }
+
   const stream = createReadStream(filePath);
   const webStream = Readable.toWeb(stream) as ReadableStream;
 
@@ -40,6 +53,7 @@ function serveFile(
       "Content-Type": contentType,
       "Content-Length": String(stats.size),
       "Cache-Control": "public, max-age=31536000, immutable",
+      "ETag": etag,
       "X-Thumbnail-Source": source,
     },
   });
@@ -89,16 +103,13 @@ export async function GET(
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
 
-  // Check for existing generated thumbnail
+  // Try generated thumbnail first (async, no existsSync)
   if (post.thumbnails.length > 0) {
     const thumbnailPath = join(getThumbnailBasePath(), post.thumbnails[0].path);
-    if (existsSync(thumbnailPath)) {
-      try {
-        return serveFile(thumbnailPath, "image/webp", "generated");
-      } catch (err) {
-        console.error(`Error serving generated thumbnail ${hash}:`, err);
-        // Fall through to Hydrus fallback
-      }
+    try {
+      return await serveFile(thumbnailPath, "image/webp", hash, "generated", request);
+    } catch {
+      // Fall through to Hydrus fallback
     }
   }
 
@@ -111,28 +122,20 @@ export async function GET(
     queueThumbnailGeneration(hash);
   }
 
-  // Serve Hydrus fallback
+  // Try Hydrus fallback (async, no existsSync)
   const hydrusThumbnailPath = getHydrusThumbnailPath(hash);
 
-  if (!existsSync(hydrusThumbnailPath)) {
-    return NextResponse.json(
-      { error: "Thumbnail not found on disk" },
-      { status: 404 }
-    );
-  }
-
   try {
-    return serveFile(hydrusThumbnailPath, "image/jpeg", "hydrus");
+    return await serveFile(hydrusThumbnailPath, "image/jpeg", hash, "hydrus", request);
   } catch (err) {
-    console.error(`Error serving Hydrus thumbnail ${hash}:`, err);
-
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return NextResponse.json(
-        { error: "Thumbnail not found on disk" },
+        { error: "Thumbnail not found" },
         { status: 404 }
       );
     }
 
+    console.error(`Error serving thumbnail ${hash}:`, err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
