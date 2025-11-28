@@ -10,6 +10,7 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     exclude: ['node_modules', '.next'],
     setupFiles: ['./src/test/setup.ts'],
+    hookTimeout: 60000, // Allow time for Testcontainers to pull images
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
