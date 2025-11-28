@@ -95,15 +95,17 @@ model Post {
 }
 
 model Tag {
-  id       Int         @id @default(autoincrement())
-  name     String
-  category TagCategory
+  id        Int         @id @default(autoincrement())
+  name      String
+  category  TagCategory
+  postCount Int         @default(0)
 
   posts PostTag[]
 
   @@unique([name, category])
   @@index([name])
   @@index([category])
+  @@index([postCount(sort: Desc)])
 }
 
 model PostTag {

@@ -33,10 +33,10 @@ const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
 };
 
 const CATEGORY_ORDER: TagCategory[] = [
-  TagCategory.ARTIST,
-  TagCategory.COPYRIGHT,
   TagCategory.CHARACTER,
+  TagCategory.COPYRIGHT,
   TagCategory.GENERAL,
+  TagCategory.ARTIST,
   TagCategory.META,
 ];
 

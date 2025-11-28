@@ -538,6 +538,10 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     }
 
     progress.phase = "complete";
+
+    // Recalculate tag post counts for efficient sorting
+    await recalculateTagCounts();
+
     invalidateSearchCaches();
     await updateSyncState({
       status: "completed",
@@ -693,4 +697,16 @@ export async function getSyncState() {
 async function isSyncCancelled(): Promise<boolean> {
   const state = await prisma.syncState.findFirst({ select: { status: true } });
   return state?.status === "cancelled";
+}
+
+/**
+ * Recalculate postCount for all tags.
+ * Called after sync to ensure counts are accurate for efficient sorting.
+ */
+async function recalculateTagCounts(): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "Tag" t SET "postCount" = (
+      SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
+    )
+  `;
 }

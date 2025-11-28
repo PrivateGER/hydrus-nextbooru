@@ -33,45 +33,107 @@ export async function GET(request: NextRequest) {
 
   // If no tags are selected, return top tags or search results
   if (selectedTags.length === 0) {
-    const baseWhere: Prisma.TagWhereInput = {};
-    if (category) {
-      baseWhere.category = category as Prisma.EnumTagCategoryFilter;
-    }
-    if (query) {
-      baseWhere.name = {
-        contains: query,
-        mode: "insensitive",
+    // If searching or filtering by category, use simple query
+    if (query || category) {
+      const baseWhere: Prisma.TagWhereInput = {};
+      if (category) {
+        baseWhere.category = category as Prisma.EnumTagCategoryFilter;
+      }
+      if (query) {
+        baseWhere.name = {
+          contains: query,
+          mode: "insensitive",
+        };
+      }
+
+      const [tags, totalPosts] = await Promise.all([
+        prisma.tag.findMany({
+          where: withBlacklistFilter(baseWhere),
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            postCount: true,
+          },
+          orderBy: [{ postCount: "desc" }],
+          take: limit,
+        }),
+        prisma.post.count(),
+      ]);
+
+      const result = {
+        tags: tags.map((tag) => ({
+          id: tag.id,
+          name: tag.name,
+          category: tag.category,
+          count: tag.postCount,
+        })),
+        postCount: totalPosts,
       };
+
+      treeResponseCache.set(cacheKey, result);
+
+      return NextResponse.json({
+        ...result,
+        selectedTags: [],
+      });
     }
 
-    const [tags, totalPosts] = await Promise.all([
+    // No filters: fetch top tags per category for balanced display
+    const categoryLimits = {
+      ARTIST: 20,
+      COPYRIGHT: 10,
+      CHARACTER: 10,
+      GENERAL: 50,
+      META: 10,
+    } as const;
+
+    const [artistTags, copyrightTags, characterTags, generalTags, metaTags, totalPosts] = await Promise.all([
       prisma.tag.findMany({
-        where: withBlacklistFilter(baseWhere),
-        select: {
-          id: true,
-          name: true,
-          category: true,
-          _count: {
-            select: { posts: true },
-          },
-        },
-        orderBy: [{ posts: { _count: "desc" } }],
-        take: limit,
+        where: withBlacklistFilter({ category: "ARTIST" }),
+        select: { id: true, name: true, category: true, postCount: true },
+        orderBy: [{ postCount: "desc" }],
+        take: categoryLimits.ARTIST,
+      }),
+      prisma.tag.findMany({
+        where: withBlacklistFilter({ category: "COPYRIGHT" }),
+        select: { id: true, name: true, category: true, postCount: true },
+        orderBy: [{ postCount: "desc" }],
+        take: categoryLimits.COPYRIGHT,
+      }),
+      prisma.tag.findMany({
+        where: withBlacklistFilter({ category: "CHARACTER" }),
+        select: { id: true, name: true, category: true, postCount: true },
+        orderBy: [{ postCount: "desc" }],
+        take: categoryLimits.CHARACTER,
+      }),
+      prisma.tag.findMany({
+        where: withBlacklistFilter({ category: "GENERAL" }),
+        select: { id: true, name: true, category: true, postCount: true },
+        orderBy: [{ postCount: "desc" }],
+        take: categoryLimits.GENERAL,
+      }),
+      prisma.tag.findMany({
+        where: withBlacklistFilter({ category: "META" }),
+        select: { id: true, name: true, category: true, postCount: true },
+        orderBy: [{ postCount: "desc" }],
+        take: categoryLimits.META,
       }),
       prisma.post.count(),
     ]);
 
+    const allTags = [...artistTags, ...copyrightTags, ...characterTags, ...generalTags, ...metaTags];
+
     const result = {
-      tags: tags.map((tag) => ({
+      tags: allTags.map((tag) => ({
         id: tag.id,
         name: tag.name,
         category: tag.category,
-        count: tag._count.posts,
+        count: tag.postCount,
       })),
       postCount: totalPosts,
     };
 
-    // Cache the response
     treeResponseCache.set(cacheKey, result);
 
     return NextResponse.json({
