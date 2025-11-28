@@ -5,6 +5,12 @@ import { TagCategory, Prisma } from "@/generated/prisma/client";
 import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
 import { withBlacklistFilter } from "@/lib/tag-blacklist";
+import {
+  tagsCategoryCountsCache,
+  tagsPageCache,
+  type TagsCategoryCounts,
+  type TagsPageEntry,
+} from "@/lib/cache";
 
 const TAGS_PER_PAGE = 100;
 
@@ -50,8 +56,17 @@ async function getTags(options: {
   category: TagCategory | null;
   sort: SortOption;
   page: number;
-}) {
+}): Promise<TagsPageEntry> {
   const { query, category, sort, page } = options;
+
+  // Only cache when no search query (search queries are too unique)
+  const cacheKey = query ? null : `${category || "ALL"}:${sort}:${page}`;
+
+  if (cacheKey) {
+    const cached = tagsPageCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
   const skip = (page - 1) * TAGS_PER_PAGE;
 
   const baseWhere: Prisma.TagWhereInput = {};
@@ -103,7 +118,7 @@ async function getTags(options: {
     prisma.tag.count({ where }),
   ]);
 
-  return {
+  const result: TagsPageEntry = {
     tags: tags.map((tag) => ({
       id: tag.id,
       name: tag.name,
@@ -113,9 +128,19 @@ async function getTags(options: {
     totalCount,
     totalPages: Math.ceil(totalCount / TAGS_PER_PAGE),
   };
+
+  if (cacheKey) {
+    tagsPageCache.set(cacheKey, result);
+  }
+
+  return result;
 }
 
-async function getCategoryCounts() {
+async function getCategoryCounts(): Promise<TagsCategoryCounts> {
+  // Check cache first - category counts rarely change
+  const cached = tagsCategoryCountsCache.get("counts");
+  if (cached) return cached;
+
   // Get counts per category using single groupBy query (avoids N+1)
   const blacklistConditions = withBlacklistFilter({});
 
@@ -125,13 +150,13 @@ async function getCategoryCounts() {
     where: blacklistConditions,
   });
 
-  const result: Record<TagCategory | "ALL", number> = {
+  const result: TagsCategoryCounts = {
     ALL: 0,
-    [TagCategory.ARTIST]: 0,
-    [TagCategory.COPYRIGHT]: 0,
-    [TagCategory.CHARACTER]: 0,
-    [TagCategory.GENERAL]: 0,
-    [TagCategory.META]: 0,
+    ARTIST: 0,
+    COPYRIGHT: 0,
+    CHARACTER: 0,
+    GENERAL: 0,
+    META: 0,
   };
 
   for (const item of counts) {
@@ -139,6 +164,7 @@ async function getCategoryCounts() {
     result.ALL += item._count._all;
   }
 
+  tagsCategoryCountsCache.set("counts", result);
   return result;
 }
 
@@ -251,7 +277,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
             <Link
               key={tag.id}
               href={`/search?tags=${encodeURIComponent(tag.name)}`}
-              className={`rounded-lg bg-zinc-800 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-700 ${CATEGORY_COLORS[tag.category]}`}
+              className={`rounded-lg bg-zinc-800 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-700 ${CATEGORY_COLORS[tag.category as TagCategory]}`}
             >
               {tag.name.replace(/_/g, " ")}
               <span className="ml-1.5 text-zinc-500">{tag.count.toLocaleString()}</span>

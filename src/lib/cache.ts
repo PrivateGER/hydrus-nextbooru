@@ -93,9 +93,34 @@ export interface TreeCacheEntry {
 }
 export const treeResponseCache = new TTLCache<TreeCacheEntry>(200, TREE_CACHE_TTL);
 
+// Tags page cache (category counts + default page)
+// Long TTL since we invalidate on sync anyway
+const TAGS_PAGE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+export interface TagsCategoryCounts {
+  ALL: number;
+  ARTIST: number;
+  COPYRIGHT: number;
+  CHARACTER: number;
+  GENERAL: number;
+  META: number;
+}
+export const tagsCategoryCountsCache = new TTLCache<TagsCategoryCounts>(1, TAGS_PAGE_CACHE_TTL);
+
+// Note: category stored as string for cache serialization, cast back on use
+export interface TagsPageEntry {
+  tags: Array<{ id: number; name: string; category: string; count: number }>;
+  totalCount: number;
+  totalPages: number;
+}
+// Cache for tags page queries (key format: "category:sort:page" or "default" for first page)
+export const tagsPageCache = new TTLCache<TagsPageEntry>(50, TAGS_PAGE_CACHE_TTL);
+
 // Invalidate all caches when data changes (call after sync)
 export function invalidateAllCaches(): void {
   tagIdCache.clear();
   postIdsCache.clear();
   treeResponseCache.clear();
+  tagsCategoryCountsCache.clear();
+  tagsPageCache.clear();
 }

@@ -32,7 +32,7 @@ export default function RootLayout({
         <header className="sticky top-0 z-50 border-b border-zinc-800 bg-zinc-900/95 backdrop-blur">
           <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
             <Link href="/" className="text-xl font-bold text-blue-400">
-              Booru
+              NextBooru
             </Link>
 
             <nav className="flex items-center gap-6">
