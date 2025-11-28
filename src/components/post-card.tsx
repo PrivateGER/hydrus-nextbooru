@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { BlurhashImage } from "./blurhash-image";
 
 export type LayoutMode = "masonry" | "grid";
@@ -15,63 +15,121 @@ interface PostCardProps {
   layout?: LayoutMode;
 }
 
-// Timeout before forcing visibility (handles stalled loads)
-const LOAD_TIMEOUT_MS = 8000;
+// Timeout before showing error (starts when image enters viewport)
+const LOAD_TIMEOUT_MS = 15000;
 
 export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry" }: PostCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const mountedRef = useRef(true);
+  const hashShort = hash.slice(0, 8);
 
-  // Check if image is already loaded (handles cached images after hydration)
-  const checkComplete = useCallback(() => {
-    const img = imgRef.current;
-    if (img?.complete && img.naturalWidth > 0) {
-      setLoaded(true);
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-    }
-  }, []);
-
-  // Handle successful load
-  const handleLoad = useCallback(() => {
-    setLoaded(true);
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  }, []);
-
-  // Handle load error
-  const handleError = useCallback(() => {
-    setError(true);
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  }, []);
-
+  // Reset state when hash changes (component reuse in virtualized lists)
   useEffect(() => {
-    // Check immediately for already-cached images
-    checkComplete();
-
-    // Set up timeout to show error if load stalls
-    if (!loaded && !error) {
-      timeoutRef.current = setTimeout(() => {
-        // If image hasn't loaded or errored by now, treat as failure
-        setError(true);
-      }, LOAD_TIMEOUT_MS);
+    console.log(`[${hashShort}] hash changed, resetting state`);
+    setLoaded(false);
+    setError(false);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = undefined;
     }
+  }, [hash, hashShort]);
+
+  // Track mounted state to prevent setState after unmount
+  useEffect(() => {
+    console.log(`[${hashShort}] mounted`);
+    mountedRef.current = true;
+    return () => {
+      console.log(`[${hashShort}] unmounting`);
+      mountedRef.current = false;
+    };
+  }, [hashShort]);
+
+  // Use IntersectionObserver to detect when image enters viewport
+  // Only then check for cached images and start timeout
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) {
+      console.log(`[${hashShort}] no img ref`);
+      return;
+    }
+
+    console.log(`[${hashShort}] setting up IntersectionObserver, img.complete=${img.complete}, img.naturalWidth=${img.naturalWidth}`);
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        console.log(`[${hashShort}] intersection: isIntersecting=${entry.isIntersecting}, img.complete=${img.complete}, img.naturalWidth=${img.naturalWidth}`);
+
+        if (!entry.isIntersecting) return;
+
+        // Image is now visible - check if already cached
+        if (img.complete && img.naturalWidth > 0) {
+          console.log(`[${hashShort}] already complete, setting loaded=true`);
+          if (mountedRef.current) setLoaded(true);
+          observer.disconnect();
+          return;
+        }
+
+        // Start timeout only when image enters viewport
+        // This prevents false errors for lazy-loaded below-fold images
+        if (!timeoutRef.current) {
+          console.log(`[${hashShort}] starting ${LOAD_TIMEOUT_MS}ms timeout`);
+          timeoutRef.current = setTimeout(() => {
+            console.log(`[${hashShort}] timeout fired, mounted=${mountedRef.current}, loaded=${loaded}`);
+            if (mountedRef.current && !loaded) {
+              console.log(`[${hashShort}] setting error=true due to timeout`);
+              setError(true);
+            }
+          }, LOAD_TIMEOUT_MS);
+        }
+
+        observer.disconnect();
+      },
+      { rootMargin: "50px" } // Start slightly before visible
+    );
+
+    observer.observe(img);
 
     return () => {
+      console.log(`[${hashShort}] cleanup: disconnecting observer`);
+      observer.disconnect();
       if (timeoutRef.current) {
+        console.log(`[${hashShort}] cleanup: clearing timeout`);
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [checkComplete, loaded, error]);
+  }, [hash, hashShort, loaded]);
+
+  // Handle successful load
+  const handleLoad = () => {
+    const img = imgRef.current;
+    console.log(`[${hashShort}] onLoad fired, mounted=${mountedRef.current}, img.complete=${img?.complete}, img.naturalWidth=${img?.naturalWidth}`);
+    if (!mountedRef.current) return;
+    setLoaded(true);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = undefined;
+    }
+  };
+
+  // Handle load error
+  const handleError = () => {
+    console.log(`[${hashShort}] onError fired, mounted=${mountedRef.current}`);
+    if (!mountedRef.current) return;
+    setError(true);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = undefined;
+    }
+  };
+
+  // Log state changes
+  useEffect(() => {
+    console.log(`[${hashShort}] state: loaded=${loaded}, error=${error}`);
+  }, [hashShort, loaded, error]);
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
@@ -138,6 +196,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       {/* Thumbnail image */}
       {!error ? (
         <img
+          key={hash}
           ref={imgRef}
           src={`/api/thumbnails/${hash}.webp`}
           alt=""
