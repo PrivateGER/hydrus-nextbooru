@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdCache, postIdsCache } from "@/lib/cache";
+import { tagIdCache } from "@/lib/cache";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -19,7 +20,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tags: [] });
   }
 
-  // If no tags are selected, use simple search
+  // If no tags are selected, use simple search with pre-computed postCount
   if (selectedTags.length === 0) {
     const tags = await prisma.tag.findMany({
       where: withBlacklistFilter({
@@ -32,13 +33,9 @@ export async function GET(request: NextRequest) {
         id: true,
         name: true,
         category: true,
-        _count: {
-          select: { posts: true },
-        },
+        postCount: true,
       },
-      orderBy: [
-        { posts: { _count: "desc" } },
-      ],
+      orderBy: { postCount: "desc" },
       take: limit,
     });
 
@@ -47,7 +44,7 @@ export async function GET(request: NextRequest) {
         id: tag.id,
         name: tag.name,
         category: tag.category,
-        count: tag._count.posts,
+        count: tag.postCount,
       })),
     });
   }
@@ -87,72 +84,41 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tags: [] });
   }
 
-  // Step 2: Find posts that have ALL selected tags (with caching)
-  const sortedTagIds = [...selectedTagIds].sort((a, b) => a - b);
-  const postIdsCacheKey = sortedTagIds.join(",");
+  // Step 2: Single efficient query to find co-occurring tags
+  // Uses a subquery to find posts with ALL selected tags, then counts tag occurrences
+  const searchPattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
-  let postIds = postIdsCache.get(postIdsCacheKey);
+  const coOccurringTags = await prisma.$queryRaw<Array<{
+    id: number;
+    name: string;
+    category: string;
+    count: bigint;
+  }>>(
+    Prisma.sql`
+      SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
+      FROM "Tag" t
+      JOIN "PostTag" pt ON t.id = pt."tagId"
+      WHERE t.name ILIKE ${searchPattern}
+        AND t.id != ALL(${selectedTagIds}::int[])
+        AND pt."postId" IN (
+          SELECT pt2."postId"
+          FROM "PostTag" pt2
+          WHERE pt2."tagId" = ANY(${selectedTagIds}::int[])
+          GROUP BY pt2."postId"
+          HAVING COUNT(*) = ${selectedTagIds.length}
+        )
+      GROUP BY t.id, t.name, t.category
+      ORDER BY count DESC
+      LIMIT ${limit * 2}
+    `
+  );
 
-  if (!postIds) {
-    const postsWithAllTags = await prisma.postTag.groupBy({
-      by: ["postId"],
-      where: {
-        tagId: { in: selectedTagIds },
-      },
-      having: {
-        tagId: { _count: { equals: selectedTagIds.length } },
-      },
-    });
-    postIds = postsWithAllTags.map((p) => p.postId);
-    postIdsCache.set(postIdsCacheKey, postIds);
-  }
-
-  if (postIds.length === 0) {
-    return NextResponse.json({ tags: [] });
-  }
-
-  // Step 3: Find tags matching query that appear on these posts
-  const tags = await prisma.tag.findMany({
-    where: withBlacklistFilter({
-      name: {
-        contains: query,
-        mode: "insensitive",
-      },
-      // Exclude already selected tags
-      id: { notIn: selectedTagIds },
-      // Only tags on posts with all selected tags
-      posts: {
-        some: {
-          postId: { in: postIds },
-        },
-      },
-    }),
-    select: {
-      id: true,
-      name: true,
-      category: true,
-      _count: {
-        select: {
-          posts: {
-            where: {
-              postId: { in: postIds },
-            },
-          },
-        },
-      },
-    },
-    orderBy: {
-      posts: { _count: "desc" },
-    },
-    take: limit * 2,
-  });
-
-  // Apply blacklist filter and map results
-  const mappedTags = tags.map((tag) => ({
+  // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
+  const mappedTags = coOccurringTags.map((tag) => ({
     id: tag.id,
     name: tag.name,
     category: tag.category,
-    count: tag._count.posts,
+    count: Number(tag.count),
   }));
 
   const filteredTags = filterBlacklistedTags(mappedTags)
