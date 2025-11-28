@@ -22,7 +22,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   const hashShort = hash.slice(0, 8);
 
