@@ -25,6 +25,10 @@ function sizeParamToEnum(size: SizeParam): ThumbnailSize {
 
 /**
  * Serve a file with streaming and cache headers (async).
+ *
+ * Cache strategy:
+ * - Generated thumbnails: Long-term immutable cache (1 year) - content-addressed, never changes
+ * - Hydrus fallbacks: Short cache with revalidation - may be replaced by generated thumbnails
  */
 async function serveFile(
   filePath: string,
@@ -35,7 +39,7 @@ async function serveFile(
 ): Promise<NextResponse> {
   const stats = await stat(filePath);
 
-  // ETag based on hash (immutable content-addressed files)
+  // ETag based on hash and source (different sources = different content)
   const etag = `"${hash}-${source}"`;
 
   // Check If-None-Match for 304 response
@@ -47,12 +51,19 @@ async function serveFile(
   const stream = createReadStream(filePath);
   const webStream = Readable.toWeb(stream) as ReadableStream;
 
+  // Different cache strategies based on source:
+  // - Generated: permanent, immutable (content-addressed)
+  // - Hydrus: short-lived, may be replaced by generated thumbnails soon
+  const cacheControl = source === "generated"
+    ? "public, max-age=31536000, immutable"
+    : "public, max-age=60, stale-while-revalidate=300";
+
   return new NextResponse(webStream, {
     status: 200,
     headers: {
       "Content-Type": contentType,
       "Content-Length": String(stats.size),
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": cacheControl,
       "ETag": etag,
       "X-Thumbnail-Source": source,
     },

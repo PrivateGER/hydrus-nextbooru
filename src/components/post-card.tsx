@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { BlurhashImage } from "./blurhash-image";
 
 export type LayoutMode = "masonry" | "grid";
@@ -15,9 +15,63 @@ interface PostCardProps {
   layout?: LayoutMode;
 }
 
+// Timeout before forcing visibility (handles stalled loads)
+const LOAD_TIMEOUT_MS = 8000;
+
 export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry" }: PostCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Check if image is already loaded (handles cached images after hydration)
+  const checkComplete = useCallback(() => {
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0) {
+      setLoaded(true);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    }
+  }, []);
+
+  // Handle successful load
+  const handleLoad = useCallback(() => {
+    setLoaded(true);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  // Handle load error
+  const handleError = useCallback(() => {
+    setError(true);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check immediately for already-cached images
+    checkComplete();
+
+    // Set up timeout to show error if load stalls
+    if (!loaded && !error) {
+      timeoutRef.current = setTimeout(() => {
+        // If image hasn't loaded or errored by now, treat as failure
+        setError(true);
+      }, LOAD_TIMEOUT_MS);
+    }
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [checkComplete, loaded, error]);
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
@@ -84,6 +138,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       {/* Thumbnail image */}
       {!error ? (
         <img
+          ref={imgRef}
           src={`/api/thumbnails/${hash}.webp`}
           alt=""
           className={
@@ -96,8 +151,8 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
                 }`
           }
           loading="lazy"
-          onLoad={() => setLoaded(true)}
-          onError={() => setError(true)}
+          onLoad={handleLoad}
+          onError={handleError}
         />
       ) : (
         <div className={`flex items-center justify-center bg-zinc-700 text-zinc-400 ${
