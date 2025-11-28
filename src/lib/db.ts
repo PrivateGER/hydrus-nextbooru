@@ -47,14 +47,14 @@ export const prisma = new Proxy({} as PrismaClient, {
   get(_, prop: string | symbol) {
     // If test client is set, use it
     if (testPrisma) {
-      return (testPrisma as Record<string | symbol, unknown>)[prop];
+      return (testPrisma as unknown as Record<string | symbol, unknown>)[prop];
     }
 
     // Otherwise use global/create new client
     if (!globalForPrisma.prisma) {
       globalForPrisma.prisma = createPrismaClient();
     }
-    return (globalForPrisma.prisma as Record<string | symbol, unknown>)[prop];
+    return (globalForPrisma.prisma as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
 
