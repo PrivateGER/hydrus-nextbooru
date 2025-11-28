@@ -13,9 +13,19 @@ npm run dev      # Start development server
 npm run build    # Production build
 npm run start    # Run production server
 npm run lint     # ESLint
+npm test         # Run all tests
 npx prisma generate   # Generate Prisma client after schema changes
 npx prisma migrate dev  # Create and apply migrations
 ```
+
+## Testing
+
+**Always run tests after making changes:**
+```bash
+npm test         # Run all tests (unit + integration)
+```
+
+Tests use Vitest with real PostgreSQL via Testcontainers. Integration tests require Docker.
 
 ## Architecture
 

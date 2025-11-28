@@ -99,6 +99,3 @@ export function invalidateAllCaches(): void {
   postIdsCache.clear();
   treeResponseCache.clear();
 }
-
-// Legacy alias for backwards compatibility
-export const invalidateSearchCaches = invalidateAllCaches;

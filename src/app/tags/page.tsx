@@ -79,11 +79,11 @@ async function getTags(options: {
       orderBy = { name: "desc" };
       break;
     case "-count":
-      orderBy = { posts: { _count: "asc" } };
+      orderBy = { postCount: "asc" };
       break;
     case "count":
     default:
-      orderBy = { posts: { _count: "desc" } };
+      orderBy = { postCount: "desc" };
       break;
   }
 
@@ -94,9 +94,7 @@ async function getTags(options: {
         id: true,
         name: true,
         category: true,
-        _count: {
-          select: { posts: true },
-        },
+        postCount: true,
       },
       orderBy,
       skip,
@@ -110,7 +108,7 @@ async function getTags(options: {
       id: tag.id,
       name: tag.name,
       category: tag.category,
-      count: tag._count.posts,
+      count: tag.postCount,
     })),
     totalCount,
     totalPages: Math.ceil(totalCount / TAGS_PER_PAGE),
@@ -118,16 +116,14 @@ async function getTags(options: {
 }
 
 async function getCategoryCounts() {
-  // Get counts per category, excluding blacklisted tags
-  const categories = Object.values(TagCategory);
-  const counts = await Promise.all(
-    categories.map(async (cat) => {
-      const count = await prisma.tag.count({
-        where: withBlacklistFilter({ category: cat }),
-      });
-      return { category: cat, count };
-    })
-  );
+  // Get counts per category using single groupBy query (avoids N+1)
+  const blacklistConditions = withBlacklistFilter({});
+
+  const counts = await prisma.tag.groupBy({
+    by: ["category"],
+    _count: { _all: true },
+    where: blacklistConditions,
+  });
 
   const result: Record<TagCategory | "ALL", number> = {
     ALL: 0,
@@ -139,8 +135,8 @@ async function getCategoryCounts() {
   };
 
   for (const item of counts) {
-    result[item.category] = item.count;
-    result.ALL += item.count;
+    result[item.category] = item._count._all;
+    result.ALL += item._count._all;
   }
 
   return result;

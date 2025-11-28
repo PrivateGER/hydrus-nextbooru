@@ -7,6 +7,17 @@ const globalForPrisma = globalThis as unknown as {
   pool: Pool | undefined;
 };
 
+// Test injection support
+let testPrisma: PrismaClient | null = null;
+
+/**
+ * Set a test Prisma client to be used instead of the real one.
+ * Pass null to restore normal behavior.
+ */
+export function setTestPrisma(client: PrismaClient | null): void {
+  testPrisma = client;
+}
+
 function createPrismaClient() {
   // Configure pool for concurrent sync operations:
   // - max: 40 connections (20 concurrent files + bulk operations + API requests)
@@ -31,8 +42,24 @@ function createPrismaClient() {
   return new PrismaClient({ adapter });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+// Use Proxy to allow runtime test injection
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_, prop: string | symbol) {
+    // If test client is set, use it
+    if (testPrisma) {
+      return (testPrisma as Record<string | symbol, unknown>)[prop];
+    }
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+    // Otherwise use global/create new client
+    if (!globalForPrisma.prisma) {
+      globalForPrisma.prisma = createPrismaClient();
+    }
+    return (globalForPrisma.prisma as Record<string | symbol, unknown>)[prop];
+  },
+});
+
+if (process.env.NODE_ENV !== "production" && !globalForPrisma.prisma) {
+  globalForPrisma.prisma = createPrismaClient();
+}
 
 export default prisma;

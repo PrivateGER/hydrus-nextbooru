@@ -16,7 +16,10 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "test:sync": "vitest run src/lib/hydrus/sync"
+    "test:sync": "vitest run src/lib/hydrus/sync",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:watch": "vitest --config vitest.integration.config.ts",
+    "test:all": "npm run test && npm run test:integration"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.0.1",
@@ -33,6 +36,7 @@
   "devDependencies": {
     "@prisma/client": "^7.0.1",
     "@tailwindcss/postcss": "^4",
+    "@testcontainers/postgresql": "^11.9.0",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^20",
     "@types/pg": "^8.15.6",
@@ -43,8 +47,10 @@
     "@vitest/ui": "^4.0.14",
     "eslint": "^9",
     "eslint-config-next": "16.0.4",
+    "msw": "^2.12.3",
     "prisma": "^7.0.1",
     "tailwindcss": "^4",
+    "testcontainers": "^11.9.0",
     "typescript": "^5",
     "vitest": "^4.0.14",
     "vitest-mock-extended": "^3.1.0"

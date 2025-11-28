@@ -1,0 +1,349 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
+import { setTestPrisma } from '@/lib/db';
+import { createMockHydrusServer, createMockHydrusState, addFilesToState, type MockHydrusState } from '@/test/mocks/hydrus-server';
+import { createMockFileMetadata, createMockFileWithTags, createMockFileWithUrls } from '@/test/mocks/fixtures/hydrus-metadata';
+import { invalidateAllCaches } from '@/lib/cache';
+import { clearPatternCache } from '@/lib/tag-blacklist';
+import type { SetupServer } from 'msw/node';
+
+let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
+let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
+
+describe('syncFromHydrus (Integration)', () => {
+  let server: SetupServer;
+  let hydrusState: MockHydrusState;
+
+  beforeAll(async () => {
+    const { prisma } = await setupTestDatabase();
+    setTestPrisma(prisma);
+
+    // Import after setting up test prisma
+    const syncModule = await import('@/lib/hydrus/sync');
+    syncFromHydrus = syncModule.syncFromHydrus;
+    getSyncState = syncModule.getSyncState;
+  });
+
+  afterAll(async () => {
+    setTestPrisma(null);
+    await teardownTestDatabase();
+  });
+
+  beforeEach(async () => {
+    await cleanDatabase();
+    invalidateAllCaches();
+    clearPatternCache();
+
+    // Create fresh mock state and server for each test
+    hydrusState = createMockHydrusState(0);
+    server = createMockHydrusServer(hydrusState);
+    server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  afterEach(() => {
+    server.close();
+  });
+
+  describe('basic sync', () => {
+    it('should sync files from Hydrus to database', async () => {
+      const prisma = getTestPrisma();
+
+      // Setup: 3 files with tags
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['tag1', 'artist:alice'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileWithTags(['tag1', 'tag2'], { file_id: 2, hash: 'b'.repeat(64) }),
+        createMockFileWithTags(['tag3'], { file_id: 3, hash: 'c'.repeat(64) }),
+      ]);
+
+      const result = await syncFromHydrus();
+
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(3);
+      expect(result.errors).toHaveLength(0);
+
+      // Verify posts created
+      const posts = await prisma.post.findMany();
+      expect(posts).toHaveLength(3);
+
+      // Verify tags created
+      const tags = await prisma.tag.findMany();
+      expect(tags.length).toBeGreaterThanOrEqual(4); // tag1, tag2, tag3, alice
+
+      // Verify post-tag relations
+      const postTags = await prisma.postTag.findMany();
+      expect(postTags.length).toBeGreaterThan(0);
+    });
+
+    it('should update existing posts on re-sync', async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      // First sync
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['tag1'], { file_id: 1, hash, width: 800 }),
+      ]);
+      await syncFromHydrus();
+
+      const postBefore = await prisma.post.findUnique({ where: { hash } });
+      expect(postBefore?.width).toBe(800);
+
+      // Update file metadata
+      hydrusState.metadata.set(1, createMockFileWithTags(['tag1', 'tag2'], {
+        file_id: 1,
+        hash,
+        width: 1920, // Changed
+      }));
+
+      // Re-sync
+      await syncFromHydrus();
+
+      const postAfter = await prisma.post.findUnique({ where: { hash } });
+      expect(postAfter?.width).toBe(1920);
+
+      // Verify tags updated
+      const postTags = await prisma.postTag.findMany({
+        where: { postId: postAfter!.id },
+        include: { tag: true },
+      });
+      expect(postTags).toHaveLength(2);
+    });
+
+    it('should handle empty Hydrus library', async () => {
+      // No files added to state
+      const result = await syncFromHydrus();
+
+      expect(result.phase).toBe('complete');
+      expect(result.totalFiles).toBe(0);
+      expect(result.processedFiles).toBe(0);
+    });
+
+    it('should create groups from source URLs', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileWithUrls(
+          ['https://www.pixiv.net/en/artworks/12345678'],
+          { file_id: 1, hash: 'a'.repeat(64) }
+        ),
+        createMockFileWithUrls(
+          ['https://www.pixiv.net/en/artworks/12345678'], // Same pixiv work
+          { file_id: 2, hash: 'b'.repeat(64) }
+        ),
+      ]);
+
+      await syncFromHydrus();
+
+      // Verify group created
+      const groups = await prisma.group.findMany();
+      expect(groups).toHaveLength(1);
+      expect(groups[0].sourceType).toBe('PIXIV');
+      expect(groups[0].sourceId).toBe('12345678');
+
+      // Verify both posts linked to group
+      const postGroups = await prisma.postGroup.findMany();
+      expect(postGroups).toHaveLength(2);
+    });
+  });
+
+  describe('concurrency control', () => {
+    it('should throw if sync is already running', async () => {
+      const prisma = getTestPrisma();
+
+      // Create running sync state
+      await prisma.syncState.create({
+        data: {
+          status: 'running',
+          totalFiles: 100,
+          processedFiles: 50,
+          currentBatch: 1,
+          totalBatches: 2,
+        },
+      });
+
+      await expect(syncFromHydrus()).rejects.toThrow('already in progress');
+    });
+
+    it('should allow sync after previous completed', async () => {
+      const prisma = getTestPrisma();
+
+      // Create completed sync state
+      await prisma.syncState.create({
+        data: {
+          status: 'completed',
+          lastSyncedAt: new Date(),
+          lastSyncCount: 10,
+        },
+      });
+
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+
+      const result = await syncFromHydrus();
+      expect(result.phase).toBe('complete');
+    });
+
+    it('should allow sync after previous errored', async () => {
+      const prisma = getTestPrisma();
+
+      // Create errored sync state
+      await prisma.syncState.create({
+        data: {
+          status: 'error',
+          errorMessage: 'Previous error',
+        },
+      });
+
+      const result = await syncFromHydrus();
+      expect(result.phase).toBe('complete');
+    });
+  });
+
+  describe('error handling', () => {
+    it('should handle Hydrus search API errors', async () => {
+      hydrusState.searchError = new Error('Connection refused');
+
+      await expect(syncFromHydrus()).rejects.toThrow();
+
+      // Verify error state recorded
+      const state = await getSyncState();
+      expect(state?.status).toBe('error');
+      expect(state?.errorMessage).toBeTruthy();
+    });
+
+    it('should record batch errors without stopping sync', async () => {
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+      hydrusState.metadataError = new Error('Metadata fetch failed');
+
+      // Batch errors don't throw - they're recorded and sync continues
+      const result = await syncFromHydrus();
+
+      expect(result.phase).toBe('complete');
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toContain('Error processing batch');
+    });
+  });
+
+  describe('cancellation', () => {
+    it('should stop processing when cancelled', async () => {
+      const prisma = getTestPrisma();
+
+      // Setup many files to ensure multiple batches
+      const files = Array.from({ length: 300 }, (_, i) =>
+        createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
+      );
+      addFilesToState(hydrusState, files);
+
+      // Add delay to metadata fetch so we have time to cancel
+      hydrusState.metadataDelayMs = 100;
+
+      // Start sync
+      const syncPromise = syncFromHydrus();
+
+      // Cancel after short delay
+      await new Promise((r) => setTimeout(r, 50));
+      await prisma.syncState.updateMany({
+        where: { status: 'running' },
+        data: { status: 'cancelled' },
+      });
+
+      const result = await syncPromise;
+
+      expect(result.phase).toBe('complete');
+      // Should have processed less than total (cancelled mid-way)
+      expect(result.processedFiles).toBeLessThan(300);
+    });
+  });
+
+  describe('sync state tracking', () => {
+    it('should update progress during sync', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
+      ]);
+
+      await syncFromHydrus();
+
+      const state = await prisma.syncState.findFirst();
+      expect(state?.status).toBe('completed');
+      expect(state?.lastSyncCount).toBe(2);
+      expect(state?.lastSyncedAt).not.toBeNull();
+    });
+
+    it('should track batch progress', async () => {
+      // Create enough files for multiple batches (batch size is 256)
+      const files = Array.from({ length: 300 }, (_, i) =>
+        createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
+      );
+      addFilesToState(hydrusState, files);
+
+      const progressUpdates: { currentBatch: number; totalBatches: number }[] = [];
+
+      await syncFromHydrus({
+        onProgress: (progress) => {
+          if (progress.currentBatch > 0) {
+            progressUpdates.push({
+              currentBatch: progress.currentBatch,
+              totalBatches: progress.totalBatches,
+            });
+          }
+        },
+      });
+
+      // Should have had progress updates for 2 batches
+      expect(progressUpdates.some((p) => p.currentBatch === 1)).toBe(true);
+      expect(progressUpdates.some((p) => p.currentBatch === 2)).toBe(true);
+      expect(progressUpdates[0].totalBatches).toBe(2);
+    });
+  });
+
+  describe('tag handling', () => {
+    it('should categorize namespaced tags correctly', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileWithTags([
+          'general tag',
+          'artist:john doe',
+          'character:alice',
+          'series:wonderland',
+        ], { file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+
+      await syncFromHydrus();
+
+      const tags = await prisma.tag.findMany();
+      const artistTag = tags.find((t) => t.name === 'john doe');
+      const characterTag = tags.find((t) => t.name === 'alice');
+      const seriesTag = tags.find((t) => t.name === 'wonderland');
+      const generalTag = tags.find((t) => t.name === 'general tag');
+
+      expect(artistTag?.category).toBe('ARTIST');
+      expect(characterTag?.category).toBe('CHARACTER');
+      expect(seriesTag?.category).toBe('COPYRIGHT');
+      expect(generalTag?.category).toBe('GENERAL');
+    });
+
+    it('should update tag post counts after sync', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['shared tag', 'unique1'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileWithTags(['shared tag', 'unique2'], { file_id: 2, hash: 'b'.repeat(64) }),
+        createMockFileWithTags(['shared tag'], { file_id: 3, hash: 'c'.repeat(64) }),
+      ]);
+
+      await syncFromHydrus();
+
+      const sharedTag = await prisma.tag.findFirst({ where: { name: 'shared tag' } });
+      const uniqueTag = await prisma.tag.findFirst({ where: { name: 'unique1' } });
+
+      expect(sharedTag?.postCount).toBe(3);
+      expect(uniqueTag?.postCount).toBe(1);
+    });
+  });
+});

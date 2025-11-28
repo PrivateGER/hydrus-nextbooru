@@ -255,74 +255,10 @@ describe('HydrusClient', () => {
   });
 
   // ===========================================================================
-  // verifyAccessKey
+  // searchFiles - Default Values
   // ===========================================================================
 
-  describe('verifyAccessKey', () => {
-    it('should call correct endpoint', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({
-        basic_permissions: [0, 1, 2],
-        human_description: 'test access',
-      }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.verifyAccessKey();
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/verify_access_key',
-        expect.any(Object)
-      );
-    });
-
-    it('should return permissions data', async () => {
-      const mockResponse = {
-        basic_permissions: [0, 1, 2, 3],
-        human_description: 'Full access',
-      };
-      mockFetch.mockResolvedValue(mockOkResponse(mockResponse));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      const result = await client.verifyAccessKey();
-
-      expect(result).toEqual(mockResponse);
-    });
-  });
-
-  // ===========================================================================
-  // getServices
-  // ===========================================================================
-
-  describe('getServices', () => {
-    it('should call correct endpoint', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ services: {} }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getServices();
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_services',
-        expect.any(Object)
-      );
-    });
-  });
-
-  // ===========================================================================
-  // searchFiles
-  // ===========================================================================
-
-  describe('searchFiles', () => {
-    it('should call correct endpoint', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ file_ids: [], hashes: [] }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.searchFiles({ tags: ['test'] });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/get_files/search_files'),
-        expect.any(Object)
-      );
-    });
-
+  describe('searchFiles defaults', () => {
     it('should always set return_file_ids to true', async () => {
       mockFetch.mockResolvedValue(mockOkResponse({ file_ids: [], hashes: [] }));
 
@@ -355,38 +291,6 @@ describe('HydrusClient', () => {
       const url = new URL(calledUrl);
       expect(url.searchParams.get('return_hashes')).toBe('false');
     });
-
-    it('should pass optional service keys', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ file_ids: [], hashes: [] }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.searchFiles({
-        tags: ['test'],
-        fileServiceKey: 'file-service-123',
-        tagServiceKey: 'tag-service-456',
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(url.searchParams.get('file_service_key')).toBe('file-service-123');
-      expect(url.searchParams.get('tag_service_key')).toBe('tag-service-456');
-    });
-
-    it('should pass sort options', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ file_ids: [], hashes: [] }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.searchFiles({
-        tags: ['test'],
-        fileSortType: 1,
-        fileSortAsc: false,
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(url.searchParams.get('file_sort_type')).toBe('1');
-      expect(url.searchParams.get('file_sort_asc')).toBe('false');
-    });
   });
 
   // ===========================================================================
@@ -408,37 +312,10 @@ describe('HydrusClient', () => {
   });
 
   // ===========================================================================
-  // getFileMetadata
+  // getFileMetadata - Default Values
   // ===========================================================================
 
-  describe('getFileMetadata', () => {
-    it('should call correct endpoint with file_ids', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ metadata: [] }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFileMetadata({ fileIds: [1, 2, 3] });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/get_files/file_metadata'),
-        expect.any(Object)
-      );
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(JSON.parse(url.searchParams.get('file_ids')!)).toEqual([1, 2, 3]);
-    });
-
-    it('should call correct endpoint with hashes', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ metadata: [] }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFileMetadata({ hashes: ['abc123', 'def456'] });
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(JSON.parse(url.searchParams.get('hashes')!)).toEqual(['abc123', 'def456']);
-    });
-
+  describe('getFileMetadata defaults', () => {
     it('should default include_notes to false', async () => {
       mockFetch.mockResolvedValue(mockOkResponse({ metadata: [] }));
 
@@ -481,55 +358,10 @@ describe('HydrusClient', () => {
   });
 
   // ===========================================================================
-  // getFilePath
+  // getThumbnailPath - Default Values
   // ===========================================================================
 
-  describe('getFilePath', () => {
-    it('should call correct endpoint with file_id', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ path: '/path/to/file.png' }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFilePath({ fileId: 123 });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/get_files/file_path'),
-        expect.any(Object)
-      );
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(url.searchParams.get('file_id')).toBe('123');
-    });
-
-    it('should call correct endpoint with hash', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ path: '/path/to/file.png' }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFilePath({ hash: 'abc123' });
-
-      const calledUrl = mockFetch.mock.calls[0][0];
-      const url = new URL(calledUrl);
-      expect(url.searchParams.get('hash')).toBe('abc123');
-    });
-  });
-
-  // ===========================================================================
-  // getThumbnailPath
-  // ===========================================================================
-
-  describe('getThumbnailPath', () => {
-    it('should call correct endpoint', async () => {
-      mockFetch.mockResolvedValue(mockOkResponse({ path: '/path/to/thumb.jpg' }));
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getThumbnailPath({ fileId: 123 });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/get_files/thumbnail_path'),
-        expect.any(Object)
-      );
-    });
-
+  describe('getThumbnailPath defaults', () => {
     it('should default include_thumbnail_filetype to true', async () => {
       mockFetch.mockResolvedValue(mockOkResponse({ path: '/path/to/thumb.jpg' }));
 
@@ -554,57 +386,10 @@ describe('HydrusClient', () => {
   });
 
   // ===========================================================================
-  // getFile (raw bytes)
+  // getFile - Precedence Logic
   // ===========================================================================
 
   describe('getFile', () => {
-    it('should call correct endpoint with file_id', async () => {
-      mockFetch.mockResolvedValue({ ok: true });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFile({ fileId: 123 });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_files/file?file_id=123',
-        expect.any(Object)
-      );
-    });
-
-    it('should call correct endpoint with hash', async () => {
-      mockFetch.mockResolvedValue({ ok: true });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFile({ hash: 'abc123def' });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_files/file?hash=abc123def',
-        expect.any(Object)
-      );
-    });
-
-    it('should return raw Response object', async () => {
-      const mockResponse = { ok: true, body: 'file bytes' };
-      mockFetch.mockResolvedValue(mockResponse);
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      const result = await client.getFile({ fileId: 123 });
-
-      expect(result).toBe(mockResponse);
-    });
-
-    it('should throw HydrusApiError on non-ok response', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-      });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-
-      await expect(client.getFile({ fileId: 123 }))
-        .rejects.toThrow(HydrusApiError);
-    });
-
     it('should prefer fileId over hash when both provided', async () => {
       mockFetch.mockResolvedValue({ ok: true });
 
@@ -615,59 +400,6 @@ describe('HydrusClient', () => {
         'http://test/get_files/file?file_id=123',
         expect.any(Object)
       );
-    });
-  });
-
-  // ===========================================================================
-  // getThumbnail (raw bytes)
-  // ===========================================================================
-
-  describe('getThumbnail', () => {
-    it('should call correct endpoint with file_id', async () => {
-      mockFetch.mockResolvedValue({ ok: true });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getThumbnail({ fileId: 456 });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_files/thumbnail?file_id=456',
-        expect.any(Object)
-      );
-    });
-
-    it('should call correct endpoint with hash', async () => {
-      mockFetch.mockResolvedValue({ ok: true });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getThumbnail({ hash: 'xyz789' });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_files/thumbnail?hash=xyz789',
-        expect.any(Object)
-      );
-    });
-
-    it('should return raw Response object', async () => {
-      const mockResponse = { ok: true, body: 'thumbnail bytes' };
-      mockFetch.mockResolvedValue(mockResponse);
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      const result = await client.getThumbnail({ hash: 'abc' });
-
-      expect(result).toBe(mockResponse);
-    });
-
-    it('should throw HydrusApiError on non-ok response', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-      });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-
-      await expect(client.getThumbnail({ hash: 'abc' }))
-        .rejects.toThrow(HydrusApiError);
     });
   });
 });

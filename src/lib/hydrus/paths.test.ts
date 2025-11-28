@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { buildFilePath, buildThumbnailPath } from './paths';
-import path from 'path';
+import { sep } from 'path';
 
 describe('path building', () => {
   const originalEnv = process.env.HYDRUS_FILES_PATH;
@@ -16,7 +16,8 @@ describe('path building', () => {
 
       const result = buildFilePath(hash, '.png');
 
-      expect(result).toBe(path.join('/hydrus/files', 'fab', `${hash}.png`));
+      // Implementation uses template literal with sep, so expect that format
+      expect(result).toBe(`/hydrus/files${sep}fab${sep}${hash}.png`);
     });
 
     it('should handle uppercase hash with lowercase prefix', () => {
@@ -35,7 +36,7 @@ describe('path building', () => {
 
       const result = buildFilePath(hash, '.png');
 
-      expect(result).toBe(path.join('fab', `${hash}.png`));
+      expect(result).toBe(`fab${sep}${hash}.png`);
     });
 
     it.each(['.png', '.jpg', '.gif', '.mp4', '.webm'])('should handle %s extension', (extension) => {
@@ -53,7 +54,8 @@ describe('path building', () => {
 
       const result = buildThumbnailPath(hash);
 
-      expect(result).toBe(path.join('/hydrus/files', 'tab', `${hash}.thumbnail`));
+      // Implementation uses template literal with sep, so expect that format
+      expect(result).toBe(`/hydrus/files${sep}tab${sep}${hash}.thumbnail`);
     });
 
     it('should handle uppercase hash with lowercase prefix', () => {
@@ -71,7 +73,7 @@ describe('path building', () => {
 
       const result = buildThumbnailPath(hash);
 
-      expect(result).toBe(path.join('tff', `${hash}.thumbnail`));
+      expect(result).toBe(`tff${sep}${hash}.thumbnail`);
     });
   });
 

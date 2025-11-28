@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
   // Apply blacklist filter
   const where = withBlacklistFilter(baseWhere);
 
-  // Build order clause
+  // Build order clause using indexed postCount field
   let orderBy: Prisma.TagOrderByWithRelationInput;
   switch (sort) {
     case "name":
@@ -45,11 +45,11 @@ export async function GET(request: NextRequest) {
       orderBy = { name: "desc" };
       break;
     case "-count":
-      orderBy = { posts: { _count: "asc" } };
+      orderBy = { postCount: "asc" };
       break;
     case "count":
     default:
-      orderBy = { posts: { _count: "desc" } };
+      orderBy = { postCount: "desc" };
       break;
   }
 
@@ -60,9 +60,7 @@ export async function GET(request: NextRequest) {
         id: true,
         name: true,
         category: true,
-        _count: {
-          select: { posts: true },
-        },
+        postCount: true,
       },
       orderBy,
       skip,
@@ -76,7 +74,7 @@ export async function GET(request: NextRequest) {
       id: tag.id,
       name: tag.name,
       category: tag.category,
-      count: tag._count.posts,
+      count: tag.postCount,
     })),
     pagination: {
       page,
