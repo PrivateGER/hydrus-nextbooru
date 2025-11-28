@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Hydrus Nextbooru
 
-## Getting Started
+A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update.
 
-First, run the development server:
+You can browse, search by tags, and view images/videos **without** depending on Hydrus once the sync is done. Only the location Hydrus stores the files is required to be accessible from the server.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Supports:
+- Tag-based search with autocomplete and co-occurrence filtering 
+- Category-colored tags (artist, character, copyright, meta, general)
+- Post grouping based on source URLs (Pixiv, Twitter, dA, Danbooru, Gelbooru)
+- Lazy loading images with blurhash placeholders and thumbnail previews
+- Batch sync from Hydrus with progress tracking
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Requirements
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Node.js 22+
+- PostgreSQL 18+ (lower probably works, but recommend 18+ for performance)
+- Hydrus Network with Client API enabled and available in network
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Setup
 
-## Learn More
+1. Clone the repository
 
-To learn more about Next.js, take a look at the following resources:
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+3. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   Edit `.env` with your settings:
+   ```
+   DATABASE_URL=postgresql://user:password@localhost:5432/booru
+   HYDRUS_API_URL=http://localhost:45869
+   HYDRUS_API_KEY=your_api_key_here
+   HYDRUS_FILES_PATH=/path/to/hydrus/db/client_files
+   ```
 
-## Deploy on Vercel
+4. Set up the database:
+   ```bash
+   npm run db:deploy
+   npm run db:generate
+   ```
+   
+5. Build the server:
+   ```bash
+   npm run build
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+5. Start the server:
+   ```bash
+   npm start
+   ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Syncing from Hydrus
+
+1. Enable the Client API in Hydrus (services > manage services > client api)
+2. Create an API key with "search for and fetch files" and "see local file paths" permissions
+3. Start a sync in the admin panel
