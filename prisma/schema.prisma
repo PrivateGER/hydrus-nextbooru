@@ -114,6 +114,7 @@ model PostTag {
 
   @@id([postId, tagId])
   @@index([tagId])
+  @@index([postId])
 }
 
 model Group {
