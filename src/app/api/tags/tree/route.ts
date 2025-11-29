@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdCache, postIdsCache, treeResponseCache } from "@/lib/cache";
+import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -11,15 +11,18 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get("q") || "";
   const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100);
 
-  // Parse selected tags (comma-separated)
-  const selectedTags = selectedParam
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 0);
+  // Parse selected tags (comma-separated), deduplicate to avoid query issues
+  const selectedTags = [...new Set(
+    selectedParam
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0)
+  )];
 
   // Build cache key for response caching
+  // Use JSON to avoid collisions with tags containing commas/pipes
   const sortedSelectedTags = [...selectedTags].sort();
-  const cacheKey = `${sortedSelectedTags.join(",")}|${category}|${query}|${limit}`;
+  const cacheKey = JSON.stringify([sortedSelectedTags, category, query, limit]);
 
   // Check response cache first
   const cached = treeResponseCache.get(cacheKey);
@@ -142,20 +145,21 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Step 1: Resolve tag names to IDs (with caching)
-  const selectedTagIds: number[] = [];
+  // Step 1: Resolve tag names to ALL matching tag IDs (across categories)
+  // A tag name like "shibari" might exist in GENERAL and ARTIST categories
+  const tagIdsByName = new Map<string, number[]>();
   const uncachedTagNames: string[] = [];
 
   for (const tagName of selectedTags) {
-    const cachedId = tagIdCache.get(tagName);
-    if (cachedId !== undefined) {
-      selectedTagIds.push(cachedId);
+    const cached = tagIdsByNameCache.get(tagName);
+    if (cached !== undefined) {
+      tagIdsByName.set(tagName, cached);
     } else {
       uncachedTagNames.push(tagName);
     }
   }
 
-  // Fetch any uncached tag IDs
+  // Fetch any uncached tag IDs - get ALL IDs per name (across categories)
   if (uncachedTagNames.length > 0) {
     const tagRecords = await prisma.tag.findMany({
       where: {
@@ -164,14 +168,25 @@ export async function GET(request: NextRequest) {
       select: { id: true, name: true },
     });
 
+    // Group all IDs by lowercase name
+    const grouped = new Map<string, number[]>();
     for (const tag of tagRecords) {
-      tagIdCache.set(tag.name.toLowerCase(), tag.id);
-      selectedTagIds.push(tag.id);
+      const normalizedName = tag.name.toLowerCase();
+      if (!grouped.has(normalizedName)) {
+        grouped.set(normalizedName, []);
+      }
+      grouped.get(normalizedName)!.push(tag.id);
+    }
+
+    // Cache and store results
+    for (const [name, ids] of grouped) {
+      tagIdsByNameCache.set(name, ids);
+      tagIdsByName.set(name, ids);
     }
   }
 
-  // If not all selected tags exist, no results possible
-  if (selectedTagIds.length !== selectedTags.length) {
+  // If not all selected tag names exist, no results possible
+  if (tagIdsByName.size !== selectedTags.length) {
     return NextResponse.json({
       tags: [],
       postCount: 0,
@@ -179,24 +194,38 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Step 2: Find posts that have ALL selected tags (with caching)
-  const sortedTagIds = [...selectedTagIds].sort((a, b) => a - b);
-  const postIdsCacheKey = sortedTagIds.join(",");
+  // Step 2: Find posts that have at least one tag from EACH selected name
+  // Use INTERSECT for efficient multi-name queries
+  const tagGroups = [...tagIdsByName.values()];
+  const allTagIds = tagGroups.flat();
+
+  // Cache key based on sorted tag names (not IDs, since we search all IDs per name)
+  const postIdsCacheKey = sortedSelectedTags.join("\0");
 
   let postIds = postIdsCache.get(postIdsCacheKey);
 
   if (!postIds) {
-    // Use groupBy with having - much faster than nested AND subqueries
-    const postsWithAllTags = await prisma.postTag.groupBy({
-      by: ["postId"],
-      where: {
-        tagId: { in: selectedTagIds },
-      },
-      having: {
-        tagId: { _count: { equals: selectedTagIds.length } },
-      },
-    });
-    postIds = postsWithAllTags.map((p) => p.postId);
+    if (tagGroups.length === 1) {
+      // Single tag name: find posts with ANY of the matching tag IDs
+      const posts = await prisma.postTag.findMany({
+        where: { tagId: { in: tagGroups[0] } },
+        select: { postId: true },
+        distinct: ["postId"],
+      });
+      postIds = posts.map((p) => p.postId);
+    } else {
+      // Multiple tag names: use INTERSECT to find posts with at least one from each group
+      // This is much faster than nested subqueries for large datasets
+      const intersectClauses = tagGroups
+        .map((_, i) => `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($${i + 1}::int[])`)
+        .join(" INTERSECT ");
+
+      const result = await prisma.$queryRawUnsafe<{ postId: number }[]>(
+        intersectClauses,
+        ...tagGroups
+      );
+      postIds = result.map((r) => r.postId);
+    }
     postIdsCache.set(postIdsCacheKey, postIds);
   }
 
@@ -212,8 +241,8 @@ export async function GET(request: NextRequest) {
 
   // Step 3: Find tags that appear on these posts (excluding already selected)
   const baseWhere: Prisma.TagWhereInput = {
-    // Exclude already selected tags by ID (faster than name comparison)
-    id: { notIn: selectedTagIds },
+    // Exclude all tag IDs matching selected names (across all categories)
+    id: { notIn: allTagIds },
     // Only tags on posts with all selected tags
     posts: {
       some: {

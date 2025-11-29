@@ -79,8 +79,9 @@ export class TTLCache<T> {
   }
 }
 
-// Tag name -> ID cache (max 10k tags)
-export const tagIdCache = new LRUCache<number>(10_000);
+// Tag name -> all IDs cache (max 10k tag names)
+// Maps lowercase tag name to array of IDs (same name can exist in multiple categories)
+export const tagIdsByNameCache = new LRUCache<number[]>(10_000);
 
 // Post IDs for tag combinations (max 500 combinations)
 export const postIdsCache = new LRUCache<number[]>(500);
@@ -118,7 +119,7 @@ export const tagsPageCache = new TTLCache<TagsPageEntry>(50, TAGS_PAGE_CACHE_TTL
 
 // Invalidate all caches when data changes (call after sync)
 export function invalidateAllCaches(): void {
-  tagIdCache.clear();
+  tagIdsByNameCache.clear();
   postIdsCache.clear();
   treeResponseCache.clear();
   tagsCategoryCountsCache.clear();

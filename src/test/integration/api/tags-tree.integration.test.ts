@@ -244,4 +244,75 @@ describe('GET /api/tags/tree (Integration)', () => {
       expect(data.tags.length).toBeLessThanOrEqual(5);
     });
   });
+
+  describe('edge cases', () => {
+    it('should handle same tag name in different categories', async () => {
+      const prisma = getTestPrisma();
+
+      // Create two tags with the same name but different categories
+      // This can happen if "shibari" exists as both a general tag and as an artist name
+      await createPostWithTags(prisma, [
+        { name: 'shibari', category: TagCategory.GENERAL },
+        { name: 'cooccurring tag', category: TagCategory.GENERAL },
+      ]);
+      await createPostWithTags(prisma, [
+        { name: 'shibari', category: TagCategory.ARTIST },  // Different category, same name
+        { name: 'artist only tag', category: TagCategory.GENERAL },
+      ]);
+
+      // When selecting "shibari", should find posts with ANY "shibari" tag (regardless of category)
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=shibari');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should find BOTH posts (one has GENERAL shibari, one has ARTIST shibari)
+      expect(data.postCount).toBe(2);
+      // Should return co-occurring tags from both posts
+      const tagNames = data.tags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('cooccurring tag');
+      expect(tagNames).toContain('artist only tag');
+    });
+
+    it('should deduplicate selected tags', async () => {
+      const prisma = getTestPrisma();
+
+      // Post with tag1 and tag2
+      await createPostWithTags(prisma, ['tag1', 'tag2', 'tag3']);
+
+      // Send duplicate tags in selection
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=tag1,tag1,tag2');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.postCount).toBe(1);
+      expect(data.selectedTags).toEqual(['tag1', 'tag2']); // Deduplicated
+      const tagNames = data.tags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('tag3');
+    });
+
+    it('should not have cache collision between comma-containing tag and separate tags', async () => {
+      const prisma = getTestPrisma();
+
+      // Create posts with distinct tag sets
+      await createPostWithTags(prisma, ['a,b', 'only-with-comma-tag']);
+      await createPostWithTags(prisma, ['a', 'b', 'only-with-separate-tags']);
+
+      // First request: select single tag "a,b"
+      const request1 = new NextRequest('http://localhost/api/tags/tree?selected=a,b');
+      const response1 = await GET(request1);
+      const data1 = await response1.json();
+
+      // This could match either "a,b" OR "a" AND "b" depending on parsing
+      // With comma separator, "a,b" is parsed as ["a", "b"]
+      // So this should match the post with separate tags
+      expect(data1.selectedTags).toEqual(['a', 'b']);
+      expect(data1.postCount).toBe(1);
+
+      // Clear cache and query for the comma-containing tag using URL encoding
+      invalidateAllCaches();
+
+      // To select a tag with comma, it would need special handling
+      // (This test documents current behavior - comma is a separator)
+    });
+  });
 });

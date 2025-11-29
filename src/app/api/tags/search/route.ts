@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdCache } from "@/lib/cache";
+import { tagIdsByNameCache } from "@/lib/cache";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -51,20 +51,20 @@ export async function GET(request: NextRequest) {
 
   // Progressive filtering: find tags that co-occur with all selected tags
 
-  // Step 1: Find tag IDs for selected tags (with caching)
-  const selectedTagIds: number[] = [];
+  // Step 1: Find ALL tag IDs for selected tag names (across categories)
+  const tagIdsByName = new Map<string, number[]>();
   const uncachedTagNames: string[] = [];
 
   for (const tagName of selectedTags) {
-    const cachedId = tagIdCache.get(tagName);
-    if (cachedId !== undefined) {
-      selectedTagIds.push(cachedId);
+    const cached = tagIdsByNameCache.get(tagName);
+    if (cached !== undefined) {
+      tagIdsByName.set(tagName, cached);
     } else {
       uncachedTagNames.push(tagName);
     }
   }
 
-  // Fetch any uncached tag IDs
+  // Fetch any uncached tag IDs - get ALL IDs per name
   if (uncachedTagNames.length > 0) {
     const tagRecords = await prisma.tag.findMany({
       where: {
@@ -73,44 +73,67 @@ export async function GET(request: NextRequest) {
       select: { id: true, name: true },
     });
 
+    // Group all IDs by lowercase name
+    const grouped = new Map<string, number[]>();
     for (const tag of tagRecords) {
-      tagIdCache.set(tag.name.toLowerCase(), tag.id);
-      selectedTagIds.push(tag.id);
+      const normalizedName = tag.name.toLowerCase();
+      if (!grouped.has(normalizedName)) {
+        grouped.set(normalizedName, []);
+      }
+      grouped.get(normalizedName)!.push(tag.id);
+    }
+
+    // Cache and store results
+    for (const [name, ids] of grouped) {
+      tagIdsByNameCache.set(name, ids);
+      tagIdsByName.set(name, ids);
     }
   }
 
-  // If not all selected tags exist, no results possible
-  if (selectedTagIds.length !== selectedTags.length) {
+  // If not all selected tag names exist, no results possible
+  if (tagIdsByName.size !== selectedTags.length) {
     return NextResponse.json({ tags: [] });
   }
 
-  // Step 2: Single efficient query to find co-occurring tags
-  // Uses a subquery to find posts with ALL selected tags, then counts tag occurrences
+  // Get all tag IDs across all categories for exclusion
+  const allTagIds = [...tagIdsByName.values()].flat();
+  const tagGroups = [...tagIdsByName.values()];
+
+  // Step 2: Build query to find posts with at least one tag from each name group
   const searchPattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
-  const coOccurringTags = await prisma.$queryRaw<Array<{
+  // For multiple tag names, use INTERSECT-based subquery
+  let postSubquery: string;
+  const queryParams: unknown[] = [searchPattern, allTagIds];
+
+  if (tagGroups.length === 1) {
+    postSubquery = `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($3::int[])`;
+    queryParams.push(tagGroups[0]);
+  } else {
+    // Build INTERSECT query for multiple tag name groups
+    const intersectParts = tagGroups.map((_, i) =>
+      `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($${i + 3}::int[])`
+    );
+    postSubquery = intersectParts.join(" INTERSECT ");
+    queryParams.push(...tagGroups);
+  }
+
+  const coOccurringTags = await prisma.$queryRawUnsafe<Array<{
     id: number;
     name: string;
     category: string;
     count: bigint;
   }>>(
-    Prisma.sql`
-      SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
-      FROM "Tag" t
-      JOIN "PostTag" pt ON t.id = pt."tagId"
-      WHERE t.name ILIKE ${searchPattern}
-        AND t.id != ALL(${selectedTagIds}::int[])
-        AND pt."postId" IN (
-          SELECT pt2."postId"
-          FROM "PostTag" pt2
-          WHERE pt2."tagId" = ANY(${selectedTagIds}::int[])
-          GROUP BY pt2."postId"
-          HAVING COUNT(*) = ${selectedTagIds.length}
-        )
-      GROUP BY t.id, t.name, t.category
-      ORDER BY count DESC
-      LIMIT ${limit * 2}
-    `
+    `SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
+     FROM "Tag" t
+     JOIN "PostTag" pt ON t.id = pt."tagId"
+     WHERE t.name ILIKE $1
+       AND t.id != ALL($2::int[])
+       AND pt."postId" IN (${postSubquery})
+     GROUP BY t.id, t.name, t.category
+     ORDER BY count DESC
+     LIMIT ${limit * 2}`,
+    ...queryParams
   );
 
   // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
