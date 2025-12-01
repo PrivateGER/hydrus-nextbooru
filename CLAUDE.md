@@ -23,6 +23,7 @@ npx prisma migrate dev  # Create and apply migrations
 **Always run tests after making changes:**
 ```bash
 npm test         # Run all tests (unit + integration)
+npm run test:ui  # Run all tests with coverage (optional)
 ```
 
 Tests use Vitest with real PostgreSQL via Testcontainers. Integration tests require Docker.

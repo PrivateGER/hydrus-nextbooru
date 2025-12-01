@@ -14,7 +14,7 @@
     "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui",
+    "test:ui": "vitest --ui --api 3001",
     "test:coverage": "vitest run --coverage",
     "test:sync": "vitest run src/lib/hydrus/sync",
     "test:integration": "vitest run --config vitest.integration.config.ts",
