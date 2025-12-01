@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Step 1: Resolve tag names to ALL matching tag IDs (across categories)
-  // A tag name like "shibari" might exist in GENERAL and ARTIST categories
+  // A tag name like "maid" might exist in GENERAL and ARTIST categories
   const tagIdsByName = new Map<string, number[]>();
   const uncachedTagNames: string[] = [];
 

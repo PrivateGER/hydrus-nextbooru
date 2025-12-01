@@ -250,22 +250,22 @@ describe('GET /api/tags/tree (Integration)', () => {
       const prisma = getTestPrisma();
 
       // Create two tags with the same name but different categories
-      // This can happen if "shibari" exists as both a general tag and as an artist name
+      // This can happen if "maid" exists as both a general tag and as an artist name
       await createPostWithTags(prisma, [
-        { name: 'shibari', category: TagCategory.GENERAL },
+        { name: 'maid', category: TagCategory.GENERAL },
         { name: 'cooccurring tag', category: TagCategory.GENERAL },
       ]);
       await createPostWithTags(prisma, [
-        { name: 'shibari', category: TagCategory.ARTIST },  // Different category, same name
+        { name: 'maid', category: TagCategory.ARTIST },  // Different category, same name
         { name: 'artist only tag', category: TagCategory.GENERAL },
       ]);
 
-      // When selecting "shibari", should find posts with ANY "shibari" tag (regardless of category)
-      const request = new NextRequest('http://localhost/api/tags/tree?selected=shibari');
+      // When selecting "maid", should find posts with ANY "maid" tag (regardless of category)
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=maid');
       const response = await GET(request);
       const data = await response.json();
 
-      // Should find BOTH posts (one has GENERAL shibari, one has ARTIST shibari)
+      // Should find BOTH posts (one has GENERAL maid, one has ARTIST maid)
       expect(data.postCount).toBe(2);
       // Should return co-occurring tags from both posts
       const tagNames = data.tags.map((t: { name: string }) => t.name);
