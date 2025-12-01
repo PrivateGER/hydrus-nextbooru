@@ -1,7 +1,7 @@
-import { defineConfig, mergeConfig } from 'vitest/config';
-import baseConfig from './vitest.config';
+import { defineConfig } from 'vitest/config';
+import path from 'path';
 
-export default mergeConfig(baseConfig, defineConfig({
+export default defineConfig({
   test: {
     // Only run perf tests
     include: ['src/test/perf/**/*.perf.test.ts'],
@@ -30,4 +30,9 @@ export default mergeConfig(baseConfig, defineConfig({
       enabled: false,
     },
   },
-}));
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+});
