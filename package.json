@@ -19,6 +19,8 @@
     "test:sync": "vitest run src/lib/hydrus/sync",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
+    "test:perf:large": "cross-env PERF_DATASET_SIZE=large vitest run --config vitest.perf.config.ts",
     "test:all": "npm run test && npm run test:integration"
   },
   "dependencies": {
@@ -45,6 +47,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.0.14",
     "@vitest/ui": "^4.0.14",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.0.4",
     "msw": "^2.12.3",

@@ -8,7 +8,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    exclude: ['node_modules', '.next'],
+    exclude: ['node_modules', '.next', 'src/test/perf/**'],
     setupFiles: ['./src/test/setup.ts'],
     hookTimeout: 60000, // Allow time for Testcontainers to pull images
     coverage: {
