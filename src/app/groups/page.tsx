@@ -1,10 +1,12 @@
 import Link from "next/link";
-import { prisma } from "@/lib/db";
-import { SourceType, Prisma } from "@/generated/prisma/client";
+import { redirect } from "next/navigation";
+import { SourceType } from "@/generated/prisma/client";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
+import { SourceBadge } from "@/components/source-badge";
+import { searchGroups, OrderOption } from "@/lib/groups";
 
 interface GroupsPageProps {
-  searchParams: Promise<{ type?: string; page?: string }>;
+  searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }>;
 }
 
 const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
@@ -22,82 +24,51 @@ const PAGE_SIZE = 50;
 export default async function GroupsPage({ searchParams }: GroupsPageProps) {
   const params = await searchParams;
   const typeFilter = params.type as SourceType | undefined;
+  const order = (params.order as OrderOption) || "random";
   const page = Math.max(1, parseInt(params.page || "1", 10));
-  const offset = (page - 1) * PAGE_SIZE;
 
-  // Get counts by source type (only groups with 2+ members)
-  const typeCountsRaw = await prisma.$queryRaw<{ sourceType: string; count: bigint }[]>`
-    SELECT g."sourceType", COUNT(*)::bigint as count
-    FROM "Group" g
-    WHERE (SELECT COUNT(*) FROM "PostGroup" pg WHERE pg."groupId" = g.id) >= 2
-    GROUP BY g."sourceType"
-    ORDER BY count DESC
-  `;
-
-  const typeCounts = typeCountsRaw.map(r => ({
-    sourceType: r.sourceType as SourceType,
-    _count: { id: Number(r.count) },
-  }));
-
-  const totalGroups = typeCounts.reduce((sum, t) => sum + t._count.id, 0);
-
-  // Get groups with 2+ posts
-  const groups = await prisma.$queryRaw<{ id: number; sourceType: string; sourceId: string; postCount: bigint }[]>`
-    SELECT g.id, g."sourceType", g."sourceId", COUNT(pg."postId")::bigint as "postCount"
-    FROM "Group" g
-    JOIN "PostGroup" pg ON pg."groupId" = g.id
-    ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
-    GROUP BY g.id
-    HAVING COUNT(pg."postId") >= 2
-    ORDER BY g.id DESC
-    LIMIT ${PAGE_SIZE} OFFSET ${offset}
-  `;
-
-  // Fetch posts for each group
-  const groupIds = groups.map(g => g.id);
-  const groupPosts = groupIds.length > 0 ? await prisma.postGroup.findMany({
-    where: { groupId: { in: groupIds } },
-    include: {
-      post: {
-        select: {
-          hash: true,
-          width: true,
-          height: true,
-        },
-      },
-    },
-    orderBy: { position: "asc" },
-  }) : [];
-
-  // Group posts by groupId
-  const postsByGroup = new Map<number, typeof groupPosts>();
-  for (const pg of groupPosts) {
-    const existing = postsByGroup.get(pg.groupId) || [];
-    existing.push(pg);
-    postsByGroup.set(pg.groupId, existing);
+  // Redirect to include seed for stable random ordering across pagination
+  if (order === "random" && !params.seed) {
+    const newSeed = Math.random().toString(36).substring(2, 10);
+    const redirectParams = new URLSearchParams();
+    if (typeFilter) redirectParams.set("type", typeFilter);
+    if (page > 1) redirectParams.set("page", page.toString());
+    redirectParams.set("seed", newSeed);
+    redirect(`/groups?${redirectParams.toString()}`);
   }
 
-  // Combine data
-  const groupsWithPosts = groups.map(g => ({
-    id: g.id,
-    sourceType: g.sourceType as SourceType,
-    sourceId: g.sourceId,
-    _count: { posts: Number(g.postCount) },
-    posts: (postsByGroup.get(g.id) || []).slice(0, 10),
-  }));
+  const seed = params.seed || "";
 
-  // Count total groups with 2+ posts
-  const [{ count: filteredCount }] = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*)::bigint as count FROM (
-      SELECT g.id FROM "Group" g
-      JOIN "PostGroup" pg ON pg."groupId" = g.id
-      ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
-      GROUP BY g.id
-      HAVING COUNT(pg."postId") >= 2
-    ) sub
-  `;
+  // Fetch groups data using the extracted module
+  const {
+    groups: groupsWithPosts,
+    typeCounts,
+    totalGroups,
+    totalPages,
+  } = await searchGroups({
+    typeFilter,
+    order,
+    page,
+    pageSize: PAGE_SIZE,
+    seed,
+  });
 
-  const totalPages = Math.ceil(Number(filteredCount) / PAGE_SIZE);
+  // Build URL helper for maintaining state across navigation
+  const buildUrl = (overrides: { type?: string | null; order?: string; page?: number; newSeed?: boolean }) => {
+    const params = new URLSearchParams();
+    const newType = overrides.type === null ? undefined : (overrides.type ?? typeFilter);
+    const newOrder = overrides.order ?? order;
+    const newPage = overrides.page ?? page;
+    const newSeed = overrides.newSeed ? Math.random().toString(36).substring(2, 10) : seed;
+
+    if (newType) params.set("type", newType);
+    if (newOrder !== "random") params.set("order", newOrder);
+    if (newPage > 1) params.set("page", newPage.toString());
+    if (newOrder === "random") params.set("seed", newSeed);
+
+    const queryString = params.toString();
+    return `/groups${queryString ? `?${queryString}` : ""}`;
+  };
 
   return (
     <div className="space-y-6">
@@ -106,78 +77,120 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
         <span className="text-sm text-zinc-400">{totalGroups} total groups</span>
       </div>
 
-      {/* Type filters */}
-      <div className="flex flex-wrap gap-2">
-        <Link
-          href="/groups"
-          className={`rounded-full px-3 py-1 text-sm transition-colors ${
-            !typeFilter
-              ? "bg-blue-500 text-white"
-              : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-          }`}
-        >
-          All
-        </Link>
-        {typeCounts.map(({ sourceType, _count }) => (
+      {/* Filters row */}
+      <div className="flex flex-wrap items-center gap-4">
+        {/* Type filters */}
+        <div className="flex flex-wrap gap-2">
           <Link
-            key={sourceType}
-            href={`/groups?type=${sourceType}`}
+            href={buildUrl({ type: null, page: 1 })}
             className={`rounded-full px-3 py-1 text-sm transition-colors ${
-              typeFilter === sourceType
+              !typeFilter
                 ? "bg-blue-500 text-white"
-                : `${SOURCE_TYPE_COLORS[sourceType]} hover:opacity-80`
+                : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
             }`}
           >
-            {sourceType} ({_count.id})
+            All
           </Link>
-        ))}
+          {typeCounts.map(({ sourceType, count }) => (
+            <Link
+              key={sourceType}
+              href={buildUrl({ type: sourceType, page: 1 })}
+              className={`rounded-full px-3 py-1 text-sm transition-colors ${
+                typeFilter === sourceType
+                  ? "bg-blue-500 text-white"
+                  : `${SOURCE_TYPE_COLORS[sourceType]} hover:opacity-80`
+              }`}
+            >
+              {sourceType} ({count})
+            </Link>
+          ))}
+        </div>
+
+        {/* Order selector */}
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-sm text-zinc-400">Sort:</span>
+          <div className="flex gap-1">
+            {(["random", "newest", "oldest", "largest"] as const).map((o) => (
+              <Link
+                key={o}
+                href={buildUrl({ order: o, page: 1, newSeed: o === "random" && order !== "random" })}
+                className={`rounded px-2 py-1 text-sm transition-colors ${
+                  order === o
+                    ? "bg-zinc-600 text-white"
+                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                }`}
+              >
+                {o.charAt(0).toUpperCase() + o.slice(1)}
+              </Link>
+            ))}
+          </div>
+          {/* Re-roll button for random order */}
+          {order === "random" && (
+            <Link
+              href={buildUrl({ page: 1, newSeed: true })}
+              className="rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+              title="Shuffle"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Groups list */}
       <div className="space-y-4">
-        {groupsWithPosts.map((group) => {
-          const postCount = group._count.posts;
-          const canonicalUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
+        {groupsWithPosts.map((mergedGroup) => {
+          const postCount = mergedGroup.postCount;
+          const primaryGroup = mergedGroup.groups[0];
 
           return (
             <div
-              key={group.id}
+              key={mergedGroup.contentHash}
               className="rounded-lg bg-zinc-800 p-4"
             >
-              <div className="mb-3 flex items-center gap-3">
-                <Link
-                  href={`/groups/${group.id}`}
-                  className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-                >
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs font-medium ${SOURCE_TYPE_COLORS[group.sourceType]}`}
-                  >
-                    {group.sourceType}
-                  </span>
-                  <span className="font-mono text-sm text-zinc-400">
-                    {group.sourceType === SourceType.TITLE
-                      ? `#${group.sourceId}`
-                      : group.sourceId}
-                  </span>
-                </Link>
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                {/* Show all source types for merged groups */}
+                {mergedGroup.groups.map((g) => {
+                  const canonicalUrl = getCanonicalSourceUrl(g.sourceType, g.sourceId);
+                  return (
+                    <div key={g.id} className="flex items-center gap-2">
+                      <Link
+                        href={`/groups/${g.id}`}
+                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                      >
+                        <SourceBadge sourceType={g.sourceType} />
+                        {g.sourceType !== SourceType.TITLE && (
+                          <span className="font-mono text-sm text-zinc-400">
+                            {g.sourceId}
+                          </span>
+                        )}
+                      </Link>
+                      {canonicalUrl && (
+                        <a
+                          href={canonicalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300"
+                          title="View source"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
                 <span className="text-sm text-zinc-500">
                   {postCount} posts
                 </span>
-                {canonicalUrl && (
-                  <a
-                    href={canonicalUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-blue-400 hover:underline"
-                  >
-                    View source ↗
-                  </a>
-                )}
               </div>
 
               {/* Post thumbnails - horizontal filmstrip */}
               <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
-                {group.posts.map((pg) => (
+                {mergedGroup.posts.map((pg) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
@@ -201,7 +214,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                 ))}
                 {postCount > 10 && (
                   <Link
-                    href={`/groups/${group.id}`}
+                    href={`/groups/${primaryGroup.id}`}
                     className="flex h-48 w-24 shrink-0 items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400 hover:bg-zinc-600 transition-colors"
                   >
                     +{postCount - 10}
@@ -224,7 +237,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
         <div className="flex items-center justify-center gap-2">
           {page > 1 && (
             <Link
-              href={`/groups?${typeFilter ? `type=${typeFilter}&` : ""}page=${page - 1}`}
+              href={buildUrl({ page: page - 1 })}
               className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
             >
               ← Prev
@@ -235,7 +248,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
           </span>
           {page < totalPages && (
             <Link
-              href={`/groups?${typeFilter ? `type=${typeFilter}&` : ""}page=${page + 1}`}
+              href={buildUrl({ page: page + 1 })}
               className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
             >
               Next →

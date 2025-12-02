@@ -42,6 +42,20 @@ const SOURCE_CONFIG: Record<
     ),
     className: "bg-zinc-600 text-white",
   },
+  DANBOORU: {
+    label: "Danbooru",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4">
+        {/* 3D cube - top face */}
+        <path d="M12 2L4 7v2l8 5 8-5V7l-8-5z" fill="#a08060" />
+        {/* 3D cube - left face */}
+        <path d="M4 9v8l8 5v-8L4 9z" fill="#806040" />
+        {/* 3D cube - right face */}
+        <path d="M20 9l-8 5v8l8-5V9z" fill="#906850" />
+      </svg>
+    ),
+    className: "bg-[#f90] text-white",
+  },
 };
 
 export function SourceBadge({ sourceType }: SourceBadgeProps) {
