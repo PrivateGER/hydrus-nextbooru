@@ -1,4 +1,23 @@
 services:
+  booru:
+    build: .
+    container_name: booru
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://booru:booru@postgres:5432/booru
+      THUMBNAIL_PATH: /thumbnails
+    volumes:
+      - "Z:/Hydrus:/hydrus:ro"
+      - thumbnails:/thumbnails
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:18-alpine
     container_name: booru-postgres
@@ -19,3 +38,4 @@ services:
 
 volumes:
   postgres_data:
+  thumbnails:
