@@ -71,6 +71,10 @@ export async function updateSettings(
       })
     );
 
+  if (operations.length === 0) {
+    return;
+  }
+
   await prisma.$transaction(operations);
 }
 
