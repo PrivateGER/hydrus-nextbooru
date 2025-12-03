@@ -482,7 +482,7 @@ export default function AdminSyncPage() {
       <div className="rounded-lg bg-zinc-800 p-6">
         <h2 className="mb-2 text-lg font-semibold">Full Sync</h2>
         <p className="mb-4 text-sm text-zinc-400">
-          Sync all files from Hydrus. This may take a while for large libraries.
+          Sync all files from Hydrus. This may take a while for large libraries.<br />This does not copy file content. For already existing files, only metadata will be updated.
         </p>
         <button
           onClick={handleFullSync}
