@@ -56,8 +56,6 @@ export function MediaViewer({
     const deltaX = e.clientX - swipeStart.x;
     const deltaY = e.clientY - swipeStart.y;
 
-	console.log(deltaX, deltaY)
-
     // Only trigger if horizontal swipe > threshold and more horizontal than vertical
     if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
       if (deltaX < 0 && nextPostHash) {
