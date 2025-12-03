@@ -36,3 +36,4 @@ docker-compose*
 LICENSE
 .env*
 .eslintcache
+data

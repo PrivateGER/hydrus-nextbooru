@@ -25,8 +25,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
 # Copy standalone build
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
@@ -37,12 +37,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Install only prisma CLI for migrations
-COPY --from=builder /app/package.json ./
-RUN bun add prisma dotenv --dev
-
-# Create thumbnails directory with correct permissions
-RUN mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
+# Install prisma CLI for migrations and create thumbnails dir
+RUN bun add prisma dotenv && \
+    rm -rf ~/.bun/install/cache && \
+    mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
 
 USER nextjs
 
