@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 
@@ -25,15 +26,52 @@ export function MediaViewer({
   prevPostHash,
   nextPostHash,
 }: MediaViewerProps) {
+  const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
 
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
+  const [swipeStart, setSwipeStart] = useState<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
   const fullRef = useRef<HTMLImageElement>(null);
+
+  // Handle swipe navigation for touch devices
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // Only handle touch and pen, not mouse
+    if (e.pointerType === "mouse") return;
+
+    // Ignore if touching video (for native controls) or nav buttons
+    const target = e.target as HTMLElement;
+    if (target.closest("video, [aria-label]")) return;
+
+    setSwipeStart({ x: e.clientX, y: e.clientY });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!swipeStart) return;
+
+    const deltaX = e.clientX - swipeStart.x;
+    const deltaY = e.clientY - swipeStart.y;
+
+	console.log(deltaX, deltaY)
+
+    // Only trigger if horizontal swipe > threshold and more horizontal than vertical
+    if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX < 0 && nextPostHash) {
+        router.push(`/post/${nextPostHash}`);
+      } else if (deltaX > 0 && prevPostHash) {
+        router.push(`/post/${prevPostHash}`);
+      }
+    }
+    setSwipeStart(null);
+  };
+
+  const handlePointerCancel = () => {
+    setSwipeStart(null);
+  };
 
   // Render blurhash to canvas
   useEffect(() => {
@@ -64,7 +102,13 @@ export function MediaViewer({
   const aspectRatio = width && height ? width / height : 16 / 9;
 
   return (
-    <div className="group relative inline-block rounded-lg bg-zinc-800">
+    <div
+      className="group relative inline-block rounded-lg bg-zinc-800 touch-pan-y"
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerCancel}
+    >
       {/* Previous button */}
       {prevPostHash !== undefined && (
         <Link
