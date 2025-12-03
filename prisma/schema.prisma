@@ -45,10 +45,11 @@ enum ThumbnailSize {
 }
 
 enum ThumbnailStatus {
-  PENDING    // Not yet generated
-  PROCESSING // Currently generating
-  COMPLETE   // All sizes ready
-  FAILED     // Use Hydrus fallback
+  PENDING     // Not yet generated
+  PROCESSING  // Currently generating
+  COMPLETE    // All sizes ready
+  FAILED      // Use Hydrus fallback
+  UNSUPPORTED // Non-media file, cannot generate thumbnails
 }
 
 // ============================================

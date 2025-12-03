@@ -58,6 +58,14 @@ export async function ensureThumbnail(
         return;
       }
 
+      // Skip non-media files
+      if (
+        !post.mimeType.startsWith("image/") &&
+        !post.mimeType.startsWith("video/")
+      ) {
+        return;
+      }
+
       await generateThumbnail(post as PostForThumbnail, size);
     } catch (err) {
       console.error(`Error in ensureThumbnail for ${hash}:`, err);
@@ -94,12 +102,16 @@ export async function batchGenerateThumbnails(options: {
 }): Promise<{ processed: number; succeeded: number; failed: number }> {
   const { batchSize = 50, limit, onProgress } = options;
 
-  // Get posts that need thumbnail generation
+  // Get posts that need thumbnail generation (only media files)
   const pendingPosts = await prisma.post.findMany({
     where: {
       thumbnailStatus: {
         in: [ThumbnailStatus.PENDING],
       },
+      OR: [
+        { mimeType: { startsWith: "image/" } },
+        { mimeType: { startsWith: "video/" } },
+      ],
     },
     select: {
       id: true,
@@ -154,8 +166,9 @@ export async function getThumbnailStats(): Promise<{
   processing: number;
   complete: number;
   failed: number;
+  unsupported: number;
 }> {
-  const [total, pending, processing, complete, failed] = await Promise.all([
+  const [total, pending, processing, complete, failed, unsupported] = await Promise.all([
     prisma.post.count(),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.PENDING } }),
     prisma.post.count({
@@ -163,7 +176,8 @@ export async function getThumbnailStats(): Promise<{
     }),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.COMPLETE } }),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.FAILED } }),
+    prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.UNSUPPORTED } }),
   ]);
 
-  return { total, pending, processing, complete, failed };
+  return { total, pending, processing, complete, failed, unsupported };
 }
