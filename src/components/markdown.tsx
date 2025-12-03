@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 
 interface MarkdownProps {
   content: string;
@@ -22,7 +23,8 @@ marked.setOptions({
  */
 export function Markdown({ content, className = "" }: MarkdownProps) {
   const html = useMemo(() => {
-    return marked.parse(content, { async: false }) as string;
+    const raw = marked.parse(content, { async: false }) as string;
+    return DOMPurify.sanitize(raw);
   }, [content]);
 
   return (
