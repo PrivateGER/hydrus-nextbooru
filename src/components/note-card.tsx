@@ -16,6 +16,12 @@ interface NoteCardProps {
   note: Note;
 }
 
+/**
+ * Render a note card UI that displays a note and provides controls to translate and toggle between original and translated content.
+ *
+ * @param initialNote - The initial note object used to seed the component's local state.
+ * @returns The JSX element representing the note card with translation controls and status.
+ */
 export function NoteCard({ note: initialNote }: NoteCardProps) {
   const [note, setNote] = useState(initialNote);
   const [isTranslating, setIsTranslating] = useState(false);

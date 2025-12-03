@@ -8,6 +8,13 @@ interface TranslateImageRequestBody {
   targetLang?: string;
 }
 
+/**
+ * Translate a stored image identified by the route `hash` and return its translated text and language metadata.
+ *
+ * @param request - Incoming request whose JSON body may include `targetLang` to request a specific target language.
+ * @param params - A promise resolving to route parameters; `params.hash` must be a 64-character hexadecimal string identifying the post.
+ * @returns On success, a JSON object with `hash`, `translatedText`, `sourceLanguage`, `targetLanguage`, and `hasText`. On failure, a JSON error message is returned with an appropriate HTTP status code (400 for bad input, 404 for missing post or file, 401 for API-key issues, 500 for internal or translation failures, or the upstream API status code when available).
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ hash: string }> }

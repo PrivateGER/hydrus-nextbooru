@@ -39,6 +39,13 @@ const POPULAR_MODELS = [
   { id: "x-ai/grok-4.1-fast", name: "Grok 4.1" },
 ];
 
+/**
+ * Admin dashboard for managing library synchronization, thumbnail generation, and translation settings.
+ *
+ * Renders UI for viewing sync status and progress, starting/canceling full or tag-based syncs, generating or clearing thumbnails, and configuring translation API/model/target language.
+ *
+ * @returns The React JSX element for the admin sync page
+ */
 export default function AdminSyncPage() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
