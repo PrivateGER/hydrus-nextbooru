@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 
@@ -13,8 +14,25 @@ interface MediaViewerProps {
   blurhash?: string | null;
   prevPostHash?: string;
   nextPostHash?: string;
+  currentPosition?: number;
+  totalCount?: number;
 }
 
+/**
+ * Renders a media viewer for images or videos with blurhash and thumbnail placeholders, plus optional previous/next navigation and touch swipe support.
+ *
+ * @param hash - Unique file identifier used to build media URLs
+ * @param extension - File extension (including leading dot) appended to the file URL
+ * @param mimeType - MIME type that determines whether an image or video element is rendered
+ * @param width - Optional intrinsic image width used to calculate aspect ratio and sizing
+ * @param height - Optional intrinsic image height used to calculate aspect ratio and sizing
+ * @param blurhash - Optional blurhash string rendered to a canvas as a low-resolution placeholder until the preview/full image loads
+ * @param prevPostHash - Optional hash for the previous post; when provided shows a previous navigation control and enables swipe-right navigation
+ * @param nextPostHash - Optional hash for the next post; when provided shows a next navigation control and enables swipe-left navigation
+ * @param currentPosition - Optional 1-based position of current post in the group
+ * @param totalCount - Optional total number of posts in the group
+ * @returns The React element representing the media viewer
+ */
 export function MediaViewer({
   hash,
   extension,
@@ -24,16 +42,59 @@ export function MediaViewer({
   blurhash,
   prevPostHash,
   nextPostHash,
+  currentPosition,
+  totalCount,
 }: MediaViewerProps) {
+  const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
 
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
   const fullRef = useRef<HTMLImageElement>(null);
+
+  // Handle swipe navigation for touch devices
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // Only handle primary pointer (ignore multi-touch)
+    if (!e.isPrimary) return;
+
+    // Only handle touch and pen, not mouse
+    if (e.pointerType === "mouse") return;
+
+    // Ignore if touching video (for native controls) or nav buttons
+    const target = e.target as HTMLElement;
+    if (target.closest("video, [aria-label]")) return;
+
+    swipeStartRef.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    // Only handle primary pointer
+    if (!e.isPrimary) return;
+
+    if (!swipeStartRef.current) return;
+
+    const deltaX = e.clientX - swipeStartRef.current.x;
+    const deltaY = e.clientY - swipeStartRef.current.y;
+
+    // Only trigger if horizontal swipe > threshold and more horizontal than vertical
+    if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX < 0 && nextPostHash) {
+        router.push(`/post/${nextPostHash}`);
+      } else if (deltaX > 0 && prevPostHash) {
+        router.push(`/post/${prevPostHash}`);
+      }
+    }
+    swipeStartRef.current = null;
+  };
+
+  const handlePointerCancel = () => {
+    swipeStartRef.current = null;
+  };
 
   // Render blurhash to canvas
   useEffect(() => {
@@ -64,7 +125,13 @@ export function MediaViewer({
   const aspectRatio = width && height ? width / height : 16 / 9;
 
   return (
-    <div className="group relative inline-block rounded-lg bg-zinc-800">
+    <div
+      className="group relative inline-block rounded-lg bg-zinc-800 touch-pan-y"
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerCancel}
+    >
       {/* Previous button */}
       {prevPostHash !== undefined && (
         <Link
@@ -183,9 +250,9 @@ export function MediaViewer({
       )}
 
       {/* Position indicator (shows on hover when in group) */}
-      {hasNavigation && (
+      {hasNavigation && currentPosition !== undefined && totalCount !== undefined && (
         <div className="absolute bottom-2 lg:bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-sm text-white lg:opacity-0 transition-opacity lg:group-hover:opacity-100">
-          {prevPostHash === undefined ? "First" : nextPostHash === undefined ? "Last" : ""}
+          {currentPosition}/{totalCount}
         </div>
       )}
     </div>
