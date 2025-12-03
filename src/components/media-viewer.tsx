@@ -46,13 +46,16 @@ export function MediaViewer({
 
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
-  const [swipeStart, setSwipeStart] = useState<{ x: number; y: number } | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
   const fullRef = useRef<HTMLImageElement>(null);
 
   // Handle swipe navigation for touch devices
   const handlePointerDown = (e: React.PointerEvent) => {
+    // Only handle primary pointer (ignore multi-touch)
+    if (!e.isPrimary) return;
+
     // Only handle touch and pen, not mouse
     if (e.pointerType === "mouse") return;
 
@@ -60,14 +63,17 @@ export function MediaViewer({
     const target = e.target as HTMLElement;
     if (target.closest("video, [aria-label]")) return;
 
-    setSwipeStart({ x: e.clientX, y: e.clientY });
+    swipeStartRef.current = { x: e.clientX, y: e.clientY };
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (!swipeStart) return;
+    // Only handle primary pointer
+    if (!e.isPrimary) return;
 
-    const deltaX = e.clientX - swipeStart.x;
-    const deltaY = e.clientY - swipeStart.y;
+    if (!swipeStartRef.current) return;
+
+    const deltaX = e.clientX - swipeStartRef.current.x;
+    const deltaY = e.clientY - swipeStartRef.current.y;
 
     // Only trigger if horizontal swipe > threshold and more horizontal than vertical
     if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
@@ -77,11 +83,11 @@ export function MediaViewer({
         router.push(`/post/${prevPostHash}`);
       }
     }
-    setSwipeStart(null);
+    swipeStartRef.current = null;
   };
 
   const handlePointerCancel = () => {
-    setSwipeStart(null);
+    swipeStartRef.current = null;
   };
 
   // Render blurhash to canvas
