@@ -87,7 +87,7 @@ export class OpenRouterClient {
 
     const systemPrompt = `You are a professional translator. Your task:
 1. First, identify the source language of the text
-2. Then translate it to ${targetLangName}
+2. Then translate it to ${targetLangName}. Use Markdown for formatting purposes.
 
 Output format (exactly):
 LANGUAGE: <language name in English>
@@ -140,7 +140,7 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
           content: `You are a professional translator. Look at the image and:
 1. Identify any text visible in the image
 2. Identify the language of the text
-3. Translate all text to ${targetLangName}. Do not include any original text in your response.
+3. Translate all text to ${targetLangName}. Do not include any original text in your response. Use Markdown for formatting purposes.
 
 If there is no text in the image, respond with exactly:
 NO_TEXT
