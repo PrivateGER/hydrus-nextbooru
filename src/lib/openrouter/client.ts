@@ -140,8 +140,12 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
           content: `You are a professional translator. Look at the image and:
 1. Identify any text visible in the image
 2. Identify the language of the text
-3. Translate all text to ${targetLangName}. Do not include any original text in your response. Use Markdown for formatting purposes.
+3. Translate all text to ${targetLangName}. 
+
+Do not include any original text in your response. 
+Use Markdown for formatting purposes.
 If excessively long onomatopoeia are used or repeated >5 times in a row, limit their length.
+Keep the translation easy to read, change ordering and formatting if necessary for clarity.
 
 If there is no text in the image, respond with exactly:
 NO_TEXT
@@ -149,7 +153,7 @@ NO_TEXT
 If there is text, respond with this exact format:
 LANGUAGE: <source language name in English>
 TRANSLATION:
-<translated text, preserving layout/structure as much as possible>`,
+<translated text, preserving layout/structure where reasonable>`,
         },
         {
           role: "user",
