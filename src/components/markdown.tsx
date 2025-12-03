@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { marked } from "marked";
-import DOMPurify from "dompurify";
+import DOMPurify from "isomorphic-dompurify";
 
 interface MarkdownProps {
   content: string;
