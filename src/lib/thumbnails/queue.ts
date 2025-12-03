@@ -166,8 +166,9 @@ export async function getThumbnailStats(): Promise<{
   processing: number;
   complete: number;
   failed: number;
+  unsupported: number;
 }> {
-  const [total, pending, processing, complete, failed] = await Promise.all([
+  const [total, pending, processing, complete, failed, unsupported] = await Promise.all([
     prisma.post.count(),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.PENDING } }),
     prisma.post.count({
@@ -175,7 +176,8 @@ export async function getThumbnailStats(): Promise<{
     }),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.COMPLETE } }),
     prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.FAILED } }),
+    prisma.post.count({ where: { thumbnailStatus: ThumbnailStatus.UNSUPPORTED } }),
   ]);
 
-  return { total, pending, processing, complete, failed };
+  return { total, pending, processing, complete, failed, unsupported };
 }

@@ -5,7 +5,7 @@ import { parseTag, normalizeTagForStorage } from "./tag-mapper";
 import { isTagBlacklisted } from "@/lib/tag-blacklist";
 import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
-import { TagCategory, SourceType, Prisma } from "@/generated/prisma/client";
+import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import {invalidateAllCaches} from "@/lib/cache";
 
 const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
@@ -367,6 +367,10 @@ async function processFileSafe(
     console.warn(`[${metadata.hash}] Missing ${missingGroups.length} group IDs from lookup:`, missingGroups);
   }
 
+  // Determine thumbnail status based on mime type
+  const isMediaFile = metadata.mime.startsWith("image/") || metadata.mime.startsWith("video/");
+  const thumbnailStatus = isMediaFile ? ThumbnailStatus.PENDING : ThumbnailStatus.UNSUPPORTED;
+
   // Single transaction for post + relations (no tag/group creation races)
   await prisma.$transaction(async (tx) => {
     // Upsert post
@@ -385,6 +389,7 @@ async function processFileSafe(
         blurhash: metadata.blurhash,
         sourceUrls,
         importedAt,
+        thumbnailStatus,
       },
       update: {
         mimeType: metadata.mime,
