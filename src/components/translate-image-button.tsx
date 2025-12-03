@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Markdown } from "./markdown";
 
 interface TranslateImageButtonProps {
   hash: string;
@@ -140,7 +141,7 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
                 Detected: {result.sourceLanguage.toUpperCase()} → {result.targetLanguage.toUpperCase()}
               </p>
               <div className="rounded bg-zinc-700/50 p-3">
-                <p className="whitespace-pre-wrap text-sm">{result.translatedText}</p>
+                <Markdown content={result.translatedText} className="text-sm" />
               </div>
             </>
           ) : (

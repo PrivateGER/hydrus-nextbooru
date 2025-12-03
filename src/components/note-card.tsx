@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Markdown } from "./markdown";
 
 interface Note {
   id: number;
@@ -128,7 +129,7 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
 
       {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
 
-      <p className="whitespace-pre-wrap text-sm">{displayContent}</p>
+      <Markdown content={displayContent || ""} className="text-sm" />
 
       {hasTranslation && !showOriginal && note.sourceLanguage && note.targetLanguage && (
         <p className="mt-2 text-xs text-zinc-500">
