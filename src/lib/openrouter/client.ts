@@ -172,8 +172,9 @@ TRANSLATION:
       throw new OpenRouterApiError("No response returned from API", 500);
     }
 
-    // Check if no text was found
-    if (responseText === "NO_TEXT" || responseText.toLowerCase().includes("no text")) {
+    // Check if no text was found (be strict to avoid dropping legitimate translations)
+    const normalized = responseText.trim().toUpperCase();
+    if (normalized === "NO_TEXT" || normalized === "NO TEXT") {
       return {
         translatedText: "",
         sourceLang: "",
