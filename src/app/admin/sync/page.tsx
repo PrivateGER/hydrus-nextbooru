@@ -24,6 +24,28 @@ interface ThumbnailStats {
   batchProgress: { processed: number; total: number } | null;
 }
 
+interface TranslationSettings {
+  apiKey: string | null;
+  apiKeyConfigured: boolean;
+  model: string;
+  targetLang: string;
+  supportedLanguages: { code: string; name: string }[];
+  defaultModel: string;
+}
+
+const POPULAR_MODELS = [
+  { id: "google/gemini-2.5-flash", name: "Gemini Flash 2.5" },
+  { id: "deepseek/deepseek-v3.2", name: "DeepSeek v3.2" },
+  { id: "x-ai/grok-4.1-fast", name: "Grok 4.1" },
+];
+
+/**
+ * Admin dashboard for managing library synchronization, thumbnail generation, and translation settings.
+ *
+ * Renders UI for viewing sync status and progress, starting/canceling full or tag-based syncs, generating or clearing thumbnails, and configuring translation API/model/target language.
+ *
+ * @returns The React JSX element for the admin sync page
+ */
 export default function AdminSyncPage() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -35,6 +57,14 @@ export default function AdminSyncPage() {
   const [thumbStats, setThumbStats] = useState<ThumbnailStats | null>(null);
   const [isGeneratingThumbs, setIsGeneratingThumbs] = useState(false);
 
+  // Translation settings state
+  const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [targetLang, setTargetLang] = useState("");
+
   const fetchThumbStats = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/thumbnails");
@@ -43,6 +73,25 @@ export default function AdminSyncPage() {
       setIsGeneratingThumbs(data.batchRunning);
     } catch (error) {
       console.error("Error fetching thumbnail stats:", error);
+    }
+  }, []);
+
+  const fetchTranslationSettings = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/settings");
+      const data: TranslationSettings = await response.json();
+      setTranslationSettings(data);
+      setModel(data.model);
+      setTargetLang(data.targetLang);
+
+      // Check if model is in the popular list or custom
+      const isPopularModel = POPULAR_MODELS.some((m) => m.id === data.model);
+      if (!isPopularModel && data.model) {
+        setCustomModel(data.model);
+        setModel("custom");
+      }
+    } catch (error) {
+      console.error("Error fetching translation settings:", error);
     }
   }, []);
 
@@ -62,6 +111,7 @@ export default function AdminSyncPage() {
   useEffect(() => {
     fetchStatus();
     fetchThumbStats();
+    fetchTranslationSettings();
 
     // Poll for status while syncing or generating thumbnails
     const interval = setInterval(() => {
@@ -74,7 +124,7 @@ export default function AdminSyncPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchThumbStats, isSyncing, isGeneratingThumbs]);
+  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, isSyncing, isGeneratingThumbs]);
 
   const startSync = async (tags?: string[]) => {
     setIsSyncing(true);
@@ -264,6 +314,49 @@ export default function AdminSyncPage() {
         type: "error",
         text: error instanceof Error ? error.message : "Failed to clear thumbnails",
       });
+    }
+  };
+
+  const handleSaveTranslationSettings = async () => {
+    setIsSavingSettings(true);
+    setMessage(null);
+
+    try {
+      const effectiveModel = model === "custom" ? customModel : model;
+
+      const body: Record<string, string> = {};
+      if (apiKey) {
+        body.apiKey = apiKey;
+      }
+      if (effectiveModel) {
+        body.model = effectiveModel;
+      }
+      if (targetLang) {
+        body.targetLang = targetLang;
+      }
+
+      const response = await fetch("/api/admin/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to save settings");
+      }
+
+      setMessage({ type: "success", text: "Translation settings saved!" });
+      setApiKey(""); // Clear API key field after save
+      await fetchTranslationSettings();
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to save settings",
+      });
+    } finally {
+      setIsSavingSettings(false);
     }
   };
 
@@ -539,6 +632,111 @@ export default function AdminSyncPage() {
               Clear All Thumbnails
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Translation Settings */}
+      <div className="rounded-lg bg-zinc-800 p-6">
+        <h2 className="mb-4 text-lg font-semibold">Translation Settings</h2>
+        <p className="mb-4 text-sm text-zinc-400">
+          Configure OpenRouter API for note translation. Get your API key from{" "}
+          <a
+            href="https://openrouter.ai/keys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            openrouter.ai/keys
+          </a>
+        </p>
+
+        <div className="space-y-4">
+          {/* API Key */}
+          <div>
+            <label htmlFor="apiKey" className="mb-1 block text-sm font-medium">
+              API Key
+            </label>
+            <input
+              type="password"
+              id="apiKey"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={translationSettings?.apiKeyConfigured ? "••••••••••••" : "sk-or-..."}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+            {translationSettings?.apiKeyConfigured && (
+              <p className="mt-1 text-xs text-zinc-500">
+                Current: {translationSettings.apiKey}
+              </p>
+            )}
+          </div>
+
+          {/* Model Selection */}
+          <div>
+            <label htmlFor="model" className="mb-1 block text-sm font-medium">
+              Model
+            </label>
+            <select
+              id="model"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              {POPULAR_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+              <option value="custom">Custom Model...</option>
+            </select>
+            {model === "custom" && (
+              <input
+                type="text"
+                value={customModel}
+                onChange={(e) => setCustomModel(e.target.value)}
+                placeholder="e.g., meta-llama/llama-3.1-70b-instruct"
+                className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+            )}
+          </div>
+
+          {/* Target Language */}
+          <div>
+            <label htmlFor="targetLang" className="mb-1 block text-sm font-medium">
+              Target Language
+            </label>
+            <select
+              id="targetLang"
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              {translationSettings?.supportedLanguages.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-zinc-500">
+              Source language is auto-detected
+            </p>
+          </div>
+
+          {/* Save Button */}
+          <button
+            onClick={handleSaveTranslationSettings}
+            disabled={isSavingSettings}
+            className="rounded-lg bg-blue-600 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSavingSettings ? (
+              <span className="flex items-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                Saving...
+              </span>
+            ) : (
+              "Save Settings"
+            )}
+          </button>
         </div>
       </div>
 

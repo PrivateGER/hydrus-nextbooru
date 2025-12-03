@@ -10,6 +10,8 @@ import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags } from "@/lib/tag-blacklist";
+import { NoteCard } from "@/components/note-card";
+import { TranslateImageButton } from "@/components/translate-image-button";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -54,6 +56,18 @@ async function getPost(hash: string) {
   return post;
 }
 
+/**
+ * Render the post detail page for a given post hash.
+ *
+ * Validates the provided hash and loads the post from the database; if the hash is malformed
+ * or the post cannot be found, the route will trigger a notFound response. The rendered page
+ * includes the media viewer, tag sidebar, notes list (with NoteCard), an image translation button,
+ * source links, file details (with a generated download filename), related-image filmstrips for groups,
+ * and keyboard/prev-next navigation when available.
+ *
+ * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
+ * @returns The React element representing the post detail page.
+ */
 export default async function PostPage({ params }: PostPageProps) {
   const { hash } = await params;
 
@@ -155,16 +169,26 @@ export default async function PostPage({ params }: PostPageProps) {
             <h2 className="mb-3 text-lg font-semibold">Notes</h2>
             <div className="space-y-3">
               {post.notes.map((note) => (
-                <div key={note.id} className="rounded bg-zinc-700/50 p-3">
-                  <h3 className="mb-1 text-sm font-medium text-zinc-300">
-                    {note.name}
-                  </h3>
-                  <p className="whitespace-pre-wrap text-sm">{note.content}</p>
-                </div>
+                <NoteCard key={note.id} note={note} />
               ))}
             </div>
           </div>
         )}
+
+        {/* Translate Image */}
+        <TranslateImageButton
+          hash={post.hash}
+          mimeType={post.mimeType}
+          existingTranslation={
+            post.imageTranslatedText
+              ? {
+                  translatedText: post.imageTranslatedText,
+                  sourceLanguage: post.imageSourceLanguage,
+                  targetLanguage: post.imageTargetLanguage,
+                }
+              : null
+          }
+        />
 
         {/* Source URLs */}
         {(() => {
