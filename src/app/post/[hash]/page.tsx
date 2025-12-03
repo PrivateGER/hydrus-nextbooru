@@ -56,6 +56,18 @@ async function getPost(hash: string) {
   return post;
 }
 
+/**
+ * Render the post detail page for a given post hash.
+ *
+ * Validates the provided hash and loads the post from the database; if the hash is malformed
+ * or the post cannot be found, the route will trigger a notFound response. The rendered page
+ * includes the media viewer, tag sidebar, notes list (with NoteCard), an image translation button,
+ * source links, file details (with a generated download filename), related-image filmstrips for groups,
+ * and keyboard/prev-next navigation when available.
+ *
+ * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
+ * @returns The React element representing the post detail page.
+ */
 export default async function PostPage({ params }: PostPageProps) {
   const { hash } = await params;
 

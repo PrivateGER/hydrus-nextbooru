@@ -13,7 +13,17 @@ interface SettingsUpdateBody {
   targetLang?: string;
 }
 
-// GET - Get current settings (with masked API key)
+/**
+ * Return current OpenRouter settings and UI options with the stored API key masked.
+ *
+ * @returns An object with the current settings:
+ * - `apiKey`: masked API key string or `null` if not configured
+ * - `apiKeyConfigured`: `true` if an API key is configured, `false` otherwise
+ * - `model`: configured model or the OpenRouter default model
+ * - `targetLang`: configured target language or the OpenRouter default target language
+ * - `supportedLanguages`: array of supported language codes for the UI
+ * - `defaultModel`: the OpenRouter default model
+ */
 export async function GET() {
   try {
     const settings = await getOpenRouterSettings();
@@ -36,7 +46,12 @@ export async function GET() {
   }
 }
 
-// PUT - Update settings
+/**
+ * Handle PUT requests to update OpenRouter settings.
+ *
+ * @param request - Request whose JSON body may include optional `apiKey`, `model`, and `targetLang` fields to update.
+ * @returns On success, JSON with `message`, `apiKey` (masked string or `null`), `apiKeyConfigured` (`true` if an API key is configured, `false` otherwise), `model` (updated or default), and `targetLang` (updated or default). Returns a 400 JSON error when no updatable fields are provided, and a 500 JSON error on failure.
+ */
 export async function PUT(request: NextRequest) {
   try {
     const body: SettingsUpdateBody = await request.json();

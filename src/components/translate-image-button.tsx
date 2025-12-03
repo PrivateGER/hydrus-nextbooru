@@ -19,6 +19,14 @@ interface TranslationResult {
   hasText: boolean;
 }
 
+/**
+ * Renders a button and UI for detecting and translating text contained in an image.
+ *
+ * @param hash - Identifier used to request translation for the corresponding post/image
+ * @param mimeType - MIME type of the file; the component renders nothing if it does not start with "image/"
+ * @param existingTranslation - Optional prefilled translation data (`translatedText`, `sourceLanguage`, `targetLanguage`); when provided the component initializes its displayed result from it
+ * @returns The component's UI as a JSX element, or `null` when the MIME type is not an image.
+ */
 export function TranslateImageButton({ hash, mimeType, existingTranslation }: TranslateImageButtonProps) {
   const [isTranslating, setIsTranslating] = useState(false);
   const [result, setResult] = useState<TranslationResult | null>(

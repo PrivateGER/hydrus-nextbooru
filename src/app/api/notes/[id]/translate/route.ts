@@ -7,6 +7,17 @@ interface TranslateRequestBody {
   targetLang?: string;
 }
 
+/**
+ * Translate a note's content identified by the route `id` and persist translation metadata.
+ *
+ * Validates the route `id` and note content, invokes the OpenRouter translation client with optional
+ * `sourceLang`/`targetLang` from the request body, updates the note record with translation results,
+ * and returns the updated note fields or an error payload.
+ *
+ * @param request - The incoming NextRequest whose JSON body may include optional `sourceLang` and `targetLang`.
+ * @param params - An object with a Promise that resolves to route parameters; expected to contain `id` as a string.
+ * @returns A JSON response containing the updated note fields (`id`, `name`, `content`, `translatedContent`, `sourceLanguage`, `targetLanguage`, `translatedAt`) on success, or an `{ error: string }` payload with an appropriate HTTP status code on failure.
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
