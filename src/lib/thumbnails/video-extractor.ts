@@ -10,33 +10,21 @@ if (process.env.FFMPEG_PATH) {
 }
 
 /**
- * Extract a frame from a video file as a buffer.
- * Extracts at 1 second or 10% into the video, whichever is smaller.
+ * Extract a representative frame from a video file as a buffer.
+ * Uses ffmpeg's thumbnail filter to automatically select the most
+ * visually interesting frame from the video.
  *
  * @param videoPath - Full path to the video file
- * @param durationMs - Optional duration in milliseconds for position calculation
  * @returns Buffer containing the extracted frame as PNG
  */
-export async function extractVideoFrame(
-  videoPath: string,
-  durationMs?: number
-): Promise<Buffer> {
-  // Calculate timestamp: 1 second or 10% into video, whichever is smaller
-  let timestamp = 1;
-  if (durationMs && durationMs > 0) {
-    const tenPercent = (durationMs / 1000) * 0.1;
-    timestamp = Math.min(1, tenPercent);
-  }
-
+export async function extractVideoFrame(videoPath: string): Promise<Buffer> {
   // Use temp file for extraction
   const tempPath = join(tmpdir(), `thumb-${randomUUID()}.png`);
 
   try {
     await new Promise<void>((resolve, reject) => {
       ffmpeg(videoPath)
-        .seekInput(timestamp)
-        .frames(1)
-        .outputOptions(["-vf", "scale=iw:ih"]) // Keep original dimensions
+        .outputOptions(["-vf", "thumbnail", "-frames:v", "1"])
         .output(tempPath)
         .on("end", () => resolve())
         .on("error", (err) => reject(err))

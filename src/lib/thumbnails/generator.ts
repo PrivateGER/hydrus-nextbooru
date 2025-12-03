@@ -16,6 +16,13 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 // Cache ffmpeg availability check
 let ffmpegAvailable: boolean | null = null;
 
+/**
+ * Check if a mime type is a media type that can have thumbnails generated.
+ */
+function isMediaType(mimeType: string): boolean {
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+}
+
 async function checkFfmpeg(): Promise<boolean> {
   if (ffmpegAvailable === null) {
     ffmpegAvailable = await isFfmpegAvailable();
@@ -35,6 +42,15 @@ export async function generateThumbnail(
   post: PostForThumbnail,
   size: ThumbnailSize
 ): Promise<ThumbnailResult> {
+  // Skip non-media files (text, documents, etc.)
+  if (!isMediaType(post.mimeType)) {
+    return {
+      success: false,
+      fallback: "hydrus",
+      error: `Unsupported media type: ${post.mimeType}`,
+    };
+  }
+
   const isVideo = post.mimeType.startsWith("video/");
   const outputPath = getThumbnailPath(post.hash, size);
   const relativePath = getThumbnailRelativePath(post.hash, size);
