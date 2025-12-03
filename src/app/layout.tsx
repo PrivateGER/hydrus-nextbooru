@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { MobileNav } from "@/components/mobile-nav";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -16,6 +17,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Booru",
   description: "Image board powered by Hydrus",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
@@ -35,7 +41,9 @@ export default function RootLayout({
               NextBooru
             </Link>
 
-            <nav className="flex items-center gap-6">
+            <MobileNav />
+
+            <nav className="hidden items-center gap-6 md:flex">
               <Link
                 href="/"
                 className="text-sm font-medium text-zinc-300 hover:text-white"
