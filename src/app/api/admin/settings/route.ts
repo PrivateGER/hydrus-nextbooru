@@ -62,10 +62,10 @@ export async function PUT(request: NextRequest) {
     if (body.apiKey !== undefined && body.apiKey !== "") {
       updates[SETTINGS_KEYS.API_KEY] = body.apiKey;
     }
-    if (body.model !== undefined) {
+    if (body.model !== undefined && body.model !== "") {
       updates[SETTINGS_KEYS.MODEL] = body.model;
     }
-    if (body.targetLang !== undefined) {
+    if (body.targetLang !== undefined && body.targetLang !== "") {
       updates[SETTINGS_KEYS.TARGET_LANG] = body.targetLang;
     }
 
