@@ -16,6 +16,19 @@ interface MediaViewerProps {
   nextPostHash?: string;
 }
 
+/**
+ * Renders a media viewer for images or videos with blurhash and thumbnail placeholders, plus optional previous/next navigation and touch swipe support.
+ *
+ * @param hash - Unique file identifier used to build media URLs
+ * @param extension - File extension (including leading dot) appended to the file URL
+ * @param mimeType - MIME type that determines whether an image or video element is rendered
+ * @param width - Optional intrinsic image width used to calculate aspect ratio and sizing
+ * @param height - Optional intrinsic image height used to calculate aspect ratio and sizing
+ * @param blurhash - Optional blurhash string rendered to a canvas as a low-resolution placeholder until the preview/full image loads
+ * @param prevPostHash - Optional hash for the previous post; when provided shows a previous navigation control and enables swipe-right navigation
+ * @param nextPostHash - Optional hash for the next post; when provided shows a next navigation control and enables swipe-left navigation
+ * @returns The React element representing the media viewer
+ */
 export function MediaViewer({
   hash,
   extension,
