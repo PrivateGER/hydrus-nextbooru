@@ -83,6 +83,12 @@ model Post {
   // Thumbnail generation status
   thumbnailStatus ThumbnailStatus @default(PENDING)
 
+  // Image text translation (OCR + translate)
+  imageTranslatedText String?
+  imageSourceLanguage String?
+  imageTargetLanguage String?
+  imageTranslatedAt   DateTime?
+
   // Relations
   tags       PostTag[]
   groups     PostGroup[]
@@ -148,6 +154,12 @@ model Note {
   name    String // Note name/label from Hydrus
   content String // Note text content
 
+  // Translation fields
+  translatedContent String?
+  sourceLanguage    String?
+  targetLanguage    String?
+  translatedAt      DateTime?
+
   @@unique([postId, name])
   @@index([postId])
 }
@@ -193,4 +205,16 @@ model Thumbnail {
 
   @@unique([postId, size])
   @@index([postId])
+}
+
+// ============================================
+// SETTINGS (key-value configuration store)
+// ============================================
+
+model Settings {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+
+  updatedAt DateTime @updatedAt
 }
