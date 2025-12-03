@@ -93,10 +93,14 @@ export default async function PostPage({ params }: PostPageProps) {
   // Calculate prev/next posts from the first group with multiple posts
   let prevPostHash: string | undefined;
   let nextPostHash: string | undefined;
+  let currentPosition: number | undefined;
+  let totalCount: number | undefined;
 
   for (const group of groups) {
     if (group.posts.length > 1) {
       const currentIndex = group.posts.findIndex((pg) => pg.post.hash === post.hash);
+      currentPosition = currentIndex + 1; // 1-based position
+      totalCount = group.posts.length;
       if (currentIndex > 0) {
         prevPostHash = group.posts[currentIndex - 1].post.hash;
       }
@@ -161,6 +165,8 @@ export default async function PostPage({ params }: PostPageProps) {
           blurhash={post.blurhash}
           prevPostHash={prevPostHash}
           nextPostHash={nextPostHash}
+          currentPosition={currentPosition}
+          totalCount={totalCount}
         />
 
         {/* Notes */}

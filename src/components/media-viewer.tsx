@@ -14,6 +14,8 @@ interface MediaViewerProps {
   blurhash?: string | null;
   prevPostHash?: string;
   nextPostHash?: string;
+  currentPosition?: number;
+  totalCount?: number;
 }
 
 /**
@@ -27,6 +29,8 @@ interface MediaViewerProps {
  * @param blurhash - Optional blurhash string rendered to a canvas as a low-resolution placeholder until the preview/full image loads
  * @param prevPostHash - Optional hash for the previous post; when provided shows a previous navigation control and enables swipe-right navigation
  * @param nextPostHash - Optional hash for the next post; when provided shows a next navigation control and enables swipe-left navigation
+ * @param currentPosition - Optional 1-based position of current post in the group
+ * @param totalCount - Optional total number of posts in the group
  * @returns The React element representing the media viewer
  */
 export function MediaViewer({
@@ -38,6 +42,8 @@ export function MediaViewer({
   blurhash,
   prevPostHash,
   nextPostHash,
+  currentPosition,
+  totalCount,
 }: MediaViewerProps) {
   const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
@@ -244,9 +250,9 @@ export function MediaViewer({
       )}
 
       {/* Position indicator (shows on hover when in group) */}
-      {hasNavigation && (
+      {hasNavigation && currentPosition !== undefined && totalCount !== undefined && (
         <div className="absolute bottom-2 lg:bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-sm text-white lg:opacity-0 transition-opacity lg:group-hover:opacity-100">
-          {prevPostHash === undefined ? "First" : nextPostHash === undefined ? "Last" : ""}
+          {currentPosition}/{totalCount}
         </div>
       )}
     </div>
