@@ -3,8 +3,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
 /**
- * Escapes special characters for SQL LIKE/ILIKE patterns.
- * Handles: backslash (escape char), % (multi-char wildcard), _ (single-char wildcard)
+ * Escape characters in a string for safe use in SQL LIKE/ILIKE patterns.
+ *
+ * This function inserts backslash escapes before the following characters: backslash (`\`), percent (`%`), and underscore (`_`).
+ *
+ * @param input - The string to escape for a LIKE/ILIKE pattern
+ * @returns The escaped string with `\`, `%`, and `_` characters prefixed by a backslash
  */
 export function escapeSqlLike(input: string): string {
   return input.replace(/[\\%_]/g, "\\$&");
