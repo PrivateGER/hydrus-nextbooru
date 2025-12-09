@@ -104,7 +104,12 @@ export async function DELETE(request: NextRequest) {
       const updateResult = await prisma.post.updateMany({
         where: {
           thumbnailStatus: {
-            in: [ThumbnailStatus.COMPLETE, ThumbnailStatus.FAILED, ThumbnailStatus.PROCESSING],
+            in: [
+              ThumbnailStatus.COMPLETE,
+              ThumbnailStatus.FAILED,
+              ThumbnailStatus.PROCESSING,
+              ThumbnailStatus.UNSUPPORTED,
+            ],
           },
         },
         data: { thumbnailStatus: ThumbnailStatus.PENDING },
@@ -127,12 +132,16 @@ export async function DELETE(request: NextRequest) {
 
     if (resetFailed) {
       const result = await prisma.post.updateMany({
-        where: { thumbnailStatus: ThumbnailStatus.FAILED },
+        where: {
+          thumbnailStatus: {
+            in: [ThumbnailStatus.FAILED, ThumbnailStatus.UNSUPPORTED],
+          },
+        },
         data: { thumbnailStatus: ThumbnailStatus.PENDING },
       });
 
       return NextResponse.json({
-        message: `Reset ${result.count} failed posts to pending`,
+        message: `Reset ${result.count} failed/unsupported posts to pending`,
         count: result.count,
       });
     }

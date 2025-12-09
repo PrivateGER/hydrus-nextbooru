@@ -17,7 +17,32 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 let ffmpegAvailable: boolean | null = null;
 
 /**
- * Check if a mime type is a media type that can have thumbnails generated.
+ * Image formats that Sharp v0.34+ natively supports without third-party adapters.
+ * Supported: JPEG, PNG, WebP, GIF, AVIF, TIFF, SVG
+ * Note: SVG support requires librsvg system dependency in the deployment environment.
+ * Excluded: PSD, RAW, HEIC, BMP, ICO, APNG (require additional plugins/adapters)
+ */
+const SHARP_SUPPORTED_IMAGES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/tiff",
+  "image/svg+xml",
+]);
+
+/**
+ * Check if a mime type can have thumbnails generated.
+ * Videos are supported via ffmpeg, images must be in Sharp's supported list.
+ */
+function canGenerateThumbnail(mimeType: string): boolean {
+  if (mimeType.startsWith("video/")) return true;
+  return SHARP_SUPPORTED_IMAGES.has(mimeType);
+}
+
+/**
+ * Check if a mime type is a media type (for determining if Hydrus fallback applies).
  */
 function isMediaType(mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
@@ -47,7 +72,23 @@ export async function generateThumbnail(
     return {
       success: false,
       fallback: "hydrus",
-      error: `Unsupported media type: ${post.mimeType}`,
+      error: `Not a media type: ${post.mimeType}`,
+    };
+  }
+
+  // Skip image formats that Sharp can't process (e.g., PSD, RAW)
+  // These will use Hydrus fallback thumbnails
+  if (!canGenerateThumbnail(post.mimeType)) {
+    // Mark as unsupported so we don't retry
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { thumbnailStatus: ThumbnailStatus.UNSUPPORTED },
+    });
+
+    return {
+      success: false,
+      fallback: "hydrus",
+      error: `Image format not supported by Sharp: ${post.mimeType}`,
     };
   }
 

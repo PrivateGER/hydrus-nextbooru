@@ -53,8 +53,11 @@ export async function ensureThumbnail(
         return;
       }
 
-      // Skip if marked as failed (requires manual reset)
-      if (post.thumbnailStatus === ThumbnailStatus.FAILED) {
+      // Skip if marked as failed or unsupported (requires manual reset)
+      if (
+        post.thumbnailStatus === ThumbnailStatus.FAILED ||
+        post.thumbnailStatus === ThumbnailStatus.UNSUPPORTED
+      ) {
         return;
       }
 
