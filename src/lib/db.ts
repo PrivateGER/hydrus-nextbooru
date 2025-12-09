@@ -2,6 +2,14 @@ import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
+/**
+ * Escapes special characters for SQL LIKE/ILIKE patterns.
+ * Handles: backslash (escape char), % (multi-char wildcard), _ (single-char wildcard)
+ */
+export function escapeSqlLike(input: string): string {
+  return input.replace(/[\\%_]/g, "\\$&");
+}
+
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   pool: Pool | undefined;

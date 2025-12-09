@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma, escapeSqlLike } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
@@ -100,41 +100,30 @@ export async function GET(request: NextRequest) {
   const tagGroups = [...tagIdsByName.values()];
 
   // Step 2: Build query to find posts with at least one tag from each name group
-  const searchPattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+  const searchPattern = `%${escapeSqlLike(query)}%`;
 
-  // For multiple tag names, use INTERSECT-based subquery
-  let postSubquery: string;
-  const queryParams: unknown[] = [searchPattern, allTagIds];
+  // Build INTERSECT subqueries for each tag group using Prisma.sql
+  const intersectParts = tagGroups.map(
+    (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
+  );
+  const postSubquery = Prisma.join(intersectParts, " INTERSECT ");
 
-  if (tagGroups.length === 1) {
-    postSubquery = `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($3::int[])`;
-    queryParams.push(tagGroups[0]);
-  } else {
-    // Build INTERSECT query for multiple tag name groups
-    const intersectParts = tagGroups.map((_, i) =>
-      `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($${i + 3}::int[])`
-    );
-    postSubquery = intersectParts.join(" INTERSECT ");
-    queryParams.push(...tagGroups);
-  }
-
-  const coOccurringTags = await prisma.$queryRawUnsafe<Array<{
+  const coOccurringTags = await prisma.$queryRaw<Array<{
     id: number;
     name: string;
     category: string;
     count: bigint;
-  }>>(
-    `SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
-     FROM "Tag" t
-     JOIN "PostTag" pt ON t.id = pt."tagId"
-     WHERE t.name ILIKE $1
-       AND t.id != ALL($2::int[])
-       AND pt."postId" IN (${postSubquery})
-     GROUP BY t.id, t.name, t.category
-     ORDER BY count DESC
-     LIMIT ${limit * 2}`,
-    ...queryParams
-  );
+  }>>`
+    SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
+    FROM "Tag" t
+    JOIN "PostTag" pt ON t.id = pt."tagId"
+    WHERE t.name ILIKE ${searchPattern}
+      AND t.id != ALL(${allTagIds}::int[])
+      AND pt."postId" IN (${postSubquery})
+    GROUP BY t.id, t.name, t.category
+    ORDER BY count DESC
+    LIMIT ${limit * 2}
+  `;
 
   // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
   const mappedTags = coOccurringTags.map((tag) => ({

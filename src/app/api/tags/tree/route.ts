@@ -216,14 +216,12 @@ export async function GET(request: NextRequest) {
     } else {
       // Multiple tag names: use INTERSECT to find posts with at least one from each group
       // This is much faster than nested subqueries for large datasets
-      const intersectClauses = tagGroups
-        .map((_, i) => `SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY($${i + 1}::int[])`)
-        .join(" INTERSECT ");
-
-      const result = await prisma.$queryRawUnsafe<{ postId: number }[]>(
-        intersectClauses,
-        ...tagGroups
+      const intersectParts = tagGroups.map(
+        (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
       );
+      const intersectQuery = Prisma.join(intersectParts, " INTERSECT ");
+
+      const result = await prisma.$queryRaw<{ postId: number }[]>`${intersectQuery}`;
       postIds = result.map((r) => r.postId);
     }
     postIdsCache.set(postIdsCacheKey, postIds);
