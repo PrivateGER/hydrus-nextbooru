@@ -4,6 +4,17 @@ import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
 
+/**
+ * Provide tag suggestions matching a text query, optionally restricted to tags that co-occur with one or more selected tag names.
+ *
+ * Reads query parameters from the request URL:
+ * - `q`: search string (required; empty string yields no results)
+ * - `limit`: maximum number of tags to return (default 20, capped at 50)
+ * - `selected`: comma-separated tag names to require co-occurrence with
+ *
+ * @param request - Incoming Next.js request whose URL query supplies `q`, `limit`, and `selected`
+ * @returns An object with a `tags` array; each element contains `id`, `name`, `category`, and numeric `count` representing matching tag metadata and co-occurrence counts
+ */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q") || "";

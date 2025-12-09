@@ -4,6 +4,25 @@ import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache";
 
+/**
+ * Provide tag suggestions and the count of matching posts based on query parameters and selected tags.
+ *
+ * Accepts these query parameters on the incoming request:
+ * - `selected`: comma-separated tag names (case-insensitive) to restrict results; names are normalized (trimmed, lowercased, deduplicated).
+ * - `category`: optional tag category to filter results.
+ * - `q`: optional text to match tag names (case-insensitive, substring).
+ * - `limit`: maximum number of tags to return (defaults to 50, capped at 100).
+ *
+ * The handler returns tags that either match the search/category filters (when no `selected` tags are provided)
+ * or co-occur on posts that contain at least one tag from each provided selected name (when `selected` is provided).
+ * Results are filtered against an internal blacklist and cached for efficiency.
+ *
+ * @param request - Incoming NextRequest containing URL search parameters described above.
+ * @returns An object with:
+ *   - `tags`: an array of tag objects each containing `id`, `name`, `category`, and `count` (number of matching posts for that tag).
+ *   - `postCount`: the total number of posts matching the current filters/selected tags.
+ *   - `selectedTags`: the normalized list of selected tag names provided in the request.
+ */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const selectedParam = searchParams.get("selected") || "";
