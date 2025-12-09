@@ -17,9 +17,10 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 let ffmpegAvailable: boolean | null = null;
 
 /**
- * Image formats that Sharp can process.
- * Sharp uses libvips and supports: JPEG, PNG, WebP, GIF, AVIF, TIFF, SVG
- * Notable exclusions: PSD, RAW formats, HEIC (without additional plugins)
+ * Image formats that Sharp v0.34+ natively supports without third-party adapters.
+ * Supported: JPEG, PNG, WebP, GIF, AVIF, TIFF, SVG
+ * Note: SVG support requires librsvg system dependency in the deployment environment.
+ * Excluded: PSD, RAW, HEIC, BMP, ICO, APNG (require additional plugins/adapters)
  */
 const SHARP_SUPPORTED_IMAGES = new Set([
   "image/jpeg",
@@ -29,10 +30,6 @@ const SHARP_SUPPORTED_IMAGES = new Set([
   "image/avif",
   "image/tiff",
   "image/svg+xml",
-  "image/apng",
-  "image/bmp",
-  "image/x-icon",
-  "image/vnd.microsoft.icon",
 ]);
 
 /**
