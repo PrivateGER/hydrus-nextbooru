@@ -20,6 +20,7 @@ interface ThumbnailStats {
   processing: number;
   complete: number;
   failed: number;
+  unsupported: number;
   batchRunning: boolean;
   batchProgress: { processed: number; total: number } | null;
 }
@@ -531,7 +532,7 @@ export default function AdminSyncPage() {
 
         {/* Stats grid */}
         {thumbStats && (
-          <dl className="mb-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+          <dl className="mb-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-5">
             <div>
               <dt className="text-zinc-400">Total Posts</dt>
               <dd className="mt-1 text-xl font-semibold">{thumbStats.total.toLocaleString()}</dd>
@@ -552,6 +553,12 @@ export default function AdminSyncPage() {
               <dt className="text-zinc-400">Failed</dt>
               <dd className="mt-1 text-xl font-semibold text-red-400">
                 {thumbStats.failed.toLocaleString()}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-400">Unsupported</dt>
+              <dd className="mt-1 text-xl font-semibold text-zinc-500">
+                {thumbStats.unsupported.toLocaleString()}
               </dd>
             </div>
           </dl>
@@ -613,13 +620,13 @@ export default function AdminSyncPage() {
             )}
           </button>
 
-          {(thumbStats?.failed ?? 0) > 0 && (
+          {((thumbStats?.failed ?? 0) > 0 || (thumbStats?.unsupported ?? 0) > 0) && (
             <button
               onClick={handleResetFailedThumbnails}
               disabled={isGeneratingThumbs}
               className="rounded-lg bg-zinc-700 px-4 py-2 font-medium transition-colors hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Reset {thumbStats?.failed.toLocaleString()} Failed
+              Reset {((thumbStats?.failed ?? 0) + (thumbStats?.unsupported ?? 0)).toLocaleString()} Failed/Unsupported
             </button>
           )}
 
