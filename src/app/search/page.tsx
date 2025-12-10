@@ -10,16 +10,61 @@ interface SearchPageProps {
   searchParams: Promise<{ tags?: string; page?: string }>;
 }
 
+/**
+ * Split tag strings into included and excluded lists.
+ *
+ * Tags that start with `-` and have more than one character are placed in `excludeTags`
+ * with the leading `-` removed; all other tags are placed in `includeTags`.
+ *
+ * @param tags - Array of tag strings to parse
+ * @returns An object containing `includeTags` and `excludeTags` arrays
+ */
+function parseTagsWithNegation(tags: string[]): {
+  includeTags: string[];
+  excludeTags: string[];
+} {
+  const includeTags: string[] = [];
+  const excludeTags: string[] = [];
+
+  for (const tag of tags) {
+    if (tag.startsWith("-") && tag.length > 1) {
+      excludeTags.push(tag.slice(1));
+    } else {
+      includeTags.push(tag);
+    }
+  }
+
+  return { includeTags, excludeTags };
+}
+
+/**
+ * Search posts by included and excluded tags and return a single paginated result page.
+ *
+ * Tags prefixed with "-" are treated as exclusions (e.g., "-cat" excludes posts that have the "cat" tag); tag matching is case-insensitive.
+ *
+ * @param tags - Array of tag strings; prefix a tag with `-` to exclude posts containing that tag.
+ * @param page - 1-based page number to retrieve.
+ * @returns An object containing:
+ *  - `posts`: array of posts with selected fields `{ id, hash, width, height, blurhash, mimeType }`,
+ *  - `totalPages`: total number of pages (rounded up),
+ *  - `totalCount`: total matching post count,
+ *  - `queryTimeMs`: time spent executing the database queries in milliseconds.
+ */
 async function searchPosts(tags: string[], page: number) {
   const skip = (page - 1) * POSTS_PER_PAGE;
 
-  if (tags.length === 0) {
+  const { includeTags, excludeTags } = parseTagsWithNegation(tags);
+
+  if (includeTags.length === 0 && excludeTags.length === 0) {
     return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0 };
   }
 
-  // Find all posts that have ALL the specified tags
-  const whereClause = {
-    AND: tags.map((tagName) => ({
+  // Build where clause with AND for included tags and NONE for excluded tags
+  const andConditions: object[] = [];
+
+  // Include tags: posts must have ALL specified tags
+  for (const tagName of includeTags) {
+    andConditions.push({
       tags: {
         some: {
           tag: {
@@ -30,8 +75,26 @@ async function searchPosts(tags: string[], page: number) {
           },
         },
       },
-    })),
-  };
+    });
+  }
+
+  // Exclude tags: posts must NOT have ANY of the excluded tags
+  for (const tagName of excludeTags) {
+    andConditions.push({
+      tags: {
+        none: {
+          tag: {
+            name: {
+              equals: tagName,
+              mode: "insensitive" as const,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
 
   const startTime = performance.now();
   const [posts, totalCount] = await Promise.all([
@@ -61,6 +124,12 @@ async function searchPosts(tags: string[], page: number) {
   };
 }
 
+/**
+ * Renders the search page, performing a tag-based query and displaying results with pagination.
+ *
+ * @param searchParams - A promise resolving to an object with optional `tags` (comma-separated string; individual tags may be negated with a leading `-`) and optional `page` (page number as a string). The component normalizes these values, performs the search, and uses them to render the UI.
+ * @returns The search results page element containing the search bar, results header (including tag badges and query timing), conditional empty/no-results messages, a posts grid, and pagination when applicable.
+ */
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const params = await searchParams;
   const tagsParam = params.tags || "";
@@ -84,7 +153,27 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <h1 className="text-2xl font-bold">
           {tags.length > 0 ? (
             <>
-              Search: <span className="text-blue-400">{tags.join(" + ")}</span>
+              Search:{" "}
+              <span className="inline-flex flex-wrap items-center gap-1">
+                {tags.map((tag, i) => {
+                  const isNegated = tag.startsWith("-") && tag.length > 1;
+                  const displayName = isNegated ? tag.slice(1) : tag;
+                  return (
+                    <span key={tag}>
+                      {i > 0 && <span className="text-zinc-500 mx-1">{isNegated ? "-" : "+"}</span>}
+                      <span
+                        className={
+                          isNegated
+                            ? "text-red-400 line-through"
+                            : "text-blue-400"
+                        }
+                      >
+                        {displayName}
+                      </span>
+                    </span>
+                  );
+                })}
+              </span>
             </>
           ) : (
             "Search"

@@ -173,4 +173,89 @@ describe('GET /api/posts/search (Integration)', () => {
       });
     });
   });
+
+  describe('tag negation', () => {
+    it('should exclude posts with negated tag', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['blue eyes', 'blonde hair']);
+      await createPostWithTags(prisma, ['blue eyes', 'red hair']);
+      await createPostWithTags(prisma, ['green eyes', 'blonde hair']);
+
+      // Search for blue eyes but exclude blonde hair
+      const request = new NextRequest('http://localhost/api/posts/search?tags=blue eyes,-blonde hair');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should only find the post with blue eyes and red hair
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should work with only negated tags', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['tag1', 'common']);
+      await createPostWithTags(prisma, ['tag2', 'common']);
+      await createPostWithTags(prisma, ['tag3', 'excluded']);
+
+      // Exclude posts with 'excluded' tag, find posts with 'common'
+      const request = new NextRequest('http://localhost/api/posts/search?tags=common,-excluded');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+    });
+
+    it('should handle multiple negated tags', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['base', 'exclude1']);
+      await createPostWithTags(prisma, ['base', 'exclude2']);
+      await createPostWithTags(prisma, ['base', 'keep']);
+
+      // Exclude multiple tags
+      const request = new NextRequest('http://localhost/api/posts/search?tags=base,-exclude1,-exclude2');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should be case insensitive for negated tags', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['test', 'Excluded Tag']);
+      await createPostWithTags(prisma, ['test', 'other']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=test,-excluded tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(1);
+    });
+
+    it('should return empty when all posts are excluded', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['common', 'exclude']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=common,-exclude');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+    });
+
+    it('should handle hyphenated tags that are not negations', async () => {
+      const prisma = getTestPrisma();
+      // The tag itself has a hyphen but is not a negation (just "-" alone)
+      await createPostWithTags(prisma, ['blue-eyes', 'other']);
+
+      // Search for hyphenated tag (not negation)
+      const request = new NextRequest('http://localhost/api/posts/search?tags=blue-eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(1);
+    });
+  });
 });

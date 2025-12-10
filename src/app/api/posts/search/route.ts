@@ -4,6 +4,44 @@ import { prisma } from "@/lib/db";
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
 
+/**
+ * Split a comma-separated tag string into included and excluded tag lists.
+ *
+ * Leading/trailing whitespace is trimmed and tags are lowercased; empty entries are ignored.
+ *
+ * @param tagsParam - Comma-separated tags where tags prefixed with `-` denote exclusion (e.g., "cat,-dog,  bird")
+ * @returns An object with `includeTags` (tags to include) and `excludeTags` (tags to exclude)
+ */
+export function parseTagsWithNegation(tagsParam: string): {
+  includeTags: string[];
+  excludeTags: string[];
+} {
+  const allTags = tagsParam
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t.length > 0);
+
+  const includeTags: string[] = [];
+  const excludeTags: string[] = [];
+
+  for (const tag of allTags) {
+    if (tag.startsWith("-") && tag.length > 1) {
+      excludeTags.push(tag.slice(1));
+    } else {
+      includeTags.push(tag);
+    }
+  }
+
+  return { includeTags, excludeTags };
+}
+
+/**
+ * Handle GET requests to search posts filtered by included and excluded tags with pagination.
+ *
+ * If both include and exclude tag lists are empty, responds with empty results.
+ *
+ * @returns A JSON object with `posts` — an array of matching posts (each containing `id`, `hash`, `width`, `height`, `blurhash`, and `mimeType`), `totalCount` — total number of matching posts, and `totalPages` — number of pages based on the applied `limit`.
+ */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
@@ -13,13 +51,10 @@ export async function GET(request: NextRequest) {
     MAX_LIMIT
   );
 
-  // Parse tags
-  const tags = tagsParam
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 0);
+  // Parse tags with negation support
+  const { includeTags, excludeTags } = parseTagsWithNegation(tagsParam);
 
-  if (tags.length === 0) {
+  if (includeTags.length === 0 && excludeTags.length === 0) {
     return NextResponse.json({
       posts: [],
       totalCount: 0,
@@ -29,9 +64,12 @@ export async function GET(request: NextRequest) {
 
   const skip = (page - 1) * limit;
 
-  // Find posts that have ALL specified tags
-  const whereClause = {
-    AND: tags.map((tagName) => ({
+  // Build where clause with AND for included tags and NONE for excluded tags
+  const andConditions: object[] = [];
+
+  // Include tags: posts must have ALL specified tags
+  for (const tagName of includeTags) {
+    andConditions.push({
       tags: {
         some: {
           tag: {
@@ -42,8 +80,26 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-    })),
-  };
+    });
+  }
+
+  // Exclude tags: posts must NOT have ANY of the excluded tags
+  for (const tagName of excludeTags) {
+    andConditions.push({
+      tags: {
+        none: {
+          tag: {
+            name: {
+              equals: tagName,
+              mode: "insensitive" as const,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
 
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
