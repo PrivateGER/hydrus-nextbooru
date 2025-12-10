@@ -1,19 +1,23 @@
 # Hydrus Nextbooru
 
-A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update.
+A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update or with shit randomly breaking.
 
 You can browse, search by tags, and view images/videos **without** depending on Hydrus once the sync is done. Only the location Hydrus stores the files is required to be accessible from the server.
 
 Supports:
 - Tag-based search with autocomplete and co-occurrence filtering 
 - Category-colored tags (artist, character, copyright, meta, general)
-- Post grouping based on source URLs (Pixiv, Twitter, dA, Danbooru, Gelbooru)
+- Automatic post grouping based on source URLs (Pixiv, Twitter, dA, Danbooru, Gelbooru) and titles (experimental!)
 - Lazy loading images with blurhash placeholders and thumbnail previews
-- Batch sync from Hydrus with progress tracking
+- Search query builder, with progressively narrowing down tags
+- Thumbnail generation of many file types
+- Stupidly fast server-side rendering
+- Fast searches with optimized queries
+- Did I mention it's fast?
 
 ## Requirements
 
-- Node.js 22+
+- Node.js 24+ (or Bun for faster execution, default in docker image)
 - PostgreSQL 18+ (lower probably works, but recommend 18+ for performance)
 - Hydrus Network with Client API enabled and available in network
 
@@ -41,8 +45,8 @@ Supports:
 
 4. Set up the database:
    ```bash
-   npm run db:deploy
    npm run db:generate
+   npm run db:deploy
    ```
    
 5. Build the server:
