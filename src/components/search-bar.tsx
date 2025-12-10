@@ -19,6 +19,27 @@ const CATEGORY_COLORS: Record<TagCategory, string> = {
   [TagCategory.META]: "text-orange-400",
 };
 
+/**
+ * Check if a tag is negated (prefixed with `-`)
+ */
+function isNegatedTag(tag: string): boolean {
+  return tag.startsWith("-") && tag.length > 1;
+}
+
+/**
+ * Get the base tag name without the negation prefix
+ */
+function getBaseTagName(tag: string): string {
+  return isNegatedTag(tag) ? tag.slice(1) : tag;
+}
+
+/**
+ * Toggle the negation of a tag
+ */
+function toggleTagNegation(tag: string): string {
+  return isNegatedTag(tag) ? tag.slice(1) : `-${tag}`;
+}
+
 interface SearchBarProps {
   initialTags?: string[];
   placeholder?: string;
@@ -84,16 +105,49 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const addTag = useCallback((tagName: string) => {
+  const addTag = useCallback((tagName: string, negated: boolean = false) => {
     const normalizedTag = tagName.trim().toLowerCase();
-    if (normalizedTag && !selectedTags.includes(normalizedTag)) {
-      setSelectedTags((prev) => [...prev, normalizedTag]);
+    if (!normalizedTag) return;
+
+    // Handle if the tag itself has a negation prefix
+    const isInputNegated = isNegatedTag(normalizedTag);
+    const baseTag = getBaseTagName(normalizedTag);
+    const shouldNegate = negated || isInputNegated;
+    const finalTag = shouldNegate ? `-${baseTag}` : baseTag;
+
+    // Check if the base tag already exists (with or without negation)
+    const existingIndex = selectedTags.findIndex(
+      (t) => getBaseTagName(t) === baseTag
+    );
+
+    if (existingIndex >= 0) {
+      // Tag exists - if same negation state, do nothing; otherwise update it
+      if (selectedTags[existingIndex] === finalTag) {
+        // Already exists with same state, just clear input
+      } else {
+        // Replace with new negation state
+        setSelectedTags((prev) => {
+          const updated = [...prev];
+          updated[existingIndex] = finalTag;
+          return updated;
+        });
+      }
+    } else {
+      // Add new tag
+      setSelectedTags((prev) => [...prev, finalTag]);
     }
+
     setInputValue("");
     setSuggestions([]);
     setShowSuggestions(false);
     inputRef.current?.focus();
   }, [selectedTags]);
+
+  const toggleNegation = useCallback((tagName: string) => {
+    setSelectedTags((prev) =>
+      prev.map((t) => (t === tagName ? toggleTagNegation(t) : t))
+    );
+  }, []);
 
   const removeTag = useCallback((tagName: string) => {
     setSelectedTags((prev) => prev.filter((t) => t !== tagName));
@@ -142,21 +196,48 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
       {/* Input container */}
       <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
         {/* Selected tags */}
-        {selectedTags.map((tag) => (
-          <span
-            key={tag}
-            className="flex items-center gap-1 rounded bg-zinc-700 px-2 py-0.5 text-sm"
-          >
-            {tag}
-            <button
-              type="button"
-              onClick={() => removeTag(tag)}
-              className="text-zinc-400 hover:text-white"
+        {selectedTags.map((tag) => {
+          const negated = isNegatedTag(tag);
+          const displayName = getBaseTagName(tag);
+          return (
+            <span
+              key={tag}
+              className={`flex items-center gap-1 rounded px-2 py-0.5 text-sm ${
+                negated
+                  ? "bg-red-900/50 text-red-300 border border-red-700"
+                  : "bg-zinc-700"
+              }`}
             >
-              &times;
-            </button>
-          </span>
-        ))}
+              {negated && (
+                <span className="text-red-400 font-bold" title="Excluded">
+                  -
+                </span>
+              )}
+              <span className={negated ? "line-through opacity-80" : ""}>
+                {displayName}
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleNegation(tag)}
+                className={`text-xs px-1 rounded ${
+                  negated
+                    ? "text-green-400 hover:text-green-300 hover:bg-green-900/30"
+                    : "text-red-400 hover:text-red-300 hover:bg-red-900/30"
+                }`}
+                title={negated ? "Include this tag" : "Exclude this tag"}
+              >
+                {negated ? "+" : "-"}
+              </button>
+              <button
+                type="button"
+                onClick={() => removeTag(tag)}
+                className="text-zinc-400 hover:text-white"
+              >
+                &times;
+              </button>
+            </span>
+          );
+        })}
 
         {/* Input */}
         <input

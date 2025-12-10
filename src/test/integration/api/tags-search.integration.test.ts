@@ -290,4 +290,77 @@ describe('GET /api/tags/search (Integration)', () => {
       });
     });
   });
+
+  describe('tag negation in selected tags', () => {
+    it('should exclude posts with negated selected tag', async () => {
+      const prisma = getTestPrisma();
+
+      // Create posts with different combinations
+      await createPostWithTags(prisma, ['blue eyes', 'blonde hair', 'smile']);
+      await createPostWithTags(prisma, ['blue eyes', 'red hair', 'frown']);
+      await createPostWithTags(prisma, ['green eyes', 'blonde hair', 'neutral']);
+
+      // Search with blue eyes selected and blonde hair excluded
+      const request = new NextRequest('http://localhost/api/tags/search?q=hair&selected=blue eyes,-blonde hair');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should only find tags from the post with blue eyes but NOT blonde hair
+      expect(data.tags).toHaveLength(1);
+      expect(data.tags[0].name).toBe('red hair');
+    });
+
+    it('should handle only negated tags in selection', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['excluded tag', 'result1']);
+      await createPostWithTags(prisma, ['other', 'result2']);
+      await createPostWithTags(prisma, ['other', 'result3']);
+
+      // Only exclude, no required tags
+      const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=-excluded tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should find tags from posts that don't have 'excluded tag'
+      expect(data.tags).toHaveLength(2);
+      const names = data.tags.map((t: { name: string }) => t.name).sort();
+      expect(names).toEqual(['result2', 'result3']);
+    });
+
+    it('should exclude negated tags from suggestions', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['blue eyes', 'blonde hair']);
+
+      // Search for 'blonde' with blonde hair as negated - should not appear
+      const request = new NextRequest('http://localhost/api/tags/search?q=blonde&selected=-blonde hair');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // The negated tag itself should not appear in results
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).not.toContain('blonde hair');
+    });
+
+    it('should handle mixed included and excluded tags', async () => {
+      const prisma = getTestPrisma();
+
+      // Post 1: has tag1, tag2, result_a
+      await createPostWithTags(prisma, ['tag1', 'tag2', 'result_a']);
+      // Post 2: has tag1, result_b (no tag2)
+      await createPostWithTags(prisma, ['tag1', 'result_b']);
+      // Post 3: has tag1, tag2, tag3, result_c
+      await createPostWithTags(prisma, ['tag1', 'tag2', 'tag3', 'result_c']);
+
+      // Require tag1, exclude tag3
+      const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=tag1,-tag3');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should find result_a and result_b (posts with tag1 but not tag3)
+      expect(data.tags).toHaveLength(2);
+      const names = data.tags.map((t: { name: string }) => t.name).sort();
+      expect(names).toEqual(['result_a', 'result_b']);
+    });
+  });
 });
