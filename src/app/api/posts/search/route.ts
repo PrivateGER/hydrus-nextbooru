@@ -5,8 +5,12 @@ const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
 
 /**
- * Parse tags into included and excluded lists.
- * Tags prefixed with `-` are excluded.
+ * Split a comma-separated tag string into included and excluded tag lists.
+ *
+ * Leading/trailing whitespace is trimmed and tags are lowercased; empty entries are ignored.
+ *
+ * @param tagsParam - Comma-separated tags where tags prefixed with `-` denote exclusion (e.g., "cat,-dog,  bird")
+ * @returns An object with `includeTags` (tags to include) and `excludeTags` (tags to exclude)
  */
 export function parseTagsWithNegation(tagsParam: string): {
   includeTags: string[];
@@ -31,6 +35,13 @@ export function parseTagsWithNegation(tagsParam: string): {
   return { includeTags, excludeTags };
 }
 
+/**
+ * Handle GET requests to search posts filtered by included and excluded tags with pagination.
+ *
+ * If both include and exclude tag lists are empty, responds with empty results.
+ *
+ * @returns A JSON object with `posts` — an array of matching posts (each containing `id`, `hash`, `width`, `height`, `blurhash`, and `mimeType`), `totalCount` — total number of matching posts, and `totalPages` — number of pages based on the applied `limit`.
+ */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";

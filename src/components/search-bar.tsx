@@ -20,21 +20,29 @@ const CATEGORY_COLORS: Record<TagCategory, string> = {
 };
 
 /**
- * Check if a tag is negated (prefixed with `-`)
+ * Determine whether a tag string represents a negated tag.
+ *
+ * @returns `true` if the tag starts with `-` and has more than one character, `false` otherwise.
  */
 function isNegatedTag(tag: string): boolean {
   return tag.startsWith("-") && tag.length > 1;
 }
 
 /**
- * Get the base tag name without the negation prefix
+ * Return the tag name without a leading '-' negation prefix.
+ *
+ * @param tag - The tag string, possibly prefixed with `-` to indicate negation
+ * @returns The tag name with the leading `-` removed if present
  */
 function getBaseTagName(tag: string): string {
   return isNegatedTag(tag) ? tag.slice(1) : tag;
 }
 
 /**
- * Toggle the negation of a tag
+ * Flip a tag's negation state.
+ *
+ * @param tag - The tag string, which may start with `-` to indicate negation.
+ * @returns The tag with negation toggled: if `tag` starts with `-` (and has more than one character) the leading `-` is removed; otherwise a leading `-` is added.
  */
 function toggleTagNegation(tag: string): string {
   return isNegatedTag(tag) ? tag.slice(1) : `-${tag}`;
@@ -45,6 +53,13 @@ interface SearchBarProps {
   placeholder?: string;
 }
 
+/**
+ * Interactive tag-search bar with autocompletion, tag management (including negation), and navigation to a search results page.
+ *
+ * @param initialTags - Optional initial list of selected tags. Each tag may be prefixed with `-` to indicate negation.
+ * @param placeholder - Placeholder text shown in the input when no tags are selected.
+ * @returns The rendered search bar UI that manages input, suggestions, selected tags, and triggers navigation to `/search`.
+ */
 export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: SearchBarProps) {
   const router = useRouter();
   const [inputValue, setInputValue] = useState("");

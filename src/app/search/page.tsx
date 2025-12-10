@@ -11,8 +11,13 @@ interface SearchPageProps {
 }
 
 /**
- * Parse tags into included and excluded lists.
- * Tags prefixed with `-` are excluded.
+ * Split tag strings into included and excluded lists.
+ *
+ * Tags that start with `-` and have more than one character are placed in `excludeTags`
+ * with the leading `-` removed; all other tags are placed in `includeTags`.
+ *
+ * @param tags - Array of tag strings to parse
+ * @returns An object containing `includeTags` and `excludeTags` arrays
  */
 function parseTagsWithNegation(tags: string[]): {
   includeTags: string[];
@@ -32,6 +37,19 @@ function parseTagsWithNegation(tags: string[]): {
   return { includeTags, excludeTags };
 }
 
+/**
+ * Search posts by included and excluded tags and return a single paginated result page.
+ *
+ * Tags prefixed with "-" are treated as exclusions (e.g., "-cat" excludes posts that have the "cat" tag); tag matching is case-insensitive.
+ *
+ * @param tags - Array of tag strings; prefix a tag with `-` to exclude posts containing that tag.
+ * @param page - 1-based page number to retrieve.
+ * @returns An object containing:
+ *  - `posts`: array of posts with selected fields `{ id, hash, width, height, blurhash, mimeType }`,
+ *  - `totalPages`: total number of pages (rounded up),
+ *  - `totalCount`: total matching post count,
+ *  - `queryTimeMs`: time spent executing the database queries in milliseconds.
+ */
 async function searchPosts(tags: string[], page: number) {
   const skip = (page - 1) * POSTS_PER_PAGE;
 
@@ -106,6 +124,12 @@ async function searchPosts(tags: string[], page: number) {
   };
 }
 
+/**
+ * Renders the search page, performing a tag-based query and displaying results with pagination.
+ *
+ * @param searchParams - A promise resolving to an object with optional `tags` (comma-separated string; individual tags may be negated with a leading `-`) and optional `page` (page number as a string). The component normalizes these values, performs the search, and uses them to render the UI.
+ * @returns The search results page element containing the search bar, results header (including tag badges and query timing), conditional empty/no-results messages, a posts grid, and pagination when applicable.
+ */
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const params = await searchParams;
   const tagsParam = params.tags || "";

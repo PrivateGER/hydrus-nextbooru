@@ -5,8 +5,10 @@ import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist"
 import { tagIdsByNameCache } from "@/lib/cache";
 
 /**
- * Parse selected tags into included and excluded lists.
- * Tags prefixed with `-` are excluded.
+ * Parse a comma-separated list of tag names into included and excluded tag name arrays.
+ *
+ * @param selectedParam - Comma-separated tag names; a name prefixed with `-` denotes exclusion. Whitespace is trimmed and names are lowercased.
+ * @returns An object with `includeTags` (lowercased tag names to include) and `excludeTags` (lowercased tag names to exclude, without the `-` prefix).
  */
 function parseSelectedTagsWithNegation(selectedParam: string): {
   includeTags: string[];
@@ -32,16 +34,13 @@ function parseSelectedTagsWithNegation(selectedParam: string): {
 }
 
 /**
- * Provide tag suggestions matching a text query, optionally restricted to tags that co-occur with one or more selected tag names.
- * Supports tag negation with `-` prefix to exclude posts with certain tags.
+ * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
  *
- * Reads query parameters from the request URL:
- * - `q`: search string (required; empty string yields no results)
- * - `limit`: maximum number of tags to return (default 20, capped at 50)
- * - `selected`: comma-separated tag names to require co-occurrence with (prefix with `-` to exclude)
- *
- * @param request - Incoming Next.js request whose URL query supplies `q`, `limit`, and `selected`
- * @returns An object with a `tags` array; each element contains `id`, `name`, `category`, and numeric `count` representing matching tag metadata and co-occurrence counts
+ * @param request - Next.js request whose URL query provides:
+ *   - `q`: search string (empty string yields no results)
+ *   - `limit`: maximum number of tags to return (default 20, capped at 50)
+ *   - `selected`: comma-separated tag names to require co-occurrence with; prefix a name with `-` to exclude posts containing that tag
+ * @returns An object with a `tags` array; each element contains `id`, `name`, `category`, and numeric `count` indicating matching tag metadata and co-occurrence counts
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
