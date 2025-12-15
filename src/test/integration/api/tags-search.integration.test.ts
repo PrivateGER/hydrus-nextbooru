@@ -455,4 +455,68 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(names).toEqual(['result_a', 'result_b']);
     });
   });
+
+  describe('empty query with selected tags (browse mode)', () => {
+    it('should return co-occurring tags when q is empty but selected tags provided', async () => {
+      const prisma = getTestPrisma();
+
+      // Create posts with shared base tag and different co-occurring tags
+      await createPostWithTags(prisma, ['base tag', 'cooccur_a', 'cooccur_b']);
+      await createPostWithTags(prisma, ['base tag', 'cooccur_a', 'cooccur_c']);
+      await createPostWithTags(prisma, ['base tag', 'cooccur_d']);
+
+      // Empty query with selected tag - should return co-occurring tags
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=base tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should return co-occurring tags (not empty)
+      expect(data.tags.length).toBeGreaterThan(0);
+      const names = data.tags.map((t: { name: string }) => t.name);
+      // cooccur_a appears in 2/3 posts, so excludeCount = 1 (not omnipresent)
+      expect(names).toContain('cooccur_a');
+    });
+
+    it('should filter out omnipresent tags when browsing without query', async () => {
+      const prisma = getTestPrisma();
+
+      // Create posts where 'omnipresent' appears in ALL posts
+      // and 'partial' appears in only SOME posts
+      await createPostWithTags(prisma, ['filter tag', 'omnipresent', 'partial']);
+      await createPostWithTags(prisma, ['filter tag', 'omnipresent', 'other']);
+      await createPostWithTags(prisma, ['filter tag', 'omnipresent']);
+
+      // Empty query - browsing mode should filter out omnipresent tags
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=filter tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const names = data.tags.map((t: { name: string }) => t.name);
+
+      // 'omnipresent' is in ALL 3 filtered posts, so excludeCount = 0 - should be filtered out
+      expect(names).not.toContain('omnipresent');
+
+      // 'partial' is in 1/3 posts, excludeCount = 2 - should be included
+      expect(names).toContain('partial');
+    });
+
+    it('should still return omnipresent tags when there is a search query', async () => {
+      const prisma = getTestPrisma();
+
+      // Same setup as above
+      await createPostWithTags(prisma, ['search tag', 'omnipresent', 'partial']);
+      await createPostWithTags(prisma, ['search tag', 'omnipresent', 'other']);
+      await createPostWithTags(prisma, ['search tag', 'omnipresent']);
+
+      // WITH query - should include omnipresent tags if they match
+      const request = new NextRequest('http://localhost/api/tags/search?q=omni&selected=search tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const names = data.tags.map((t: { name: string }) => t.name);
+
+      // With a search query, omnipresent tags matching the query SHOULD be returned
+      expect(names).toContain('omnipresent');
+    });
+  });
 });

@@ -79,7 +79,8 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
 
   // Debounced search
   useEffect(() => {
-    if (searchQuery.length < 1) {
+    // Allow search with empty query when in exclude mode with selected tags
+    if (searchQuery.length < 1 && !(isExcludeMode && selectedTags.length > 0)) {
       setSuggestions([]);
       return;
     }
@@ -106,7 +107,7 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     }, 200);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, selectedTags]);
+  }, [searchQuery, selectedTags, isExcludeMode]);
 
   // Sort and filter suggestions based on mode
   const displaySuggestions = isExcludeMode

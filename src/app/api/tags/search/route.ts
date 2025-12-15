@@ -51,7 +51,8 @@ export async function GET(request: NextRequest) {
   // Parse selected tags with negation support
   const { includeTags: selectedTags, excludeTags } = parseSelectedTagsWithNegation(selectedParam);
 
-  if (query.length < 1) {
+  // Return empty if no query AND no selected tags
+  if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
     return NextResponse.json({ tags: [] });
   }
 
@@ -160,7 +161,8 @@ export async function GET(request: NextRequest) {
   const allExcludeTagIds = [...excludeTagIdsByName.values()].flat();
 
   // Step 2: Build query to find posts with at least one tag from each name group
-  const searchPattern = `%${escapeSqlLike(query)}%`;
+  const hasSearchQuery = query.length > 0;
+  const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
 
   // Build INTERSECT subqueries for each included tag group using Prisma.sql
   const intersectParts = tagGroups.map(
@@ -191,6 +193,16 @@ export async function GET(request: NextRequest) {
   const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds];
 
   // Use CTE to compute filtered posts once and reuse for both count and exclude_count
+  // Conditionally include ILIKE filter only when there's a search query
+  const nameFilter = hasSearchQuery
+    ? Prisma.sql`t.name ILIKE ${searchPattern} AND`
+    : Prisma.sql``;
+
+  // When browsing (no query), filter out omnipresent tags (excludeCount = 0)
+  const excludeOmnipresent = hasSearchQuery
+    ? Prisma.sql``
+    : Prisma.sql`HAVING (SELECT total FROM filtered_total) - COUNT(pt."postId") > 0`;
+
   const coOccurringTags = await prisma.$queryRaw<Array<{
     id: number;
     name: string;
@@ -209,12 +221,12 @@ export async function GET(request: NextRequest) {
            (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as exclude_count
     FROM "Tag" t
     JOIN "PostTag" pt ON t.id = pt."tagId"
-    WHERE t.name ILIKE ${searchPattern}
-      AND t.id != ALL(${allExcludedFromSuggestions}::int[])
+    WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
       AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
     GROUP BY t.id, t.name, t.category
+    ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${limit * 2}
+    LIMIT ${limit * 4}
   `;
 
   // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
