@@ -12,6 +12,7 @@ import {
 import { getThumbnailPath, getThumbnailRelativePath } from "./paths";
 import { extractVideoFrame, isFfmpegAvailable } from "./video-extractor";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { thumbnailLog } from "@/lib/logger";
 
 // Cache ffmpeg availability check
 let ffmpegAvailable: boolean | null = null;
@@ -52,9 +53,7 @@ async function checkFfmpeg(): Promise<boolean> {
   if (ffmpegAvailable === null) {
     ffmpegAvailable = await isFfmpegAvailable();
     if (!ffmpegAvailable) {
-      console.warn(
-        "ffmpeg not available - video thumbnails will use Hydrus fallback"
-      );
+      thumbnailLog.warn({}, 'ffmpeg not available - video thumbnails will use Hydrus fallback');
     }
   }
   return ffmpegAvailable;
@@ -119,10 +118,7 @@ export async function generateThumbnail(
       try {
         inputSource = await extractVideoFrame(filePath);
       } catch (err) {
-        console.error(
-          `Failed to extract video frame for ${post.hash}:`,
-          err
-        );
+        thumbnailLog.error({ hash: post.hash, error: err instanceof Error ? err.message : String(err) }, 'Failed to extract video frame');
         return {
           success: false,
           fallback: "hydrus",
@@ -188,6 +184,8 @@ export async function generateThumbnail(
       },
     });
 
+    thumbnailLog.debug({ hash: post.hash, size, width: result.width, height: result.height, fileSize: fileStats.size }, 'Thumbnail generated');
+
     return {
       success: true,
       path: outputPath,
@@ -196,7 +194,7 @@ export async function generateThumbnail(
       fileSize: fileStats.size,
     };
   } catch (err) {
-    console.error(`Thumbnail generation failed for ${post.hash}:`, err);
+    thumbnailLog.error({ hash: post.hash, error: err instanceof Error ? err.message : String(err) }, 'Thumbnail generation failed');
 
     // Mark as failed in database
     await prisma.post.update({

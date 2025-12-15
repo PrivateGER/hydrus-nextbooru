@@ -6,6 +6,7 @@ import {
   SETTINGS_KEYS,
 } from "@/lib/openrouter";
 import { OpenRouterClient } from "@/lib/openrouter";
+import { apiLog } from "@/lib/logger";
 
 interface SettingsUpdateBody {
   apiKey?: string;
@@ -38,7 +39,7 @@ export async function GET() {
       defaultModel: OpenRouterClient.getDefaultModel(),
     });
   } catch (error) {
-    console.error("Error getting settings:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get OpenRouter settings');
     return NextResponse.json(
       { error: "Failed to get settings" },
       { status: 500 }
@@ -89,7 +90,7 @@ export async function PUT(request: NextRequest) {
       targetLang: settings.targetLang || OpenRouterClient.getDefaultTargetLang(),
     });
   } catch (error) {
-    console.error("Error updating settings:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to update OpenRouter settings');
     return NextResponse.json(
       { error: "Failed to update settings" },
       { status: 500 }

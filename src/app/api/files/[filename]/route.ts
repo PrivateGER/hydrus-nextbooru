@@ -3,6 +3,7 @@ import { createReadStream } from "fs";
 import { stat } from "fs/promises";
 import { Readable } from "stream";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { fileLog } from "@/lib/logger";
 
 // Extension to MIME type mapping (skip database lookup)
 const MIME_TYPES: Record<string, string> = {
@@ -118,7 +119,7 @@ export async function GET(
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    console.error(`Error serving file ${hash}:`, err);
+    fileLog.error({ hash, error: err instanceof Error ? err.message : String(err) }, 'Error serving file');
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
