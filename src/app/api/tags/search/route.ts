@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, escapeSqlLike } from "@/lib/db";
+import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
@@ -51,12 +51,38 @@ export async function GET(request: NextRequest) {
   // Parse selected tags with negation support
   const { includeTags: selectedTags, excludeTags } = parseSelectedTagsWithNegation(selectedParam);
 
-  if (query.length < 1) {
-    return NextResponse.json({ tags: [] });
+  // Return popular tags if no query AND no selected tags (for initial suggestions)
+  if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
+    const totalPosts = await getTotalPostCount();
+
+    const tags = await prisma.tag.findMany({
+      where: withBlacklistFilter({}),
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        postCount: true,
+      },
+      orderBy: { postCount: "desc" },
+      take: limit,
+    });
+
+    return NextResponse.json({
+      tags: tags.map((tag) => ({
+        id: tag.id,
+        name: tag.name,
+        category: tag.category,
+        count: tag.postCount,
+        remainingCount: Math.max(0, totalPosts - tag.postCount),
+      })),
+    });
   }
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount
   if (selectedTags.length === 0 && excludeTags.length === 0) {
+    // Get precomputed total from Settings for remainingCount calculation
+    let totalPosts = await getTotalPostCount();
+
     const tags = await prisma.tag.findMany({
       where: withBlacklistFilter({
         name: {
@@ -80,6 +106,7 @@ export async function GET(request: NextRequest) {
         name: tag.name,
         category: tag.category,
         count: tag.postCount,
+        remainingCount: Math.max(0, totalPosts - tag.postCount),
       })),
     });
   }
@@ -156,7 +183,8 @@ export async function GET(request: NextRequest) {
   const allExcludeTagIds = [...excludeTagIdsByName.values()].flat();
 
   // Step 2: Build query to find posts with at least one tag from each name group
-  const searchPattern = `%${escapeSqlLike(query)}%`;
+  const hasSearchQuery = query.length > 0;
+  const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
 
   // Build INTERSECT subqueries for each included tag group using Prisma.sql
   const intersectParts = tagGroups.map(
@@ -186,21 +214,41 @@ export async function GET(request: NextRequest) {
   // Also exclude the excluded tag IDs from suggestions
   const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds];
 
+  // Use CTE to compute filtered posts once and reuse for both count and exclude_count
+  // Conditionally include ILIKE filter only when there's a search query
+  const nameFilter = hasSearchQuery
+    ? Prisma.sql`t.name ILIKE ${searchPattern} AND`
+    : Prisma.sql``;
+
+  // When browsing (no query), filter out omnipresent tags (remainingCount = 0)
+  const excludeOmnipresent = hasSearchQuery
+    ? Prisma.sql``
+    : Prisma.sql`HAVING (SELECT total FROM filtered_total) - COUNT(pt."postId") > 0`;
+
   const coOccurringTags = await prisma.$queryRaw<Array<{
     id: number;
     name: string;
     category: string;
     count: bigint;
+    remaining_count: bigint;
   }>>`
-    SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
+    WITH filtered_posts AS (
+      ${postSubquery}
+    ),
+    filtered_total AS (
+      SELECT COUNT(*)::bigint as total FROM filtered_posts
+    )
+    SELECT t.id, t.name, t.category,
+           COUNT(pt."postId")::bigint as count,
+           (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as remaining_count
     FROM "Tag" t
     JOIN "PostTag" pt ON t.id = pt."tagId"
-    WHERE t.name ILIKE ${searchPattern}
-      AND t.id != ALL(${allExcludedFromSuggestions}::int[])
-      AND pt."postId" IN (${postSubquery})
+    WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
+      AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
     GROUP BY t.id, t.name, t.category
+    ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${limit * 2}
+    LIMIT ${limit * 4}
   `;
 
   // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
@@ -209,6 +257,7 @@ export async function GET(request: NextRequest) {
     name: tag.name,
     category: tag.category,
     count: Number(tag.count),
+    remainingCount: Math.max(0, Number(tag.remaining_count)),
   }));
 
   const filteredTags = filterBlacklistedTags(mappedTags)

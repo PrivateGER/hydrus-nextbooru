@@ -74,4 +74,24 @@ if (process.env.NODE_ENV !== "production" && !globalForPrisma.prisma) {
   globalForPrisma.prisma = createPrismaClient();
 }
 
+/**
+ * Get the total post count from Settings.
+ * Initialized by migration, updated after each sync.
+ */
+export async function getTotalPostCount(): Promise<number> {
+  const setting = await prisma.settings.findUnique({
+    where: { key: "stats.totalPostCount" },
+  });
+
+  if (!setting) return 0;
+
+  const parsed = parseInt(setting.value, 10);
+  if (isNaN(parsed) || parsed < 0) {
+    console.error(`Invalid totalPostCount value: "${setting.value}", falling back to 0`);
+    return 0;
+  }
+
+  return parsed;
+}
+
 export default prisma;

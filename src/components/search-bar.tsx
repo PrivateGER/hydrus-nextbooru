@@ -9,6 +9,7 @@ interface TagSuggestion {
   name: string;
   category: TagCategory;
   count: number;
+  remainingCount: number;
 }
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
@@ -72,10 +73,52 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
+  // Detect exclude mode when input starts with "-"
+  const isExcludeMode = inputValue.startsWith("-");
+  const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
+
+  // Fetch popular/narrowing tags on focus
+  const fetchPopularTags = useCallback(async () => {
+    if (searchQuery.length > 0 || suggestions.length > 0) return;
+
+    setIsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", "");
+      params.set("limit", "25");
+      if (selectedTags.length > 0) {
+        params.set("selected", selectedTags.join(","));
+      }
+      const response = await fetch(`/api/tags/search?${params.toString()}`);
+      const data = await response.json();
+
+      // Filter out omnipresent tags when there are selected tags (they don't help narrow down)
+      const filtered = selectedTags.length > 0
+        ? data.tags.filter((t: TagSuggestion) => t.remainingCount > 0)
+        : data.tags;
+
+      setSuggestions(filtered);
+      setShowSuggestions(true);
+    } catch (error) {
+      console.error("Error fetching tags:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [searchQuery, selectedTags, suggestions.length]);
+
   // Debounced search
   useEffect(() => {
-    if (inputValue.length < 1) {
-      setSuggestions([]);
+    // Allow search with empty query when:
+    // - In exclude mode with selected tags, OR
+    // - No selected tags (to show popular tags - handled by API)
+    const shouldFetch = searchQuery.length > 0 ||
+      (isExcludeMode && selectedTags.length > 0);
+
+    if (!shouldFetch) {
+      // Don't clear suggestions if showing popular tags
+      if (selectedTags.length > 0) {
+        setSuggestions([]);
+      }
       return;
     }
 
@@ -83,7 +126,7 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
       setIsLoading(true);
       try {
         const params = new URLSearchParams();
-        params.set("q", inputValue);
+        params.set("q", searchQuery);
         params.set("limit", "10");
         if (selectedTags.length > 0) {
           params.set("selected", selectedTags.join(","));
@@ -101,7 +144,20 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     }, 200);
 
     return () => clearTimeout(timer);
-  }, [inputValue, selectedTags]);
+  }, [searchQuery, selectedTags, isExcludeMode]);
+
+  // Reset highlight when mode changes
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [isExcludeMode]);
+
+  // Sort and filter suggestions based on mode
+  // In exclude mode: show count (posts to remove), filter out omnipresent tags, sort by most impactful
+  const displaySuggestions = isExcludeMode
+    ? suggestions
+        .filter((s) => s.remainingCount > 0) // Hide omnipresent tags (would leave 0 posts)
+        .sort((a, b) => b.count - a.count) // Sort by posts to remove (most impactful first)
+    : suggestions;
 
   // Close suggestions on click outside
   useEffect(() => {
@@ -119,6 +175,14 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Scroll highlighted suggestion into view
+  useEffect(() => {
+    if (highlightedIndex >= 0 && suggestionsRef.current) {
+      const highlighted = suggestionsRef.current.children[highlightedIndex] as HTMLElement;
+      highlighted?.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightedIndex]);
 
   const addTag = useCallback((tagName: string, negated: boolean = false) => {
     const normalizedTag = tagName.trim().toLowerCase();
@@ -159,20 +223,32 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   }, [selectedTags]);
 
   const toggleNegation = useCallback((tagName: string) => {
-    setSelectedTags((prev) =>
-      prev.map((t) => (t === tagName ? toggleTagNegation(t) : t))
-    );
-  }, []);
+    const newTags = selectedTags.map((t) => (t === tagName ? toggleTagNegation(t) : t));
+    setSelectedTags(newTags);
+    // Navigate to search with updated tags
+    const params = new URLSearchParams();
+    params.set("tags", newTags.join(","));
+    router.push(`/search?${params.toString()}`);
+  }, [selectedTags, router]);
 
   const removeTag = useCallback((tagName: string) => {
-    setSelectedTags((prev) => prev.filter((t) => t !== tagName));
-  }, []);
+    const newTags = selectedTags.filter((t) => t !== tagName);
+    setSelectedTags(newTags);
+    // Navigate to search with updated tags (consistent with toggleNegation)
+    if (newTags.length > 0) {
+      const params = new URLSearchParams();
+      params.set("tags", newTags.join(","));
+      router.push(`/search?${params.toString()}`);
+    } else {
+      router.push('/search');
+    }
+  }, [selectedTags, router]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (highlightedIndex >= 0 && suggestions[highlightedIndex]) {
-        addTag(suggestions[highlightedIndex].name);
+      if (highlightedIndex >= 0 && displaySuggestions[highlightedIndex]) {
+        addTag(displaySuggestions[highlightedIndex].name, isExcludeMode);
       } else if (inputValue.trim()) {
         // Add as custom tag or perform search
         if (selectedTags.length > 0 || inputValue.trim()) {
@@ -183,7 +259,7 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
       }
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlightedIndex((prev) => Math.min(prev + 1, suggestions.length - 1));
+      setHighlightedIndex((prev) => Math.min(prev + 1, displaySuggestions.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setHighlightedIndex((prev) => Math.max(prev - 1, -1));
@@ -217,36 +293,25 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
           return (
             <span
               key={tag}
-              className={`flex items-center gap-1 rounded px-2 py-0.5 text-sm ${
+              className={`flex items-center gap-1 rounded text-sm ${
                 negated
                   ? "bg-red-900/50 text-red-300 border border-red-700"
                   : "bg-zinc-700"
               }`}
             >
-              {negated && (
-                <span className="text-red-400 font-bold" title="Excluded">
-                  -
-                </span>
-              )}
-              <span className={negated ? "line-through opacity-80" : ""}>
-                {displayName}
-              </span>
               <button
                 type="button"
                 onClick={() => toggleNegation(tag)}
-                className={`text-xs px-1 rounded ${
-                  negated
-                    ? "text-green-400 hover:text-green-300 hover:bg-green-900/30"
-                    : "text-red-400 hover:text-red-300 hover:bg-red-900/30"
-                }`}
-                title={negated ? "Include this tag" : "Exclude this tag"}
+                className="px-2 py-0.5 rounded-l hover:bg-white/10"
+                title={negated ? "Click to include" : "Click to exclude"}
               >
-                {negated ? "+" : "-"}
+                {negated && <span className="text-red-400 font-bold">-</span>}
+                <span className={negated ? "line-through opacity-80" : ""}>{displayName}</span>
               </button>
               <button
                 type="button"
                 onClick={() => removeTag(tag)}
-                className="text-zinc-400 hover:text-white"
+                className="px-1.5 py-0.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-r"
               >
                 &times;
               </button>
@@ -261,7 +326,13 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          onFocus={() => inputValue && setShowSuggestions(true)}
+          onFocus={() => {
+            if (inputValue) {
+              setShowSuggestions(true);
+            } else {
+              fetchPopularTags();
+            }
+          }}
           placeholder={selectedTags.length === 0 ? placeholder : ""}
           className="min-w-[100px] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-500"
         />
@@ -277,25 +348,31 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
       </div>
 
       {/* Suggestions dropdown */}
-      {showSuggestions && suggestions.length > 0 && (
+      {showSuggestions && displaySuggestions.length > 0 && (
         <div
           ref={suggestionsRef}
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-auto rounded-lg border border-zinc-700 bg-zinc-800 shadow-lg"
+          className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-auto rounded-lg border ${isExcludeMode ? "border-red-700" : "border-zinc-700"} bg-zinc-800 shadow-lg`}
         >
-          {suggestions.map((suggestion, index) => (
-            <button
+          {displaySuggestions.map((suggestion, index) => (
+            <div
               key={suggestion.id}
-              type="button"
-              onClick={() => addTag(suggestion.name)}
-              className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-700 ${
+              className={`group flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-zinc-700 ${
                 index === highlightedIndex ? "bg-zinc-700" : ""
               }`}
             >
-              <span className={CATEGORY_COLORS[suggestion.category]}>
-                {suggestion.name.replace(/_/g, " ")}
+              <button
+                type="button"
+                onClick={() => addTag(suggestion.name, isExcludeMode)}
+                className="flex-1 text-left"
+              >
+                <span className={CATEGORY_COLORS[suggestion.category]}>
+                  {suggestion.name.replace(/_/g, " ")}
+                </span>
+              </button>
+              <span className={`text-xs ${isExcludeMode ? "text-red-400" : "text-zinc-500"}`}>
+                {isExcludeMode ? `-${suggestion.count}` : suggestion.count}
               </span>
-              <span className="text-xs text-zinc-500">{suggestion.count}</span>
-            </button>
+            </div>
           ))}
         </div>
       )}

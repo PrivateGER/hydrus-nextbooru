@@ -544,6 +544,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     progress.phase = "complete";
 
+    await updateTotalPostCount();
     // Recalculate tag post counts for efficient sorting
     await recalculateTagCounts();
 
@@ -714,4 +715,17 @@ async function recalculateTagCounts(): Promise<void> {
       SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
     )
   `;
+}
+
+/**
+ * Update the total post count stored in Settings.
+ * Used for efficient excludeCount calculation in tag search.
+ */
+async function updateTotalPostCount(): Promise<void> {
+  const count = await prisma.post.count();
+  await prisma.settings.upsert({
+    where: { key: "stats.totalPostCount" },
+    update: { value: count.toString() },
+    create: { key: "stats.totalPostCount", value: count.toString() },
+  });
 }
