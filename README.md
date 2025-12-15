@@ -17,7 +17,7 @@ Supports:
 
 ## Requirements
 
-- Node.js 24+ (or Bun for faster execution, default in docker image)
+- Node.js 25+ (or Bun for faster execution, default in docker image)
 - PostgreSQL 18+ (lower probably works, but recommend 18+ for performance)
 - Hydrus Network with Client API enabled and available in network
 
