@@ -3,15 +3,13 @@ import { prisma } from "@/lib/db";
 import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
-import { wildcardPatternCache, WildcardCacheEntry } from "@/lib/cache";
 import {
   isWildcardPattern,
-  wildcardToSqlPattern,
   validateWildcardPattern,
-  WILDCARD_TAG_LIMIT,
+  parseTagsWithNegation,
+  resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { wildcardLog } from "@/lib/logger";
 import { TagCategory } from "@/generated/prisma/client";
 
 const POSTS_PER_PAGE = 48;
@@ -26,73 +24,6 @@ const CATEGORY_COLORS: Record<TagCategory, string> = {
 
 interface SearchPageProps {
   searchParams: Promise<{ tags?: string; page?: string }>;
-}
-
-/**
- * Split tag strings into included and excluded lists.
- *
- * Tags that start with `-` and have more than one character are placed in `excludeTags`
- * with the leading `-` removed; all other tags are placed in `includeTags`.
- *
- * @param tags - Array of tag strings to parse
- * @returns An object containing `includeTags` and `excludeTags` arrays
- */
-function parseTagsWithNegation(tags: string[]): {
-  includeTags: string[];
-  excludeTags: string[];
-} {
-  const includeTags: string[] = [];
-  const excludeTags: string[] = [];
-
-  for (const tag of tags) {
-    if (tag.startsWith("-") && tag.length > 1) {
-      excludeTags.push(tag.slice(1));
-    } else {
-      includeTags.push(tag);
-    }
-  }
-
-  return { includeTags, excludeTags };
-}
-
-/**
- * Resolve a wildcard pattern to matching tags.
- * Results are cached for 5 minutes.
- */
-async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEntry> {
-  const cached = wildcardPatternCache.get(pattern);
-  if (cached) {
-    wildcardLog.debug({ pattern, count: cached.tagNames.length, source: "page" }, "Cache HIT");
-    return cached;
-  }
-
-  // Convert to SQL LIKE pattern and use raw SQL for accurate wildcard matching
-  const sqlPattern = wildcardToSqlPattern(pattern);
-  wildcardLog.debug({ pattern, sqlPattern, source: "page" }, "Cache MISS, querying");
-
-  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
-    SELECT id, name, category FROM "Tag"
-    WHERE name ILIKE ${sqlPattern}
-    ORDER BY "postCount" DESC
-    LIMIT ${WILDCARD_TAG_LIMIT + 1}
-  `;
-
-  wildcardLog.debug(
-    { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), source: "page" },
-    "Resolved wildcard"
-  );
-
-  const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
-  const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
-  const result: WildcardCacheEntry = {
-    tagIds: limitedTags.map((t) => t.id),
-    tagNames: limitedTags.map((t) => t.name),
-    tagCategories: limitedTags.map((t) => t.category),
-    truncated,
-  };
-
-  wildcardPatternCache.set(pattern, result);
-  return result;
 }
 
 /**
@@ -120,7 +51,7 @@ async function searchPosts(tags: string[], page: number) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(tag);
       if (!validation.valid) {
-        validationErrors.push(validation.error!);
+        validationErrors.push(validation.error ?? "Invalid wildcard pattern");
       } else {
         wildcardIncludePatterns.push(tag);
       }
@@ -133,7 +64,7 @@ async function searchPosts(tags: string[], page: number) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(`-${tag}`);
       if (!validation.valid) {
-        validationErrors.push(validation.error!);
+        validationErrors.push(validation.error ?? "Invalid wildcard pattern");
       } else {
         wildcardExcludePatterns.push(tag);
       }
@@ -159,7 +90,7 @@ async function searchPosts(tags: string[], page: number) {
   const excludeWildcardTagIds: number[] = [];
 
   for (const pattern of wildcardIncludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern);
+    const resolved = await resolveWildcardPattern(pattern, "page");
     includeWildcardTagIds.push(resolved.tagIds);
     resolvedWildcards.push({
       pattern,
@@ -172,7 +103,7 @@ async function searchPosts(tags: string[], page: number) {
   }
 
   for (const pattern of wildcardExcludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern);
+    const resolved = await resolveWildcardPattern(pattern, "page");
     excludeWildcardTagIds.push(...resolved.tagIds);
     resolvedWildcards.push({
       pattern: `-${pattern}`,
@@ -311,7 +242,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 <summary className="cursor-pointer list-none flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-700/50 transition-colors">
                   <span className="text-zinc-500 group-open:rotate-90 transition-transform">▶</span>
                   <span className={w.negated ? "text-red-400 line-through" : "text-purple-400"}>
-                    {w.negated ? `-${w.pattern.slice(1)}` : w.pattern}
+                    {w.pattern}
                   </span>
                   <span className="text-zinc-500">→</span>
                   <span className="text-zinc-300 truncate flex-1">

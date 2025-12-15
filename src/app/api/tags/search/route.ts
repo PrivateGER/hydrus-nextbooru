@@ -2,43 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdsByNameCache, wildcardPatternCache, WildcardCacheEntry } from "@/lib/cache";
+import { tagIdsByNameCache } from "@/lib/cache";
 import {
   isWildcardPattern,
-  wildcardToSqlPattern,
   validateWildcardPattern,
-  WILDCARD_TAG_LIMIT,
+  parseTagsParamWithNegation,
+  resolveWildcardPattern,
 } from "@/lib/wildcard";
-import { wildcardLog } from "@/lib/logger";
-
-/**
- * Parse a comma-separated list of tag names into included and excluded tag name arrays.
- *
- * @param selectedParam - Comma-separated tag names; a name prefixed with `-` denotes exclusion. Whitespace is trimmed and names are lowercased.
- * @returns An object with `includeTags` (lowercased tag names to include) and `excludeTags` (lowercased tag names to exclude, without the `-` prefix).
- */
-function parseSelectedTagsWithNegation(selectedParam: string): {
-  includeTags: string[];
-  excludeTags: string[];
-} {
-  const allTags = selectedParam
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 0);
-
-  const includeTags: string[] = [];
-  const excludeTags: string[] = [];
-
-  for (const tag of allTags) {
-    if (tag.startsWith("-") && tag.length > 1) {
-      excludeTags.push(tag.slice(1));
-    } else {
-      includeTags.push(tag);
-    }
-  }
-
-  return { includeTags, excludeTags };
-}
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -56,7 +26,7 @@ export async function GET(request: NextRequest) {
   const selectedParam = searchParams.get("selected") || "";
 
   // Parse selected tags with negation support
-  const { includeTags: selectedTags, excludeTags } = parseSelectedTagsWithNegation(selectedParam);
+  const { includeTags: selectedTags, excludeTags } = parseTagsParamWithNegation(selectedParam);
 
   // Return popular tags if no query AND no selected tags (for initial suggestions)
   if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
@@ -155,66 +125,13 @@ export async function GET(request: NextRequest) {
   const wildcardExcludeTagIds: number[] = [];
 
   for (const pattern of wildcardIncludePatterns) {
-    const cached = wildcardPatternCache.get(pattern);
-    if (cached) {
-      wildcardLog.debug({ pattern, count: cached.tagNames.length, source: "tags" }, "Cache HIT");
-      wildcardIncludeTagIds.push(cached.tagIds);
-    } else {
-      // Resolve the wildcard pattern
-      const sqlPattern = wildcardToSqlPattern(pattern);
-      wildcardLog.debug({ pattern, sqlPattern, source: "tags" }, "Cache MISS, querying");
-      const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
-        SELECT id, name, category FROM "Tag"
-        WHERE name ILIKE ${sqlPattern}
-        ORDER BY "postCount" DESC
-        LIMIT ${WILDCARD_TAG_LIMIT + 1}
-      `;
-      wildcardLog.debug(
-        { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), source: "tags" },
-        "Resolved wildcard"
-      );
-      const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
-      const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
-      const result: WildcardCacheEntry = {
-        tagIds: limitedTags.map((t) => t.id),
-        tagNames: limitedTags.map((t) => t.name),
-        tagCategories: limitedTags.map((t) => t.category),
-        truncated,
-      };
-      wildcardPatternCache.set(pattern, result);
-      wildcardIncludeTagIds.push(result.tagIds);
-    }
+    const resolved = await resolveWildcardPattern(pattern, "tags-api");
+    wildcardIncludeTagIds.push(resolved.tagIds);
   }
 
   for (const pattern of wildcardExcludePatterns) {
-    const cached = wildcardPatternCache.get(pattern);
-    if (cached) {
-      wildcardLog.debug({ pattern, count: cached.tagNames.length, negated: true, source: "tags" }, "Cache HIT");
-      wildcardExcludeTagIds.push(...cached.tagIds);
-    } else {
-      const sqlPattern = wildcardToSqlPattern(pattern);
-      wildcardLog.debug({ pattern, sqlPattern, negated: true, source: "tags" }, "Cache MISS, querying");
-      const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
-        SELECT id, name, category FROM "Tag"
-        WHERE name ILIKE ${sqlPattern}
-        ORDER BY "postCount" DESC
-        LIMIT ${WILDCARD_TAG_LIMIT + 1}
-      `;
-      wildcardLog.debug(
-        { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), negated: true, source: "tags" },
-        "Resolved wildcard"
-      );
-      const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
-      const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
-      const result: WildcardCacheEntry = {
-        tagIds: limitedTags.map((t) => t.id),
-        tagNames: limitedTags.map((t) => t.name),
-        tagCategories: limitedTags.map((t) => t.category),
-        truncated,
-      };
-      wildcardPatternCache.set(pattern, result);
-      wildcardExcludeTagIds.push(...result.tagIds);
-    }
+    const resolved = await resolveWildcardPattern(pattern, "tags-api");
+    wildcardExcludeTagIds.push(...resolved.tagIds);
   }
 
   // Step 2: Find tag IDs for regular (non-wildcard) selected tag names

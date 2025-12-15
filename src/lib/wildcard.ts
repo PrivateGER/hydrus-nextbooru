@@ -8,6 +8,13 @@
  *   - `blue*` matches tags starting with "blue"
  */
 
+import { prisma } from "@/lib/db";
+import { wildcardPatternCache, type WildcardCacheEntry } from "@/lib/cache";
+import { wildcardLog } from "@/lib/logger";
+
+// Re-export for convenience
+export type { WildcardCacheEntry } from "@/lib/cache";
+
 /** Maximum number of tags a wildcard pattern can match */
 export const WILDCARD_TAG_LIMIT = 500;
 
@@ -150,4 +157,98 @@ export interface ResolvedWildcard {
   tagCategories: string[];
   /** Whether the result was truncated due to limit */
   truncated: boolean;
+}
+
+/**
+ * Resolve a wildcard pattern to matching tags.
+ * Results are cached for 5 minutes.
+ *
+ * @param pattern - The wildcard pattern (without negation prefix)
+ * @param source - Optional source identifier for logging
+ * @returns Cached entry with matching tag IDs, names, categories, and truncation status
+ */
+export async function resolveWildcardPattern(
+  pattern: string,
+  source?: string
+): Promise<WildcardCacheEntry> {
+  const cached = wildcardPatternCache.get(pattern);
+  if (cached) {
+    wildcardLog.debug({ pattern, count: cached.tagNames.length, source }, "Cache HIT");
+    return cached;
+  }
+
+  // Convert to SQL LIKE pattern and use raw SQL for accurate wildcard matching
+  const sqlPattern = wildcardToSqlPattern(pattern);
+  wildcardLog.debug({ pattern, sqlPattern, source }, "Cache MISS, querying");
+
+  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
+    SELECT id, name, category FROM "Tag"
+    WHERE name ILIKE ${sqlPattern}
+    ORDER BY "postCount" DESC
+    LIMIT ${WILDCARD_TAG_LIMIT + 1}
+  `;
+
+  wildcardLog.debug(
+    { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), source },
+    "Resolved wildcard"
+  );
+
+  const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
+  const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
+  const result: WildcardCacheEntry = {
+    tagIds: limitedTags.map((t) => t.id),
+    tagNames: limitedTags.map((t) => t.name),
+    tagCategories: limitedTags.map((t) => t.category),
+    truncated,
+  };
+
+  wildcardPatternCache.set(pattern, result);
+  return result;
+}
+
+/**
+ * Split tag strings into included and excluded lists.
+ *
+ * Tags that start with `-` and have more than one character are placed in `excludeTags`
+ * with the leading `-` removed; all other tags are placed in `includeTags`.
+ *
+ * @param tags - Array of tag strings to parse
+ * @returns An object containing `includeTags` and `excludeTags` arrays
+ */
+export function parseTagsWithNegation(tags: string[]): {
+  includeTags: string[];
+  excludeTags: string[];
+} {
+  const includeTags: string[] = [];
+  const excludeTags: string[] = [];
+
+  for (const tag of tags) {
+    if (tag.startsWith("-") && tag.length > 1) {
+      excludeTags.push(tag.slice(1));
+    } else {
+      includeTags.push(tag);
+    }
+  }
+
+  return { includeTags, excludeTags };
+}
+
+/**
+ * Parse a comma-separated tag string into included and excluded tag lists.
+ *
+ * Leading/trailing whitespace is trimmed and tags are lowercased; empty entries are ignored.
+ *
+ * @param tagsParam - Comma-separated tags where tags prefixed with `-` denote exclusion
+ * @returns An object with `includeTags` (tags to include) and `excludeTags` (tags to exclude)
+ */
+export function parseTagsParamWithNegation(tagsParam: string): {
+  includeTags: string[];
+  excludeTags: string[];
+} {
+  const allTags = tagsParam
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t.length > 0);
+
+  return parseTagsWithNegation(allTags);
 }
