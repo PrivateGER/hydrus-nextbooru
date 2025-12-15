@@ -154,29 +154,33 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       {/* Homepage sections - Only on first page with default sort */}
       {isFirstPage && homeData && (
         <>
-          {/* Stats Dashboard */}
-          <Suspense
-            fallback={
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-24 animate-pulse rounded-lg bg-zinc-800"
-                  />
-                ))}
-              </div>
-            }
-          >
-            <StatsCards
-              stats={homeData.stats}
-              recentImports={homeData.recentImports}
-            />
-          </Suspense>
+          {/* Stats Dashboard - Hidden on mobile */}
+          <div className="hidden md:block">
+            <Suspense
+              fallback={
+                <div className="grid grid-cols-3 gap-4 lg:grid-cols-6">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-24 animate-pulse rounded-lg bg-zinc-800"
+                    />
+                  ))}
+                </div>
+              }
+            >
+              <StatsCards
+                stats={homeData.stats}
+                recentImports={homeData.recentImports}
+              />
+            </Suspense>
+          </div>
 
-          {/* Popular Tags */}
-          <Suspense fallback={null}>
-            <PopularTags tags={homeData.popularTags} />
-          </Suspense>
+          {/* Popular Tags - Hidden on mobile */}
+          <div className="hidden md:block">
+            <Suspense fallback={null}>
+              <PopularTags tags={homeData.popularTags} />
+            </Suspense>
+          </div>
 
           {/* Random Highlights */}
           <Suspense fallback={null}>
