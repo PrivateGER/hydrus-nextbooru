@@ -60,8 +60,8 @@ export class OpenRouterClient {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-        "X-Title": "Booru Note Translator",
+        "HTTP-Referer": "https://github.com/PrivateGER/hydrus-nextbooru",
+        "X-Title": "Nextbooru",
       },
       body: JSON.stringify({
         model,
