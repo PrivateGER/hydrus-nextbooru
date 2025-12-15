@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   experimental: {
     viewTransition: true,
   },
+  serverExternalPackages: ["pino", "pino-pretty"],
 };
 
 export default nextConfig;

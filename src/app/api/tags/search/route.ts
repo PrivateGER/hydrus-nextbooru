@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdsByNameCache } from "@/lib/cache";
+import { tagIdsByNameCache, wildcardPatternCache, WildcardCacheEntry } from "@/lib/cache";
+import {
+  isWildcardPattern,
+  wildcardToSqlPattern,
+  validateWildcardPattern,
+  WILDCARD_TAG_LIMIT,
+} from "@/lib/wildcard";
+import { wildcardLog } from "@/lib/logger";
 
 /**
  * Parse a comma-separated list of tag names into included and excluded tag name arrays.
@@ -113,13 +120,110 @@ export async function GET(request: NextRequest) {
 
   // Progressive filtering: find tags that co-occur with all selected tags (and not excluded tags)
 
-  // Step 1: Find ALL tag IDs for selected tag names (across categories)
+  // Separate wildcards from regular tags
+  const regularIncludeTags: string[] = [];
+  const wildcardIncludePatterns: string[] = [];
+  const regularExcludeTags: string[] = [];
+  const wildcardExcludePatterns: string[] = [];
+
+  for (const tag of selectedTags) {
+    if (isWildcardPattern(tag)) {
+      const validation = validateWildcardPattern(tag);
+      if (!validation.valid) {
+        return NextResponse.json({ error: validation.error }, { status: 400 });
+      }
+      wildcardIncludePatterns.push(tag);
+    } else {
+      regularIncludeTags.push(tag);
+    }
+  }
+
+  for (const tag of excludeTags) {
+    if (isWildcardPattern(tag)) {
+      const validation = validateWildcardPattern(`-${tag}`);
+      if (!validation.valid) {
+        return NextResponse.json({ error: validation.error }, { status: 400 });
+      }
+      wildcardExcludePatterns.push(tag);
+    } else {
+      regularExcludeTags.push(tag);
+    }
+  }
+
+  // Step 1: Resolve wildcards to tag IDs
+  const wildcardIncludeTagIds: number[][] = [];
+  const wildcardExcludeTagIds: number[] = [];
+
+  for (const pattern of wildcardIncludePatterns) {
+    const cached = wildcardPatternCache.get(pattern);
+    if (cached) {
+      wildcardLog.debug({ pattern, count: cached.tagNames.length, source: "tags" }, "Cache HIT");
+      wildcardIncludeTagIds.push(cached.tagIds);
+    } else {
+      // Resolve the wildcard pattern
+      const sqlPattern = wildcardToSqlPattern(pattern);
+      wildcardLog.debug({ pattern, sqlPattern, source: "tags" }, "Cache MISS, querying");
+      const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
+        SELECT id, name, category FROM "Tag"
+        WHERE name ILIKE ${sqlPattern}
+        ORDER BY "postCount" DESC
+        LIMIT ${WILDCARD_TAG_LIMIT + 1}
+      `;
+      wildcardLog.debug(
+        { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), source: "tags" },
+        "Resolved wildcard"
+      );
+      const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
+      const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
+      const result: WildcardCacheEntry = {
+        tagIds: limitedTags.map((t) => t.id),
+        tagNames: limitedTags.map((t) => t.name),
+        tagCategories: limitedTags.map((t) => t.category),
+        truncated,
+      };
+      wildcardPatternCache.set(pattern, result);
+      wildcardIncludeTagIds.push(result.tagIds);
+    }
+  }
+
+  for (const pattern of wildcardExcludePatterns) {
+    const cached = wildcardPatternCache.get(pattern);
+    if (cached) {
+      wildcardLog.debug({ pattern, count: cached.tagNames.length, negated: true, source: "tags" }, "Cache HIT");
+      wildcardExcludeTagIds.push(...cached.tagIds);
+    } else {
+      const sqlPattern = wildcardToSqlPattern(pattern);
+      wildcardLog.debug({ pattern, sqlPattern, negated: true, source: "tags" }, "Cache MISS, querying");
+      const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
+        SELECT id, name, category FROM "Tag"
+        WHERE name ILIKE ${sqlPattern}
+        ORDER BY "postCount" DESC
+        LIMIT ${WILDCARD_TAG_LIMIT + 1}
+      `;
+      wildcardLog.debug(
+        { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name), negated: true, source: "tags" },
+        "Resolved wildcard"
+      );
+      const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
+      const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
+      const result: WildcardCacheEntry = {
+        tagIds: limitedTags.map((t) => t.id),
+        tagNames: limitedTags.map((t) => t.name),
+        tagCategories: limitedTags.map((t) => t.category),
+        truncated,
+      };
+      wildcardPatternCache.set(pattern, result);
+      wildcardExcludeTagIds.push(...result.tagIds);
+    }
+  }
+
+  // Step 2: Find tag IDs for regular (non-wildcard) selected tag names
   const tagIdsByName = new Map<string, number[]>();
   const excludeTagIdsByName = new Map<string, number[]>();
   const uncachedTagNames: string[] = [];
 
   // Gather included tag IDs
-  for (const tagName of selectedTags) {
+  for (const tagName of regularIncludeTags) {
     const cached = tagIdsByNameCache.get(tagName);
     if (cached !== undefined) {
       tagIdsByName.set(tagName, cached);
@@ -129,7 +233,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Gather excluded tag IDs
-  for (const tagName of excludeTags) {
+  for (const tagName of regularExcludeTags) {
     const cached = tagIdsByNameCache.get(tagName);
     if (cached !== undefined) {
       excludeTagIdsByName.set(tagName, cached);
@@ -161,26 +265,39 @@ export async function GET(request: NextRequest) {
     for (const [name, ids] of grouped) {
       tagIdsByNameCache.set(name, ids);
       // Add to the appropriate map based on whether it's an include or exclude tag
-      if (selectedTags.includes(name)) {
+      if (regularIncludeTags.includes(name)) {
         tagIdsByName.set(name, ids);
       }
-      if (excludeTags.includes(name)) {
+      if (regularExcludeTags.includes(name)) {
         excludeTagIdsByName.set(name, ids);
       }
     }
   }
 
-  // If not all selected tag names exist, no results possible
-  if (tagIdsByName.size !== selectedTags.length) {
+  // If not all regular selected tag names exist, no results possible
+  if (tagIdsByName.size !== regularIncludeTags.length) {
     return NextResponse.json({ tags: [] });
+  }
+
+  // Check if any wildcard include pattern matched nothing
+  for (const ids of wildcardIncludeTagIds) {
+    if (ids.length === 0) {
+      return NextResponse.json({ tags: [] });
+    }
   }
 
   // Get all tag IDs across all categories for exclusion from suggestions
   const allTagIds = [...tagIdsByName.values()].flat();
-  const tagGroups = [...tagIdsByName.values()];
+  // Include both regular tag groups and wildcard tag groups
+  const tagGroups = [...tagIdsByName.values(), ...wildcardIncludeTagIds];
 
-  // Get all excluded tag IDs
-  const allExcludeTagIds = [...excludeTagIdsByName.values()].flat();
+  // Get all excluded tag IDs (regular + wildcard)
+  const allExcludeTagIds = [
+    ...excludeTagIdsByName.values(),
+  ].flat().concat(wildcardExcludeTagIds);
+
+  // Include wildcard matched IDs in exclusion from suggestions
+  const allWildcardTagIds = wildcardIncludeTagIds.flat();
 
   // Step 2: Build query to find posts with at least one tag from each name group
   const hasSearchQuery = query.length > 0;
@@ -211,8 +328,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tags: [] });
   }
 
-  // Also exclude the excluded tag IDs from suggestions
-  const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds];
+  // Also exclude the excluded tag IDs and wildcard matched IDs from suggestions
+  const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds, ...allWildcardTagIds];
 
   // Use CTE to compute filtered posts once and reuse for both count and exclude_count
   // Conditionally include ILIKE filter only when there's a search query

@@ -721,4 +721,383 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(beach3.remainingCount).toBe(2); // 3 - 1 = 2
     });
   });
+
+  describe('wildcard patterns in selected tags', () => {
+    describe('include wildcard validation', () => {
+      it('should accept valid prefix wildcard pattern', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['character:saber', 'fate/stay night']);
+        await createPostWithTags(prisma, ['character:rin', 'fate/stay night']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=fate&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.tags).toHaveLength(1);
+        expect(data.tags[0].name).toBe('fate/stay night');
+      });
+
+      it('should accept valid suffix wildcard pattern', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['blue_eyes', 'smile']);
+        await createPostWithTags(prisma, ['red_eyes', 'smile']);
+        await createPostWithTags(prisma, ['green_eyes', 'frown']); // has *_eyes but not smile
+        await createPostWithTags(prisma, ['blonde_hair', 'other']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=*_eyes');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        // Should find 'smile' which co-occurs with 2/3 *_eyes posts (not omnipresent)
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('smile');
+        // 'other' only appears in non-*_eyes post
+        expect(names).not.toContain('other');
+      });
+
+      it('should reject standalone asterisk with 400', async () => {
+        const request = new NextRequest('http://localhost/api/tags/search?q=test&selected=*');
+        const response = await GET(request);
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('too broad');
+      });
+
+      it('should reject pattern with insufficient characters with 400', async () => {
+        const request = new NextRequest('http://localhost/api/tags/search?q=test&selected=a*');
+        const response = await GET(request);
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('at least 2');
+      });
+    });
+
+    describe('exclude wildcard validation', () => {
+      it('should accept valid negated wildcard pattern', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['base', 'character:saber', 'result_a']);
+        await createPostWithTags(prisma, ['base', 'other_tag', 'result_b']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=base,-character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        // Should only find result_b (from post without character:*)
+        expect(data.tags).toHaveLength(1);
+        expect(data.tags[0].name).toBe('result_b');
+      });
+
+      it('should reject negated standalone asterisk with 400', async () => {
+        const request = new NextRequest('http://localhost/api/tags/search?q=test&selected=-*');
+        const response = await GET(request);
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('Cannot exclude all');
+      });
+
+      it('should reject negated pattern with insufficient characters with 400', async () => {
+        const request = new NextRequest('http://localhost/api/tags/search?q=test&selected=-a*');
+        const response = await GET(request);
+
+        expect(response.status).toBe(400);
+        const data = await response.json();
+        expect(data.error).toContain('at least 2');
+      });
+    });
+
+    describe('include wildcard resolution', () => {
+      it('should find co-occurring tags from posts matching wildcard', async () => {
+        const prisma = getTestPrisma();
+        // Create posts with different character: tags
+        await createPostWithTags(prisma, ['character:saber', 'sword', 'blonde']);
+        await createPostWithTags(prisma, ['character:rin', 'magic', 'dark_hair']);
+        await createPostWithTags(prisma, ['character:archer', 'sword', 'dark_hair']);
+        // Create post without character: tag
+        await createPostWithTags(prisma, ['monster', 'scary']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        // sword appears in 2 of 3 character:* posts
+        expect(names).toContain('sword');
+        expect(names).toContain('dark_hair');
+        // scary only appears in non-character post
+        expect(names).not.toContain('scary');
+      });
+
+      it('should handle SQL special characters in pattern (underscore)', async () => {
+        const prisma = getTestPrisma();
+        // Tags with underscore
+        await createPostWithTags(prisma, ['blue_eyes', 'result_a']);
+        await createPostWithTags(prisma, ['red_eyes', 'result_b']);
+        // Tag without underscore that would match if _ wasn't escaped
+        await createPostWithTags(prisma, ['blueeyes', 'result_c']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=*_eyes');
+        const response = await GET(request);
+        const data = await response.json();
+
+        // Should only find results from posts with actual underscore tags
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('result_a');
+        expect(names).toContain('result_b');
+        // blueeyes doesn't match *_eyes pattern
+        expect(names).not.toContain('result_c');
+      });
+
+      it('should be case insensitive', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['Character:Saber', 'result_tag']);
+
+        // Lowercase pattern should match mixed case tag
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.tags).toHaveLength(1);
+        expect(data.tags[0].name).toBe('result_tag');
+      });
+
+      it('should return empty when wildcard matches no tags', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['some_tag', 'other_tag']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=test&selected=nonexistent:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.tags).toEqual([]);
+      });
+    });
+
+    describe('multiple wildcards (AND logic)', () => {
+      it('should require posts to match ALL include wildcards', async () => {
+        const prisma = getTestPrisma();
+        // Post with both patterns
+        await createPostWithTags(prisma, ['character:saber', 'series:fate', 'result_both']);
+        // Post with only character:*
+        await createPostWithTags(prisma, ['character:rin', 'other', 'result_char_only']);
+        // Post with only series:*
+        await createPostWithTags(prisma, ['series:naruto', 'ninja', 'result_series_only']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=character:*,series:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        // Should only find result from post with BOTH patterns
+        expect(data.tags).toHaveLength(1);
+        expect(data.tags[0].name).toBe('result_both');
+      });
+
+      it('should combine include wildcard with regular include tag', async () => {
+        const prisma = getTestPrisma();
+        // Post with wildcard match AND exact tag
+        await createPostWithTags(prisma, ['character:saber', 'blue eyes', 'result_match']);
+        // Post with wildcard match but NOT exact tag
+        await createPostWithTags(prisma, ['character:rin', 'red eyes', 'result_no_match']);
+        // Post with exact tag but NOT wildcard match
+        await createPostWithTags(prisma, ['blue eyes', 'other', 'result_no_wildcard']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=character:*,blue eyes');
+        const response = await GET(request);
+        const data = await response.json();
+
+        // Should only find result from post with BOTH
+        expect(data.tags).toHaveLength(1);
+        expect(data.tags[0].name).toBe('result_match');
+      });
+    });
+
+    describe('exclude wildcard filtering', () => {
+      it('should exclude posts matching wildcard pattern', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['base', 'character:saber', 'result_excluded']);
+        await createPostWithTags(prisma, ['base', 'character:rin', 'result_excluded_2']);
+        await createPostWithTags(prisma, ['base', 'no_character', 'result_kept']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=base,-character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('result_kept');
+        expect(names).not.toContain('result_excluded');
+        expect(names).not.toContain('result_excluded_2');
+      });
+
+      it('should handle multiple exclude wildcards', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['base', 'char:saber', 'result_char']);
+        await createPostWithTags(prisma, ['base', 'artist:someone', 'result_artist']);
+        await createPostWithTags(prisma, ['base', 'other_tag', 'result_kept']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=base,-char:*,-artist:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('result_kept');
+        expect(names).not.toContain('result_char');
+        expect(names).not.toContain('result_artist');
+      });
+
+      it('should combine regular exclude with wildcard exclude', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['base', 'exact_exclude', 'result_exact']);
+        await createPostWithTags(prisma, ['base', 'char:saber', 'result_wildcard']);
+        await createPostWithTags(prisma, ['base', 'safe_tag', 'result_kept']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=base,-exact_exclude,-char:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('result_kept');
+        expect(names).not.toContain('result_exact');
+        expect(names).not.toContain('result_wildcard');
+      });
+
+      it('should work with only negated wildcard in selection', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['character:saber', 'result_excluded']);
+        await createPostWithTags(prisma, ['character:rin', 'result_excluded_2']);
+        await createPostWithTags(prisma, ['no_character', 'result_kept']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=-character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        expect(names).toContain('result_kept');
+        expect(names).not.toContain('result_excluded');
+        expect(names).not.toContain('result_excluded_2');
+      });
+    });
+
+    describe('wildcard tags excluded from suggestions', () => {
+      it('should not include matched wildcard tags in suggestions', async () => {
+        const prisma = getTestPrisma();
+        // character:saber and character:rin should be matched by wildcard but not in suggestions
+        await createPostWithTags(prisma, ['character:saber', 'result_a']);
+        await createPostWithTags(prisma, ['character:rin', 'result_b']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        // The wildcard-matched tags should NOT appear in suggestions
+        expect(names).not.toContain('character:saber');
+        expect(names).not.toContain('character:rin');
+        // But result tags should appear
+        expect(names).toContain('result_a');
+        expect(names).toContain('result_b');
+      });
+    });
+
+    describe('remainingCount with wildcards', () => {
+      it('should calculate correct remainingCount with include wildcard', async () => {
+        const prisma = getTestPrisma();
+        // 4 posts with character:* tags
+        await createPostWithTags(prisma, ['character:saber', 'common_tag']);
+        await createPostWithTags(prisma, ['character:rin', 'common_tag']);
+        await createPostWithTags(prisma, ['character:archer', 'rare_tag']);
+        await createPostWithTags(prisma, ['character:lancer', 'rare_tag']);
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const commonTag = data.tags.find((t: { name: string }) => t.name === 'common_tag');
+        const rareTag = data.tags.find((t: { name: string }) => t.name === 'rare_tag');
+
+        // common_tag appears in 2 of 4 filtered posts
+        expect(commonTag.count).toBe(2);
+        expect(commonTag.remainingCount).toBe(2); // 4 - 2 = 2
+
+        // rare_tag appears in 2 of 4 filtered posts
+        expect(rareTag.count).toBe(2);
+        expect(rareTag.remainingCount).toBe(2); // 4 - 2 = 2
+      });
+
+      it('should calculate correct remainingCount with exclude wildcard', async () => {
+        const prisma = getTestPrisma();
+        // 5 posts with base tag
+        await createPostWithTags(prisma, ['base', 'common_tag']); // kept
+        await createPostWithTags(prisma, ['base', 'common_tag']); // kept
+        await createPostWithTags(prisma, ['base', 'rare_tag']); // kept
+        await createPostWithTags(prisma, ['base', 'char:a', 'common_tag']); // excluded
+        await createPostWithTags(prisma, ['base', 'char:b', 'rare_tag']); // excluded
+
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=base,-char:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        // Filtered set: 3 posts (without char:*)
+        const commonTag = data.tags.find((t: { name: string }) => t.name === 'common_tag');
+        const rareTag = data.tags.find((t: { name: string }) => t.name === 'rare_tag');
+
+        // common_tag appears in 2 of 3 filtered posts
+        expect(commonTag.count).toBe(2);
+        expect(commonTag.remainingCount).toBe(1); // 3 - 2 = 1
+
+        // rare_tag appears in 1 of 3 filtered posts
+        expect(rareTag.count).toBe(1);
+        expect(rareTag.remainingCount).toBe(2); // 3 - 1 = 2
+      });
+    });
+
+    describe('browse mode with wildcards', () => {
+      it('should return co-occurring tags with empty query and include wildcard', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['character:saber', 'sword', 'blonde']);
+        await createPostWithTags(prisma, ['character:rin', 'magic', 'dark_hair']);
+        await createPostWithTags(prisma, ['monster', 'scary']); // no character:*
+
+        // Empty query with wildcard in selected
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.tags.length).toBeGreaterThan(0);
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        // Tags from character:* posts should appear
+        expect(names).toContain('sword');
+        expect(names).toContain('magic');
+        // Tags only from non-character posts should not appear
+        expect(names).not.toContain('scary');
+      });
+
+      it('should filter omnipresent tags in browse mode with wildcard', async () => {
+        const prisma = getTestPrisma();
+        // 'omnipresent' appears in ALL character:* posts
+        await createPostWithTags(prisma, ['character:saber', 'omnipresent', 'partial']);
+        await createPostWithTags(prisma, ['character:rin', 'omnipresent', 'other']);
+        await createPostWithTags(prisma, ['character:archer', 'omnipresent']);
+
+        // Empty query - browse mode should filter omnipresent tags
+        const request = new NextRequest('http://localhost/api/tags/search?q=&selected=character:*');
+        const response = await GET(request);
+        const data = await response.json();
+
+        const names = data.tags.map((t: { name: string }) => t.name);
+        // 'omnipresent' is in ALL 3 filtered posts, remainingCount = 0 - should be filtered
+        expect(names).not.toContain('omnipresent');
+        // 'partial' is in 1/3 posts - should be included
+        expect(names).toContain('partial');
+      });
+    });
+  });
 });
