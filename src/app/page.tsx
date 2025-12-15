@@ -97,7 +97,10 @@ async function getHomeData() {
 export default async function HomePage({ searchParams }: HomePageProps) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page || "1", 10));
-  const sort = (params.sort as SortOption) || "newest";
+  const validSorts: SortOption[] = ["newest", "oldest", "random"];
+  const sort: SortOption = validSorts.includes(params.sort as SortOption)
+    ? (params.sort as SortOption)
+    : "newest";
   const seed = params.seed || "";
 
   // Redirect to include seed for stable random ordering across pagination
@@ -156,36 +159,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <>
           {/* Stats Dashboard - Hidden on mobile */}
           <div className="hidden md:block">
-            <Suspense
-              fallback={
-                <div className="grid grid-cols-3 gap-4 lg:grid-cols-6">
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="h-24 animate-pulse rounded-lg bg-zinc-800"
-                    />
-                  ))}
-                </div>
-              }
-            >
-              <StatsCards
-                stats={homeData.stats}
-                recentImports={homeData.recentImports}
-              />
-            </Suspense>
+            <StatsCards
+              stats={homeData.stats}
+              recentImports={homeData.recentImports}
+            />
           </div>
 
           {/* Popular Tags - Hidden on mobile */}
           <div className="hidden md:block">
-            <Suspense fallback={null}>
-              <PopularTags tags={homeData.popularTags} />
-            </Suspense>
+            <PopularTags tags={homeData.popularTags} />
           </div>
 
           {/* Random Highlights */}
-          <Suspense fallback={null}>
-            <RandomHighlights posts={homeData.randomPosts} />
-          </Suspense>
+          <RandomHighlights posts={homeData.randomPosts} />
         </>
       )}
 

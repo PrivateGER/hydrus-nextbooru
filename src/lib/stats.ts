@@ -177,7 +177,16 @@ export async function updateHomeStatsCache(): Promise<void> {
 /**
  * Get random posts for the homepage highlights.
  */
-export async function getRandomPosts(limit = 12) {
+export async function getRandomPosts(limit = 12): Promise<
+  Array<{
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+  }>
+> {
   // Generate a random seed for this request
   const seed = Math.random().toString(36).substring(2, 10);
 
