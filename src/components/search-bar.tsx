@@ -77,22 +77,34 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   const isExcludeMode = inputValue.startsWith("-");
   const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
 
-  // Fetch popular tags on focus
+  // Fetch popular/narrowing tags on focus
   const fetchPopularTags = useCallback(async () => {
-    if (searchQuery.length > 0 || selectedTags.length > 0 || suggestions.length > 0) return;
+    if (searchQuery.length > 0 || suggestions.length > 0) return;
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/tags/search?q=&limit=10');
+      const params = new URLSearchParams();
+      params.set("q", "");
+      params.set("limit", "25");
+      if (selectedTags.length > 0) {
+        params.set("selected", selectedTags.join(","));
+      }
+      const response = await fetch(`/api/tags/search?${params.toString()}`);
       const data = await response.json();
-      setSuggestions(data.tags);
+
+      // Filter out omnipresent tags when there are selected tags (they don't help narrow down)
+      const filtered = selectedTags.length > 0
+        ? data.tags.filter((t: TagSuggestion) => t.remainingCount > 0)
+        : data.tags;
+
+      setSuggestions(filtered);
       setShowSuggestions(true);
     } catch (error) {
-      console.error("Error fetching popular tags:", error);
+      console.error("Error fetching tags:", error);
     } finally {
       setIsLoading(false);
     }
-  }, [searchQuery, selectedTags.length, suggestions.length]);
+  }, [searchQuery, selectedTags, suggestions.length]);
 
   // Debounced search
   useEffect(() => {
@@ -158,6 +170,14 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Scroll highlighted suggestion into view
+  useEffect(() => {
+    if (highlightedIndex >= 0 && suggestionsRef.current) {
+      const highlighted = suggestionsRef.current.children[highlightedIndex] as HTMLElement;
+      highlighted?.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightedIndex]);
 
   const addTag = useCallback((tagName: string, negated: boolean = false) => {
     const normalizedTag = tagName.trim().toLowerCase();
