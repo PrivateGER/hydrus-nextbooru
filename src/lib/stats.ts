@@ -175,22 +175,27 @@ export async function updateHomeStatsCache(): Promise<void> {
 }
 
 /**
- * Get recently imported posts for the homepage.
- * This is dynamic since "recent" is relative to current time.
+ * Get random posts for the homepage highlights.
  */
-export async function getRecentPosts(limit = 12) {
-  return prisma.post.findMany({
-    orderBy: { importedAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      hash: true,
-      width: true,
-      height: true,
-      blurhash: true,
-      mimeType: true,
-    },
-  });
+export async function getRandomPosts(limit = 12) {
+  // Generate a random seed for this request
+  const seed = Math.random().toString(36).substring(2, 10);
+
+  return prisma.$queryRaw<
+    Array<{
+      id: number;
+      hash: string;
+      width: number | null;
+      height: number | null;
+      blurhash: string | null;
+      mimeType: string;
+    }>
+  >`
+    SELECT id, hash, width, height, blurhash, "mimeType"
+    FROM "Post"
+    ORDER BY MD5(hash || ${seed})
+    LIMIT ${limit}
+  `;
 }
 
 /**

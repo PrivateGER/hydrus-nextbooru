@@ -1,30 +1,67 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
 import { StatsCards } from "@/components/home/stats-cards";
 import { PopularTags } from "@/components/home/popular-tags";
-import { RecentPosts } from "@/components/home/recent-posts";
+import { RandomHighlights } from "@/components/home/random-highlights";
 import {
   getHomeStats,
   getPopularTags,
-  getRecentPosts,
+  getRandomPosts,
   getRecentImportCount,
 } from "@/lib/stats";
 
 const POSTS_PER_PAGE = 48;
 
+type SortOption = "newest" | "oldest" | "random";
+
 interface HomePageProps {
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; sort?: string; seed?: string }>;
 }
 
-async function getPosts(page: number) {
+async function getPosts(page: number, sort: SortOption, seed: string) {
   const skip = (page - 1) * POSTS_PER_PAGE;
+
+  // For random sorting, use raw query with MD5
+  if (sort === "random") {
+    const posts = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        hash: string;
+        width: number | null;
+        height: number | null;
+        blurhash: string | null;
+        mimeType: string;
+      }>
+    >`
+      SELECT id, hash, width, height, blurhash, "mimeType"
+      FROM "Post"
+      ORDER BY MD5(hash || ${seed})
+      LIMIT ${POSTS_PER_PAGE}
+      OFFSET ${skip}
+    `;
+
+    const totalCount = await prisma.post.count();
+
+    return {
+      posts,
+      totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
+      totalCount,
+    };
+  }
+
+  // Standard sorting
+  const orderBy: Prisma.PostOrderByWithRelationInput =
+    sort === "oldest" ? { importedAt: "asc" } : { importedAt: "desc" };
 
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
-      orderBy: { importedAt: "desc" },
+      orderBy,
       skip,
       take: POSTS_PER_PAGE,
       select: {
@@ -47,26 +84,63 @@ async function getPosts(page: number) {
 }
 
 async function getHomeData() {
-  const [stats, popularTags, recentPosts, recentImports] = await Promise.all([
+  const [stats, popularTags, randomPosts, recentImports] = await Promise.all([
     getHomeStats(),
     getPopularTags(8),
-    getRecentPosts(8),
+    getRandomPosts(8),
     getRecentImportCount(),
   ]);
 
-  return { stats, popularTags, recentPosts, recentImports };
+  return { stats, popularTags, randomPosts, recentImports };
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page || "1", 10));
-  const isFirstPage = page === 1;
+  const sort = (params.sort as SortOption) || "newest";
+  const seed = params.seed || "";
+
+  // Redirect to include seed for stable random ordering across pagination
+  if (sort === "random" && !seed) {
+    const newSeed = Math.random().toString(36).substring(2, 10);
+    redirect(`/?sort=random&seed=${newSeed}`);
+  }
+
+  const isFirstPage = page === 1 && sort === "newest";
+
+  // Build URL helper
+  function buildUrl(overrides: {
+    sort?: SortOption;
+    page?: number;
+    newSeed?: boolean;
+  }) {
+    const urlParams = new URLSearchParams();
+    const newSort = overrides.sort ?? sort;
+    const newPage = overrides.page ?? page;
+    const newSeed = overrides.newSeed
+      ? Math.random().toString(36).substring(2, 10)
+      : seed;
+
+    if (newSort !== "newest") urlParams.set("sort", newSort);
+    if (newPage > 1) urlParams.set("page", newPage.toString());
+    if (newSort === "random") urlParams.set("seed", newSeed);
+
+    const queryString = urlParams.toString();
+    return queryString ? `/?${queryString}` : "/";
+  }
 
   // Fetch posts for current page
-  const { posts, totalPages, totalCount } = await getPosts(page);
+  const { posts, totalPages, totalCount } = await getPosts(page, sort, seed);
 
-  // Only fetch homepage data on first page
+  // Only fetch homepage data on first page with default sort
   const homeData = isFirstPage ? await getHomeData() : null;
+
+  // Build basePath for pagination that preserves sort
+  const paginationBasePath = sort === "newest"
+    ? "/"
+    : sort === "random"
+      ? `/?sort=random&seed=${seed}`
+      : `/?sort=${sort}`;
 
   return (
     <div className="space-y-8">
@@ -77,7 +151,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </div>
       </div>
 
-      {/* Homepage sections - Only on first page */}
+      {/* Homepage sections - Only on first page with default sort */}
       {isFirstPage && homeData && (
         <>
           {/* Stats Dashboard */}
@@ -104,23 +178,61 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <PopularTags tags={homeData.popularTags} />
           </Suspense>
 
-          {/* Recent Imports */}
+          {/* Random Highlights */}
           <Suspense fallback={null}>
-            <RecentPosts posts={homeData.recentPosts} />
+            <RandomHighlights posts={homeData.randomPosts} />
           </Suspense>
         </>
       )}
 
       {/* Gallery Section */}
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        {/* Header with sort options */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <h2 className="text-xl font-semibold text-zinc-100">
             {isFirstPage ? "Browse Gallery" : "Gallery"}
           </h2>
-          <span className="text-sm text-zinc-400">
-            {totalCount.toLocaleString()} posts
-          </span>
+
+          <div className="flex items-center gap-3">
+            {/* Sort buttons */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-400">Sort:</span>
+              <div className="flex gap-1">
+                {(["newest", "oldest", "random"] as const).map((s) => (
+                  <Link
+                    key={s}
+                    href={buildUrl({
+                      sort: s,
+                      page: 1,
+                      newSeed: s === "random" && sort !== "random",
+                    })}
+                    className={`rounded px-2 py-1 text-sm capitalize transition-colors ${
+                      sort === s
+                        ? "bg-blue-600 text-white"
+                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-300"
+                    }`}
+                  >
+                    {s}
+                  </Link>
+                ))}
+              </div>
+              {/* Re-roll button for random */}
+              {sort === "random" && (
+                <Link
+                  href={buildUrl({ page: 1, newSeed: true })}
+                  className="rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-300"
+                  title="Shuffle again"
+                >
+                  🎲
+                </Link>
+              )}
+            </div>
+
+            {/* Post count */}
+            <span className="text-sm text-zinc-400">
+              {totalCount.toLocaleString()} posts
+            </span>
+          </div>
         </div>
 
         {/* Posts grid */}
@@ -145,7 +257,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <Pagination
             currentPage={page}
             totalPages={totalPages}
-            basePath="/"
+            basePath={paginationBasePath}
           />
         </Suspense>
       </div>

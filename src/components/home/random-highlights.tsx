@@ -10,18 +10,18 @@ interface Post {
   mimeType: string;
 }
 
-interface RecentPostsProps {
+interface RandomHighlightsProps {
   posts: Post[];
 }
 
-export function RecentPosts({ posts }: RecentPostsProps) {
+export function RandomHighlights({ posts }: RandomHighlightsProps) {
   if (posts.length === 0) {
     return null;
   }
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold text-zinc-100">Recent Imports</h2>
+      <h2 className="text-lg font-semibold text-zinc-100">Random Posts</h2>
 
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
         {posts.slice(0, 8).map((post) => (
