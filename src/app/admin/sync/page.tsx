@@ -58,6 +58,9 @@ export default function AdminSyncPage() {
   const [thumbStats, setThumbStats] = useState<ThumbnailStats | null>(null);
   const [isGeneratingThumbs, setIsGeneratingThumbs] = useState(false);
 
+  // Maintenance state
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
   // Translation settings state
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -315,6 +318,32 @@ export default function AdminSyncPage() {
         type: "error",
         text: error instanceof Error ? error.message : "Failed to clear thumbnails",
       });
+    }
+  };
+
+  const handleRecalculateStats = async () => {
+    setIsRecalculating(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/stats", {
+        method: "POST",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to recalculate stats");
+      }
+
+      setMessage({ type: "success", text: data.message });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to recalculate stats",
+      });
+    } finally {
+      setIsRecalculating(false);
     }
   };
 
@@ -640,6 +669,29 @@ export default function AdminSyncPage() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* Maintenance */}
+      <div className="rounded-lg bg-zinc-800 p-6">
+        <h2 className="mb-2 text-lg font-semibold">Maintenance</h2>
+        <p className="mb-4 text-sm text-zinc-400">
+          Recalculate tag counts and homepage statistics. This is done automatically after sync,
+          but can be triggered manually if needed.
+        </p>
+        <button
+          onClick={handleRecalculateStats}
+          disabled={isRecalculating || isSyncing}
+          className="rounded-lg bg-zinc-700 px-4 py-2 font-medium transition-colors hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isRecalculating ? (
+            <span className="flex items-center gap-2">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              Recalculating...
+            </span>
+          ) : (
+            "Recalculate All Stats"
+          )}
+        </button>
       </div>
 
       {/* Translation Settings */}
