@@ -287,7 +287,99 @@ describe('GET /api/tags/search (Integration)', () => {
         name: 'test tag',
         category: 'ARTIST',
         count: 1,
+        excludeCount: expect.any(Number),
       });
+    });
+  });
+
+  describe('excludeCount calculation', () => {
+    it('should return excludeCount for simple search (no selected tags)', async () => {
+      const prisma = getTestPrisma();
+
+      // Create 3 posts total, 2 with 'common tag', 1 with 'rare tag'
+      await createPostWithTags(prisma, ['common tag', 'other1']);
+      await createPostWithTags(prisma, ['common tag', 'other2']);
+      await createPostWithTags(prisma, ['rare tag', 'other3']);
+
+      // Initialize totalPostCount for simple search excludeCount calculation
+      await prisma.settings.upsert({
+        where: { key: 'stats.totalPostCount' },
+        update: { value: '3' },
+        create: { key: 'stats.totalPostCount', value: '3' },
+      });
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Find the tags in results
+      const commonTag = data.tags.find((t: { name: string }) => t.name === 'common tag');
+      const rareTag = data.tags.find((t: { name: string }) => t.name === 'rare tag');
+
+      // excludeCount = totalPosts - count
+      // For 'common tag': excludeCount = 3 - 2 = 1
+      expect(commonTag.count).toBe(2);
+      expect(commonTag.excludeCount).toBe(1);
+
+      // For 'rare tag': excludeCount = 3 - 1 = 2
+      expect(rareTag.count).toBe(1);
+      expect(rareTag.excludeCount).toBe(2);
+    });
+
+    it('should return excludeCount for co-occurrence search (with selected tags)', async () => {
+      const prisma = getTestPrisma();
+
+      // Create posts with different tag combinations
+      // Post 1: blue eyes, common hair, smile (filtered set member)
+      // Post 2: blue eyes, common hair, frown (filtered set member)
+      // Post 3: blue eyes, rare hair, neutral (filtered set member)
+      // Post 4: green eyes, common hair (not in filtered set - no blue eyes)
+      await createPostWithTags(prisma, ['blue eyes', 'common hair', 'smile']);
+      await createPostWithTags(prisma, ['blue eyes', 'common hair', 'frown']);
+      await createPostWithTags(prisma, ['blue eyes', 'rare hair', 'neutral']);
+      await createPostWithTags(prisma, ['green eyes', 'common hair']);
+
+      // Search with 'blue eyes' selected - filtered set has 3 posts
+      const request = new NextRequest('http://localhost/api/tags/search?q=hair&selected=blue eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const commonHair = data.tags.find((t: { name: string }) => t.name === 'common hair');
+      const rareHair = data.tags.find((t: { name: string }) => t.name === 'rare hair');
+
+      // 'common hair' appears in 2 of the 3 filtered posts
+      // excludeCount = 3 - 2 = 1
+      expect(commonHair.count).toBe(2);
+      expect(commonHair.excludeCount).toBe(1);
+
+      // 'rare hair' appears in 1 of the 3 filtered posts
+      // excludeCount = 3 - 1 = 2
+      expect(rareHair.count).toBe(1);
+      expect(rareHair.excludeCount).toBe(2);
+    });
+
+    it('should return excludeCount for co-occurrence with negated tags', async () => {
+      const prisma = getTestPrisma();
+
+      // Post 1: tag1, result_a (in filtered set)
+      // Post 2: tag1, result_b (in filtered set)
+      // Post 3: tag1, excluded_tag, result_c (NOT in filtered set due to exclusion)
+      await createPostWithTags(prisma, ['tag1', 'result_a']);
+      await createPostWithTags(prisma, ['tag1', 'result_b']);
+      await createPostWithTags(prisma, ['tag1', 'excluded_tag', 'result_c']);
+
+      // Require tag1, exclude excluded_tag - filtered set has 2 posts
+      const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=tag1,-excluded_tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Both result_a and result_b appear in 1 post each
+      // excludeCount = 2 - 1 = 1 for each
+      expect(data.tags).toHaveLength(2);
+      for (const tag of data.tags) {
+        expect(tag.count).toBe(1);
+        expect(tag.excludeCount).toBe(1);
+      }
     });
   });
 

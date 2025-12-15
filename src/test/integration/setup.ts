@@ -83,4 +83,6 @@ export async function cleanDatabase(): Promise<void> {
   await p.tag.deleteMany();
   await p.group.deleteMany();
   await p.syncState.deleteMany();
+  // Clear stats settings for test isolation
+  await p.settings.deleteMany({ where: { key: { startsWith: 'stats.' } } });
 }

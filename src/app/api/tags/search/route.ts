@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, escapeSqlLike } from "@/lib/db";
+import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
@@ -57,6 +57,9 @@ export async function GET(request: NextRequest) {
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount
   if (selectedTags.length === 0 && excludeTags.length === 0) {
+    // Get precomputed total from Settings for excludeCount calculation
+    let totalPosts = await getTotalPostCount();
+
     const tags = await prisma.tag.findMany({
       where: withBlacklistFilter({
         name: {
@@ -80,6 +83,7 @@ export async function GET(request: NextRequest) {
         name: tag.name,
         category: tag.category,
         count: tag.postCount,
+        excludeCount: Math.max(0, totalPosts - tag.postCount),
       })),
     });
   }
@@ -186,18 +190,28 @@ export async function GET(request: NextRequest) {
   // Also exclude the excluded tag IDs from suggestions
   const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds];
 
+  // Use CTE to compute filtered posts once and reuse for both count and exclude_count
   const coOccurringTags = await prisma.$queryRaw<Array<{
     id: number;
     name: string;
     category: string;
     count: bigint;
+    exclude_count: bigint;
   }>>`
-    SELECT t.id, t.name, t.category, COUNT(*)::bigint as count
+    WITH filtered_posts AS (
+      ${postSubquery}
+    ),
+    filtered_total AS (
+      SELECT COUNT(*)::bigint as total FROM filtered_posts
+    )
+    SELECT t.id, t.name, t.category,
+           COUNT(pt."postId")::bigint as count,
+           (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as exclude_count
     FROM "Tag" t
     JOIN "PostTag" pt ON t.id = pt."tagId"
     WHERE t.name ILIKE ${searchPattern}
       AND t.id != ALL(${allExcludedFromSuggestions}::int[])
-      AND pt."postId" IN (${postSubquery})
+      AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
     GROUP BY t.id, t.name, t.category
     ORDER BY count DESC
     LIMIT ${limit * 2}
@@ -209,6 +223,7 @@ export async function GET(request: NextRequest) {
     name: tag.name,
     category: tag.category,
     count: Number(tag.count),
+    excludeCount: Math.max(0, Number(tag.exclude_count)),
   }));
 
   const filteredTags = filterBlacklistedTags(mappedTags)
