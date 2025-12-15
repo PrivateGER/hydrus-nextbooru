@@ -146,6 +146,11 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
     return () => clearTimeout(timer);
   }, [searchQuery, selectedTags, isExcludeMode]);
 
+  // Reset highlight when mode changes
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [isExcludeMode]);
+
   // Sort and filter suggestions based on mode
   // In exclude mode: show count (posts to remove), filter out omnipresent tags, sort by most impactful
   const displaySuggestions = isExcludeMode
@@ -297,11 +302,11 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
               <button
                 type="button"
                 onClick={() => toggleNegation(tag)}
-                className={`px-2 py-0.5 rounded-l hover:bg-white/10 ${negated ? "line-through opacity-80" : ""}`}
+                className="px-2 py-0.5 rounded-l hover:bg-white/10"
                 title={negated ? "Click to include" : "Click to exclude"}
               >
-                {negated && <span className="text-red-400 font-bold no-underline">-</span>}
-                {displayName}
+                {negated && <span className="text-red-400 font-bold">-</span>}
+                <span className={negated ? "line-through opacity-80" : ""}>{displayName}</span>
               </button>
               <button
                 type="button"
