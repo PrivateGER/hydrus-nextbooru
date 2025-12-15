@@ -146,6 +146,8 @@ export interface ResolvedWildcard {
   tagIds: number[];
   /** Matched tag names (for UI display) */
   tagNames: string[];
+  /** Matched tag categories (for UI display) */
+  tagCategories: string[];
   /** Whether the result was truncated due to limit */
   truncated: boolean;
 }

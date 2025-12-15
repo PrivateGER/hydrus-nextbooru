@@ -12,8 +12,17 @@ import {
   ResolvedWildcard,
 } from "@/lib/wildcard";
 import { wildcardLog } from "@/lib/logger";
+import { TagCategory } from "@/generated/prisma/client";
 
 const POSTS_PER_PAGE = 48;
+
+const CATEGORY_COLORS: Record<TagCategory, string> = {
+  [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
+  [TagCategory.COPYRIGHT]: "bg-purple-900/50 text-purple-300 border-purple-700",
+  [TagCategory.CHARACTER]: "bg-green-900/50 text-green-300 border-green-700",
+  [TagCategory.GENERAL]: "bg-blue-900/50 text-blue-300 border-blue-700",
+  [TagCategory.META]: "bg-orange-900/50 text-orange-300 border-orange-700",
+};
 
 interface SearchPageProps {
   searchParams: Promise<{ tags?: string; page?: string }>;
@@ -61,8 +70,8 @@ async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEnt
   const sqlPattern = wildcardToSqlPattern(pattern);
   wildcardLog.debug({ pattern, sqlPattern, source: "page" }, "Cache MISS, querying");
 
-  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
-    SELECT id, name FROM "Tag"
+  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
+    SELECT id, name, category FROM "Tag"
     WHERE name ILIKE ${sqlPattern}
     ORDER BY "postCount" DESC
     LIMIT ${WILDCARD_TAG_LIMIT + 1}
@@ -74,9 +83,11 @@ async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEnt
   );
 
   const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
+  const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
   const result: WildcardCacheEntry = {
-    tagIds: matchingTags.slice(0, WILDCARD_TAG_LIMIT).map((t) => t.id),
-    tagNames: matchingTags.slice(0, WILDCARD_TAG_LIMIT).map((t) => t.name),
+    tagIds: limitedTags.map((t) => t.id),
+    tagNames: limitedTags.map((t) => t.name),
+    tagCategories: limitedTags.map((t) => t.category),
     truncated,
   };
 
@@ -155,6 +166,7 @@ async function searchPosts(tags: string[], page: number) {
       negated: false,
       tagIds: resolved.tagIds,
       tagNames: resolved.tagNames,
+      tagCategories: resolved.tagCategories,
       truncated: resolved.truncated,
     });
   }
@@ -167,6 +179,7 @@ async function searchPosts(tags: string[], page: number) {
       negated: true,
       tagIds: resolved.tagIds,
       tagNames: resolved.tagNames,
+      tagCategories: resolved.tagCategories,
       truncated: resolved.truncated,
     });
   }
@@ -283,6 +296,59 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       {error && (
         <div className="rounded-lg bg-red-900/50 border border-red-700 p-4 text-center">
           <p className="text-red-300">{error}</p>
+        </div>
+      )}
+
+      {/* Wildcard expansion summary */}
+      {resolvedWildcards.length > 0 && (
+        <div className="rounded-lg bg-zinc-800/50 border border-zinc-700 p-3 text-sm">
+          <div className="text-zinc-400 text-xs uppercase tracking-wide mb-2">
+            Wildcard expansions
+          </div>
+          <div className="space-y-1">
+            {resolvedWildcards.map((w) => (
+              <details key={w.pattern} className="group">
+                <summary className="cursor-pointer list-none flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-700/50 transition-colors">
+                  <span className="text-zinc-500 group-open:rotate-90 transition-transform">▶</span>
+                  <span className={w.negated ? "text-red-400 line-through" : "text-purple-400"}>
+                    {w.negated ? `-${w.pattern.slice(1)}` : w.pattern}
+                  </span>
+                  <span className="text-zinc-500">→</span>
+                  <span className="text-zinc-300 truncate flex-1">
+                    {w.tagNames.join(", ")}
+                  </span>
+                  <span className="text-zinc-500 text-xs whitespace-nowrap">
+                    ({w.tagIds.length}{w.truncated ? "+" : ""} {w.tagIds.length === 1 ? "tag" : "tags"})
+                  </span>
+                </summary>
+                <div className="pl-7 pr-2 pb-2 pt-1">
+                  {w.tagNames.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {w.tagNames.map((name, idx) => {
+                        const category = w.tagCategories[idx] as TagCategory;
+                        const colorClass = CATEGORY_COLORS[category] || "bg-zinc-700 text-zinc-300";
+                        return (
+                          <span
+                            key={name}
+                            className={`px-2 py-0.5 rounded border text-xs ${colorClass}`}
+                          >
+                            {name.replace(/_/g, " ")}
+                          </span>
+                        );
+                      })}
+                      {w.truncated && (
+                        <span className="px-2 py-0.5 rounded bg-zinc-600 text-zinc-400 text-xs italic border border-zinc-500">
+                          +more (limit {w.tagIds.length})
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-zinc-500 italic">No matching tags found</span>
+                  )}
+                </div>
+              </details>
+            ))}
+          </div>
         </div>
       )}
 

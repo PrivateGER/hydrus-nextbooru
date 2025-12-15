@@ -122,6 +122,7 @@ const WILDCARD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 export interface WildcardCacheEntry {
   tagIds: number[];
   tagNames: string[];
+  tagCategories: string[];
   truncated: boolean;
 }
 export const wildcardPatternCache = new TTLCache<WildcardCacheEntry>(500, WILDCARD_CACHE_TTL);

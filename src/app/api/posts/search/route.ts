@@ -63,8 +63,8 @@ async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEnt
   const sqlPattern = wildcardToSqlPattern(pattern);
   wildcardLog.debug({ pattern, sqlPattern }, "Cache MISS, querying");
 
-  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
-    SELECT id, name FROM "Tag"
+  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
+    SELECT id, name, category FROM "Tag"
     WHERE name ILIKE ${sqlPattern}
     ORDER BY "postCount" DESC
     LIMIT ${WILDCARD_TAG_LIMIT + 1}
@@ -76,9 +76,11 @@ async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEnt
   );
 
   const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
+  const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
   const result: WildcardCacheEntry = {
-    tagIds: matchingTags.slice(0, WILDCARD_TAG_LIMIT).map((t) => t.id),
-    tagNames: matchingTags.slice(0, WILDCARD_TAG_LIMIT).map((t) => t.name),
+    tagIds: limitedTags.map((t) => t.id),
+    tagNames: limitedTags.map((t) => t.name),
+    tagCategories: limitedTags.map((t) => t.category),
     truncated,
   };
 
@@ -170,6 +172,7 @@ export async function GET(request: NextRequest) {
       negated: false,
       tagIds: resolved.tagIds,
       tagNames: resolved.tagNames,
+      tagCategories: resolved.tagCategories,
       truncated: resolved.truncated,
     });
   }
@@ -184,6 +187,7 @@ export async function GET(request: NextRequest) {
       negated: true,
       tagIds: resolved.tagIds,
       tagNames: resolved.tagNames,
+      tagCategories: resolved.tagCategories,
       truncated: resolved.truncated,
     });
   }
