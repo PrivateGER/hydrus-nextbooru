@@ -51,9 +51,31 @@ export async function GET(request: NextRequest) {
   // Parse selected tags with negation support
   const { includeTags: selectedTags, excludeTags } = parseSelectedTagsWithNegation(selectedParam);
 
-  // Return empty if no query AND no selected tags
+  // Return popular tags if no query AND no selected tags (for initial suggestions)
   if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
-    return NextResponse.json({ tags: [] });
+    const totalPosts = await getTotalPostCount();
+
+    const tags = await prisma.tag.findMany({
+      where: withBlacklistFilter({}),
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        postCount: true,
+      },
+      orderBy: { postCount: "desc" },
+      take: limit,
+    });
+
+    return NextResponse.json({
+      tags: tags.map((tag) => ({
+        id: tag.id,
+        name: tag.name,
+        category: tag.category,
+        count: tag.postCount,
+        excludeCount: Math.max(0, totalPosts - tag.postCount),
+      })),
+    });
   }
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount

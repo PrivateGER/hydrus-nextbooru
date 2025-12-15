@@ -77,11 +77,36 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   const isExcludeMode = inputValue.startsWith("-");
   const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
 
+  // Fetch popular tags on focus
+  const fetchPopularTags = useCallback(async () => {
+    if (searchQuery.length > 0 || selectedTags.length > 0 || suggestions.length > 0) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/tags/search?q=&limit=10');
+      const data = await response.json();
+      setSuggestions(data.tags);
+      setShowSuggestions(true);
+    } catch (error) {
+      console.error("Error fetching popular tags:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [searchQuery, selectedTags.length, suggestions.length]);
+
   // Debounced search
   useEffect(() => {
-    // Allow search with empty query when in exclude mode with selected tags
-    if (searchQuery.length < 1 && !(isExcludeMode && selectedTags.length > 0)) {
-      setSuggestions([]);
+    // Allow search with empty query when:
+    // - In exclude mode with selected tags, OR
+    // - No selected tags (to show popular tags - handled by API)
+    const shouldFetch = searchQuery.length > 0 ||
+      (isExcludeMode && selectedTags.length > 0);
+
+    if (!shouldFetch) {
+      // Don't clear suggestions if showing popular tags
+      if (selectedTags.length > 0) {
+        setSuggestions([]);
+      }
       return;
     }
 
@@ -110,10 +135,11 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   }, [searchQuery, selectedTags, isExcludeMode]);
 
   // Sort and filter suggestions based on mode
+  // In exclude mode: show count (posts to remove), filter out omnipresent tags, sort by most impactful
   const displaySuggestions = isExcludeMode
     ? suggestions
-        .filter((s) => s.excludeCount > 0)
-        .sort((a, b) => b.excludeCount - a.excludeCount)
+        .filter((s) => s.excludeCount > 0) // Hide omnipresent tags (would leave 0 posts)
+        .sort((a, b) => b.count - a.count) // Sort by posts to remove (most impactful first)
     : suggestions;
 
   // Close suggestions on click outside
@@ -266,7 +292,13 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          onFocus={() => inputValue && setShowSuggestions(true)}
+          onFocus={() => {
+            if (inputValue) {
+              setShowSuggestions(true);
+            } else {
+              fetchPopularTags();
+            }
+          }}
           placeholder={selectedTags.length === 0 ? placeholder : ""}
           className="min-w-[100px] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-500"
         />
@@ -304,7 +336,7 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
                 </span>
               </button>
               <span className={`text-xs ${isExcludeMode ? "text-red-400" : "text-zinc-500"}`}>
-                {isExcludeMode ? `-${suggestion.excludeCount}` : suggestion.count}
+                {isExcludeMode ? `-${suggestion.count}` : suggestion.count}
               </span>
             </div>
           ))}
