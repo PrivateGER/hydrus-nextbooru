@@ -287,13 +287,13 @@ describe('GET /api/tags/search (Integration)', () => {
         name: 'test tag',
         category: 'ARTIST',
         count: 1,
-        excludeCount: expect.any(Number),
+        remainingCount: expect.any(Number),
       });
     });
   });
 
-  describe('excludeCount calculation', () => {
-    it('should return excludeCount for simple search (no selected tags)', async () => {
+  describe('remainingCount calculation', () => {
+    it('should return remainingCount for simple search (no selected tags)', async () => {
       const prisma = getTestPrisma();
 
       // Create 3 posts total, 2 with 'common tag', 1 with 'rare tag'
@@ -301,7 +301,7 @@ describe('GET /api/tags/search (Integration)', () => {
       await createPostWithTags(prisma, ['common tag', 'other2']);
       await createPostWithTags(prisma, ['rare tag', 'other3']);
 
-      // Initialize totalPostCount for simple search excludeCount calculation
+      // Initialize totalPostCount for simple search remainingCount calculation
       await prisma.settings.upsert({
         where: { key: 'stats.totalPostCount' },
         update: { value: '3' },
@@ -316,17 +316,17 @@ describe('GET /api/tags/search (Integration)', () => {
       const commonTag = data.tags.find((t: { name: string }) => t.name === 'common tag');
       const rareTag = data.tags.find((t: { name: string }) => t.name === 'rare tag');
 
-      // excludeCount = totalPosts - count
-      // For 'common tag': excludeCount = 3 - 2 = 1
+      // remainingCount = totalPosts - count
+      // For 'common tag': remainingCount = 3 - 2 = 1
       expect(commonTag.count).toBe(2);
-      expect(commonTag.excludeCount).toBe(1);
+      expect(commonTag.remainingCount).toBe(1);
 
-      // For 'rare tag': excludeCount = 3 - 1 = 2
+      // For 'rare tag': remainingCount = 3 - 1 = 2
       expect(rareTag.count).toBe(1);
-      expect(rareTag.excludeCount).toBe(2);
+      expect(rareTag.remainingCount).toBe(2);
     });
 
-    it('should return excludeCount for co-occurrence search (with selected tags)', async () => {
+    it('should return remainingCount for co-occurrence search (with selected tags)', async () => {
       const prisma = getTestPrisma();
 
       // Create posts with different tag combinations
@@ -348,17 +348,17 @@ describe('GET /api/tags/search (Integration)', () => {
       const rareHair = data.tags.find((t: { name: string }) => t.name === 'rare hair');
 
       // 'common hair' appears in 2 of the 3 filtered posts
-      // excludeCount = 3 - 2 = 1
+      // remainingCount = 3 - 2 = 1
       expect(commonHair.count).toBe(2);
-      expect(commonHair.excludeCount).toBe(1);
+      expect(commonHair.remainingCount).toBe(1);
 
       // 'rare hair' appears in 1 of the 3 filtered posts
-      // excludeCount = 3 - 1 = 2
+      // remainingCount = 3 - 1 = 2
       expect(rareHair.count).toBe(1);
-      expect(rareHair.excludeCount).toBe(2);
+      expect(rareHair.remainingCount).toBe(2);
     });
 
-    it('should return excludeCount for co-occurrence with negated tags', async () => {
+    it('should return remainingCount for co-occurrence with negated tags', async () => {
       const prisma = getTestPrisma();
 
       // Post 1: tag1, result_a (in filtered set)
@@ -374,11 +374,11 @@ describe('GET /api/tags/search (Integration)', () => {
       const data = await response.json();
 
       // Both result_a and result_b appear in 1 post each
-      // excludeCount = 2 - 1 = 1 for each
+      // remainingCount = 2 - 1 = 1 for each
       expect(data.tags).toHaveLength(2);
       for (const tag of data.tags) {
         expect(tag.count).toBe(1);
-        expect(tag.excludeCount).toBe(1);
+        expect(tag.remainingCount).toBe(1);
       }
     });
   });
@@ -473,7 +473,7 @@ describe('GET /api/tags/search (Integration)', () => {
       // Should return co-occurring tags (not empty)
       expect(data.tags.length).toBeGreaterThan(0);
       const names = data.tags.map((t: { name: string }) => t.name);
-      // cooccur_a appears in 2/3 posts, so excludeCount = 1 (not omnipresent)
+      // cooccur_a appears in 2/3 posts, so remainingCount = 1 (not omnipresent)
       expect(names).toContain('cooccur_a');
     });
 
@@ -493,10 +493,10 @@ describe('GET /api/tags/search (Integration)', () => {
 
       const names = data.tags.map((t: { name: string }) => t.name);
 
-      // 'omnipresent' is in ALL 3 filtered posts, so excludeCount = 0 - should be filtered out
+      // 'omnipresent' is in ALL 3 filtered posts, so remainingCount = 0 - should be filtered out
       expect(names).not.toContain('omnipresent');
 
-      // 'partial' is in 1/3 posts, excludeCount = 2 - should be included
+      // 'partial' is in 1/3 posts, remainingCount = 2 - should be included
       expect(names).toContain('partial');
     });
 
@@ -520,8 +520,8 @@ describe('GET /api/tags/search (Integration)', () => {
     });
   });
 
-  describe('multiple exclusion tags excludeCount accuracy', () => {
-    it('should calculate accurate excludeCount in browse mode (empty query) with existing exclusions', async () => {
+  describe('multiple exclusion tags remainingCount accuracy', () => {
+    it('should calculate accurate remainingCount in browse mode (empty query) with existing exclusions', async () => {
       const prisma = getTestPrisma();
 
       // Setup: same scenario but test empty query (browse mode)
@@ -553,16 +553,16 @@ describe('GET /api/tags/search (Integration)', () => {
       const resultTag = data.tags.find((t: { name: string }) => t.name === 'result_tag');
       expect(resultTag).toBeDefined();
       expect(resultTag.count).toBe(4);
-      expect(resultTag.excludeCount).toBe(2); // 6 - 4 = 2
+      expect(resultTag.remainingCount).toBe(2); // 6 - 4 = 2
 
       // exclude_b appears only in post 8 (out of filtered 6)
       const excludeB = data.tags.find((t: { name: string }) => t.name === 'exclude_b');
       expect(excludeB).toBeDefined();
       expect(excludeB.count).toBe(1);
-      expect(excludeB.excludeCount).toBe(5); // 6 - 1 = 5
+      expect(excludeB.remainingCount).toBe(5); // 6 - 1 = 5
     });
 
-    it('should calculate accurate excludeCount with multiple combined exclusions', async () => {
+    it('should calculate accurate remainingCount with multiple combined exclusions', async () => {
       const prisma = getTestPrisma();
 
       // Set up a controlled scenario:
@@ -602,9 +602,9 @@ describe('GET /api/tags/search (Integration)', () => {
       const data1 = await response1.json();
       const resultTag1 = data1.tags.find((t: { name: string }) => t.name === 'result_tag');
 
-      // result_tag appears in 6 of 10 posts, excludeCount = 4
+      // result_tag appears in 6 of 10 posts, remainingCount = 4
       expect(resultTag1.count).toBe(6);
-      expect(resultTag1.excludeCount).toBe(4);
+      expect(resultTag1.remainingCount).toBe(4);
 
       // Test 2: base_tag selected, exclude_a excluded
       // Filtered set: 10 - 4 = 6 posts (posts 1, 2, 3, 4, 5, 8)
@@ -615,7 +615,7 @@ describe('GET /api/tags/search (Integration)', () => {
       const resultTag2 = data2.tags.find((t: { name: string }) => t.name === 'result_tag');
 
       expect(resultTag2.count).toBe(4);
-      expect(resultTag2.excludeCount).toBe(2); // 6 - 4 = 2
+      expect(resultTag2.remainingCount).toBe(2); // 6 - 4 = 2
 
       // Test 3: base_tag selected, exclude_a AND exclude_b excluded
       // Filtered set: posts that have base_tag but NOT exclude_a AND NOT exclude_b
@@ -627,10 +627,10 @@ describe('GET /api/tags/search (Integration)', () => {
       const resultTag3 = data3.tags.find((t: { name: string }) => t.name === 'result_tag');
 
       expect(resultTag3.count).toBe(3);
-      expect(resultTag3.excludeCount).toBe(2); // 5 - 3 = 2
+      expect(resultTag3.remainingCount).toBe(2); // 5 - 3 = 2
     });
 
-    it('should show updated excludeCounts when progressively adding exclusions', async () => {
+    it('should show updated remainingCounts when progressively adding exclusions', async () => {
       const prisma = getTestPrisma();
 
       // Scenario: User searches for "swimsuit" and progressively excludes tags
@@ -681,15 +681,15 @@ describe('GET /api/tags/search (Integration)', () => {
       const bikini1 = data1.tags.find((t: { name: string }) => t.name === 'bikini');
       const onepiece1 = data1.tags.find((t: { name: string }) => t.name === 'one_piece');
 
-      // bikini appears in 3 of 8 posts, excludeCount = 5
+      // bikini appears in 3 of 8 posts, remainingCount = 5
       expect(bikini1.count).toBe(3);
-      expect(bikini1.excludeCount).toBe(5);
+      expect(bikini1.remainingCount).toBe(5);
 
-      // one_piece appears in 3 of 8 posts, excludeCount = 5
+      // one_piece appears in 3 of 8 posts, remainingCount = 5
       expect(onepiece1.count).toBe(3);
-      expect(onepiece1.excludeCount).toBe(5);
+      expect(onepiece1.remainingCount).toBe(5);
 
-      // Step 2: Add -bikini exclusion, check one_piece's excludeCount
+      // Step 2: Add -bikini exclusion, check one_piece's remainingCount
       // Filtered set: 8 - 3 = 5 posts (1, 2, 3, 6, 7 - those without bikini)
       const request2 = new NextRequest('http://localhost/api/tags/search?q=&selected=swimsuit,-bikini');
       const response2 = await GET(request2);
@@ -698,9 +698,9 @@ describe('GET /api/tags/search (Integration)', () => {
       const onepiece2 = data2.tags.find((t: { name: string }) => t.name === 'one_piece');
 
       // one_piece appears in posts 6, 7 (post 8 was excluded because it has bikini)
-      // So one_piece.count = 2, excludeCount = 5 - 2 = 3
+      // So one_piece.count = 2, remainingCount = 5 - 2 = 3
       expect(onepiece2.count).toBe(2);
-      expect(onepiece2.excludeCount).toBe(3);
+      expect(onepiece2.remainingCount).toBe(3);
 
       // Step 3: Add -one_piece exclusion as well
       // Filtered set: posts without bikini AND without one_piece
@@ -714,11 +714,11 @@ describe('GET /api/tags/search (Integration)', () => {
 
       // pool appears in posts 1, 2 (out of filtered 3)
       expect(pool3.count).toBe(2);
-      expect(pool3.excludeCount).toBe(1); // 3 - 2 = 1
+      expect(pool3.remainingCount).toBe(1); // 3 - 2 = 1
 
       // beach appears in post 3 (out of filtered 3)
       expect(beach3.count).toBe(1);
-      expect(beach3.excludeCount).toBe(2); // 3 - 1 = 2
+      expect(beach3.remainingCount).toBe(2); // 3 - 1 = 2
     });
   });
 });

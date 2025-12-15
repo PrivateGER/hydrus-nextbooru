@@ -73,14 +73,14 @@ export async function GET(request: NextRequest) {
         name: tag.name,
         category: tag.category,
         count: tag.postCount,
-        excludeCount: Math.max(0, totalPosts - tag.postCount),
+        remainingCount: Math.max(0, totalPosts - tag.postCount),
       })),
     });
   }
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount
   if (selectedTags.length === 0 && excludeTags.length === 0) {
-    // Get precomputed total from Settings for excludeCount calculation
+    // Get precomputed total from Settings for remainingCount calculation
     let totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
         name: tag.name,
         category: tag.category,
         count: tag.postCount,
-        excludeCount: Math.max(0, totalPosts - tag.postCount),
+        remainingCount: Math.max(0, totalPosts - tag.postCount),
       })),
     });
   }
@@ -220,7 +220,7 @@ export async function GET(request: NextRequest) {
     ? Prisma.sql`t.name ILIKE ${searchPattern} AND`
     : Prisma.sql``;
 
-  // When browsing (no query), filter out omnipresent tags (excludeCount = 0)
+  // When browsing (no query), filter out omnipresent tags (remainingCount = 0)
   const excludeOmnipresent = hasSearchQuery
     ? Prisma.sql``
     : Prisma.sql`HAVING (SELECT total FROM filtered_total) - COUNT(pt."postId") > 0`;
@@ -230,7 +230,7 @@ export async function GET(request: NextRequest) {
     name: string;
     category: string;
     count: bigint;
-    exclude_count: bigint;
+    remaining_count: bigint;
   }>>`
     WITH filtered_posts AS (
       ${postSubquery}
@@ -240,7 +240,7 @@ export async function GET(request: NextRequest) {
     )
     SELECT t.id, t.name, t.category,
            COUNT(pt."postId")::bigint as count,
-           (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as exclude_count
+           (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as remaining_count
     FROM "Tag" t
     JOIN "PostTag" pt ON t.id = pt."tagId"
     WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
@@ -257,7 +257,7 @@ export async function GET(request: NextRequest) {
     name: tag.name,
     category: tag.category,
     count: Number(tag.count),
-    excludeCount: Math.max(0, Number(tag.exclude_count)),
+    remainingCount: Math.max(0, Number(tag.remaining_count)),
   }));
 
   const filteredTags = filterBlacklistedTags(mappedTags)

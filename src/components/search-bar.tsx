@@ -9,7 +9,7 @@ interface TagSuggestion {
   name: string;
   category: TagCategory;
   count: number;
-  excludeCount: number;
+  remainingCount: number;
 }
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
@@ -138,7 +138,7 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   // In exclude mode: show count (posts to remove), filter out omnipresent tags, sort by most impactful
   const displaySuggestions = isExcludeMode
     ? suggestions
-        .filter((s) => s.excludeCount > 0) // Hide omnipresent tags (would leave 0 posts)
+        .filter((s) => s.remainingCount > 0) // Hide omnipresent tags (would leave 0 posts)
         .sort((a, b) => b.count - a.count) // Sort by posts to remove (most impactful first)
     : suggestions;
 
