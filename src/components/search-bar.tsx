@@ -227,8 +227,17 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
   }, [selectedTags, router]);
 
   const removeTag = useCallback((tagName: string) => {
-    setSelectedTags((prev) => prev.filter((t) => t !== tagName));
-  }, []);
+    const newTags = selectedTags.filter((t) => t !== tagName);
+    setSelectedTags(newTags);
+    // Navigate to search with updated tags (consistent with toggleNegation)
+    if (newTags.length > 0) {
+      const params = new URLSearchParams();
+      params.set("tags", newTags.join(","));
+      router.push(`/search?${params.toString()}`);
+    } else {
+      router.push('/search');
+    }
+  }, [selectedTags, router]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
