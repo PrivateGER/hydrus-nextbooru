@@ -103,8 +103,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     : "newest";
   const seed = params.seed || "";
 
+  // Validate seed format (alphanumeric, 8 chars)
+  const isValidSeed = /^[a-z0-9]{8}$/.test(seed);
+
   // Redirect to include seed for stable random ordering across pagination
   if (sort === "random" && !seed) {
+    const newSeed = Math.random().toString(36).substring(2, 10);
+    redirect(`/?sort=random&seed=${newSeed}`);
+  }
+
+  // Redirect if seed is invalid for random sort
+  if (sort === "random" && seed && !isValidSeed) {
     const newSeed = Math.random().toString(36).substring(2, 10);
     redirect(`/?sort=random&seed=${newSeed}`);
   }
