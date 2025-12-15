@@ -258,4 +258,141 @@ describe('GET /api/posts/search (Integration)', () => {
       expect(data.posts).toHaveLength(1);
     });
   });
+
+  describe('wildcard search', () => {
+    it('should find posts with tags matching prefix wildcard', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['character:saber']);
+      await createPostWithTags(prisma, ['character:rin']);
+      await createPostWithTags(prisma, ['artist:someone']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=character:*');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+      expect(data.resolvedWildcards).toBeDefined();
+      expect(data.resolvedWildcards).toHaveLength(1);
+      expect(data.resolvedWildcards[0].pattern).toBe('character:*');
+      expect(data.resolvedWildcards[0].tagNames).toContain('character:saber');
+      expect(data.resolvedWildcards[0].tagNames).toContain('character:rin');
+    });
+
+    it('should find posts with tags matching suffix wildcard', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['blue_eyes']);
+      await createPostWithTags(prisma, ['red_eyes']);
+      await createPostWithTags(prisma, ['blonde_hair']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=*_eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+    });
+
+    it('should NOT match tags that contain pattern in middle (trailing wildcard)', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['shorts']);        // should match short*
+      await createPostWithTags(prisma, ['short_hair']);    // should match short*
+      await createPostWithTags(prisma, ['black shorts']);  // should NOT match short*
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=short*');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Only 'shorts' and 'short_hair' start with 'short', not 'black shorts'
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+    });
+
+    it('should combine wildcard with exact tag (AND logic)', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['character:saber', 'fate/stay night']);
+      await createPostWithTags(prisma, ['character:rin', 'fate/stay night']);
+      await createPostWithTags(prisma, ['character:saber', 'other series']);
+
+      // Find posts with any character tag AND fate/stay night
+      const request = new NextRequest('http://localhost/api/posts/search?tags=character:*,fate/stay night');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(2);
+    });
+
+    it('should support negated wildcard patterns', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['blue_eyes', 'common']);
+      await createPostWithTags(prisma, ['red_eyes', 'common']);
+      await createPostWithTags(prisma, ['blonde_hair', 'common']);
+
+      // Find posts with 'common' but exclude all *_eyes tags
+      const request = new NextRequest('http://localhost/api/posts/search?tags=common,-*_eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should return empty when wildcard matches no tags', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['some_tag']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=nonexistent:*');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+      expect(data.resolvedWildcards).toBeDefined();
+      expect(data.resolvedWildcards[0].tagIds).toHaveLength(0);
+    });
+
+    it('should reject too-broad wildcard patterns', async () => {
+      const request = new NextRequest('http://localhost/api/posts/search?tags=*');
+      const response = await GET(request);
+
+      expect(response.status).toBe(400);
+      const data = await response.json();
+      expect(data.error).toBeDefined();
+    });
+
+    it('should reject wildcard with insufficient characters', async () => {
+      const request = new NextRequest('http://localhost/api/posts/search?tags=a*');
+      const response = await GET(request);
+
+      expect(response.status).toBe(400);
+      const data = await response.json();
+      expect(data.error).toContain('at least 2');
+    });
+
+    it('should handle multiple wildcards', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['character:saber', 'blue_eyes']);
+      await createPostWithTags(prisma, ['character:rin', 'red_eyes']);
+      await createPostWithTags(prisma, ['character:archer', 'no_eyes_tag']);
+
+      // Find posts with any character AND any *_eyes tag
+      const request = new NextRequest('http://localhost/api/posts/search?tags=character:*,*_eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(2);
+      expect(data.resolvedWildcards).toHaveLength(2);
+    });
+
+    it('should be case insensitive for wildcards', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['Character:Saber']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=character:*');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toHaveLength(1);
+    });
+  });
 });

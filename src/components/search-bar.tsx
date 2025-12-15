@@ -30,6 +30,16 @@ function isNegatedTag(tag: string): boolean {
 }
 
 /**
+ * Determine whether a tag contains a wildcard pattern.
+ *
+ * @returns `true` if the tag (after stripping negation prefix) contains `*`
+ */
+function isWildcardTag(tag: string): boolean {
+  const baseTag = isNegatedTag(tag) ? tag.slice(1) : tag;
+  return baseTag.includes("*");
+}
+
+/**
  * Return the tag name without a leading '-' negation prefix.
  *
  * @param tag - The tag string, possibly prefixed with `-` to indicate negation
@@ -250,12 +260,16 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
       if (highlightedIndex >= 0 && displaySuggestions[highlightedIndex]) {
         addTag(displaySuggestions[highlightedIndex].name, isExcludeMode);
       } else if (inputValue.trim()) {
-        // Add as custom tag or perform search
-        if (selectedTags.length > 0 || inputValue.trim()) {
-          performSearch();
-        }
+        // Add the input as a tag (supports wildcards and custom tags)
+        addTag(inputValue.trim(), isExcludeMode);
       } else if (selectedTags.length > 0) {
         performSearch();
+      }
+    } else if (e.key === "," || e.key === "Tab") {
+      // Comma or Tab adds current input as tag (if any)
+      if (inputValue.trim()) {
+        e.preventDefault();
+        addTag(inputValue.trim(), isExcludeMode);
       }
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -289,15 +303,21 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
         {/* Selected tags */}
         {selectedTags.map((tag) => {
           const negated = isNegatedTag(tag);
+          const wildcard = isWildcardTag(tag);
           const displayName = getBaseTagName(tag);
+
+          // Determine tag chip styling
+          let chipClass = "bg-zinc-700";
+          if (negated) {
+            chipClass = "bg-red-900/50 text-red-300 border border-red-700";
+          } else if (wildcard) {
+            chipClass = "bg-purple-900/50 text-purple-300 border border-purple-700";
+          }
+
           return (
             <span
               key={tag}
-              className={`flex items-center gap-1 rounded text-sm ${
-                negated
-                  ? "bg-red-900/50 text-red-300 border border-red-700"
-                  : "bg-zinc-700"
-              }`}
+              className={`flex items-center gap-1 rounded text-sm ${chipClass}`}
             >
               <button
                 type="button"
@@ -306,7 +326,10 @@ export function SearchBar({ initialTags = [], placeholder = "Search tags..." }: 
                 title={negated ? "Click to include" : "Click to exclude"}
               >
                 {negated && <span className="text-red-400 font-bold">-</span>}
-                <span className={negated ? "line-through opacity-80" : ""}>{displayName}</span>
+                <span className={negated ? "line-through opacity-80" : ""}>
+                  {displayName}
+                  {wildcard && <span className="text-purple-400 ml-0.5">✱</span>}
+                </span>
               </button>
               <button
                 type="button"

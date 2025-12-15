@@ -117,6 +117,15 @@ export interface TagsPageEntry {
 // Cache for tags page queries (key format: "category:sort:page" or "default" for first page)
 export const tagsPageCache = new TTLCache<TagsPageEntry>(50, TAGS_PAGE_CACHE_TTL);
 
+// Wildcard pattern cache (5 minute TTL, max 500 patterns)
+const WILDCARD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+export interface WildcardCacheEntry {
+  tagIds: number[];
+  tagNames: string[];
+  truncated: boolean;
+}
+export const wildcardPatternCache = new TTLCache<WildcardCacheEntry>(500, WILDCARD_CACHE_TTL);
+
 // Invalidate all caches when data changes (call after sync)
 export function invalidateAllCaches(): void {
   tagIdsByNameCache.clear();
@@ -124,4 +133,5 @@ export function invalidateAllCaches(): void {
   treeResponseCache.clear();
   tagsCategoryCountsCache.clear();
   tagsPageCache.clear();
+  wildcardPatternCache.clear();
 }
