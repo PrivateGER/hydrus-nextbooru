@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import { prisma } from "@/lib/db";
 import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { aiLog } from "@/lib/logger";
 
 interface TranslateImageRequestBody {
   targetLang?: string;
@@ -92,7 +93,7 @@ export async function POST(
       hasText: result.hasText,
     });
   } catch (error) {
-    console.error("Error translating image:", error);
+    aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating image');
 
     if (error instanceof OpenRouterApiError) {
       return NextResponse.json(

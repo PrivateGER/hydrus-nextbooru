@@ -11,6 +11,7 @@ import {
   getHydrusThumbnailPath,
   queueThumbnailGeneration,
 } from "@/lib/thumbnails";
+import { thumbnailLog } from "@/lib/logger";
 
 // Valid filename pattern: {64-char hash}.webp
 const FILENAME_PATTERN = /^([a-f0-9]{64})\.webp$/i;
@@ -146,7 +147,7 @@ export async function GET(
       );
     }
 
-    console.error(`Error serving thumbnail ${hash}:`, err);
+    thumbnailLog.error({ hash, error: err instanceof Error ? err.message : String(err) }, 'Error serving thumbnail');
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

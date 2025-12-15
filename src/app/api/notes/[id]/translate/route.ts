@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
+import { aiLog } from "@/lib/logger";
 
 interface TranslateRequestBody {
   sourceLang?: string;
@@ -79,7 +80,7 @@ export async function POST(
       translatedAt: updatedNote.translatedAt?.toISOString(),
     });
   } catch (error) {
-    console.error("Error translating note:", error);
+    aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating note');
 
     if (error instanceof OpenRouterApiError) {
       return NextResponse.json(

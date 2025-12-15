@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncFromHydrus, getSyncState } from "@/lib/hydrus";
 import { prisma } from "@/lib/db";
+import { apiLog, syncLog } from "@/lib/logger";
 
 // GET - Get sync status
 export async function GET() {
@@ -19,7 +20,7 @@ export async function GET() {
       totalBatches: syncState?.totalBatches || 0,
     });
   } catch (error) {
-    console.error("Error getting sync state:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get sync state');
     return NextResponse.json(
       { error: "Failed to get sync state" },
       { status: 500 }
@@ -44,20 +45,23 @@ export async function POST(request: NextRequest) {
 
     // Start sync in background
     // We can't use streaming here easily, so we just start it and return immediately
+    const searchTags = tags || ["system:everything"];
+    syncLog.info({ tags: searchTags }, 'Sync request initiated');
+
     syncFromHydrus({ tags })
       .then((result) => {
-        console.log("Sync completed:", result);
+        syncLog.info({ processedFiles: result.processedFiles, errors: result.errors.length }, 'Background sync completed');
       })
       .catch((error) => {
-        console.error("Sync failed:", error);
+        syncLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Background sync failed');
       });
 
     return NextResponse.json({
       message: "Sync started",
-      tags: tags || ["system:everything"],
+      tags: searchTags,
     });
   } catch (error) {
-    console.error("Error starting sync:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to start sync');
     return NextResponse.json(
       { error: "Failed to start sync" },
       { status: 500 }
@@ -79,9 +83,10 @@ export async function DELETE() {
       return NextResponse.json({ message: "No running sync to cancel" });
     }
 
+    syncLog.info({}, 'Sync cancellation requested');
     return NextResponse.json({ message: "Sync cancellation requested" });
   } catch (error) {
-    console.error("Error cancelling sync:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to cancel sync');
     return NextResponse.json(
       { error: "Failed to cancel sync" },
       { status: 500 }

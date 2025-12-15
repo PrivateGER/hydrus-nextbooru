@@ -7,6 +7,7 @@ import type {
   HydrusVerifyAccessKeyResponse,
   HydrusFileSortType,
 } from "./types";
+import { hydrusLog } from "@/lib/logger";
 
 export interface HydrusClientConfig {
   apiUrl: string;
@@ -42,20 +43,28 @@ export class HydrusClient {
       }
     }
 
+    const startTime = Date.now();
+    hydrusLog.debug({ endpoint, paramKeys: params ? Object.keys(params) : [] }, 'Hydrus API request');
+
     const response = await fetch(url.toString(), {
       headers: {
         "Hydrus-Client-API-Access-Key": this.apiKey,
       },
     });
 
+    const durationMs = Date.now() - startTime;
+
     if (!response.ok) {
       const errorText = await response.text();
+      hydrusLog.error({ endpoint, status: response.status, body: errorText.slice(0, 500), durationMs }, 'Hydrus API error');
       throw new HydrusApiError(
         `Hydrus API error: ${response.status} ${response.statusText}`,
         response.status,
         errorText
       );
     }
+
+    hydrusLog.debug({ endpoint, status: response.status, durationMs }, 'Hydrus API response');
 
     return response.json() as Promise<T>;
   }

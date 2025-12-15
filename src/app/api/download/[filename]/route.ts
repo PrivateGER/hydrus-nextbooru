@@ -4,6 +4,7 @@ import { Readable } from "stream";
 import { prisma } from "@/lib/db";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { TagCategory } from "@/generated/prisma/enums";
+import { fileLog } from "@/lib/logger";
 
 // Valid filename pattern: {64-char hash}.{extension}
 const FILENAME_PATTERN = /^([a-f0-9]{64})(\.\w+)$/i;
@@ -134,7 +135,7 @@ export async function GET(
       },
     });
   } catch (err) {
-    console.error(`Error serving download ${hash}:`, err);
+    fileLog.error({ hash, error: err instanceof Error ? err.message : String(err) }, 'Error serving download');
 
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return NextResponse.json({ error: "File not found on disk" }, { status: 404 });

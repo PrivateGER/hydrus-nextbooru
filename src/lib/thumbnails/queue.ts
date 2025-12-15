@@ -2,6 +2,7 @@ import pLimit from "p-limit";
 import { prisma } from "@/lib/db";
 import { ThumbnailSize, ThumbnailStatus, PostForThumbnail } from "./types";
 import { generateThumbnail, generateAllThumbnails } from "./generator";
+import { thumbnailLog } from "@/lib/logger";
 
 // Limit concurrent thumbnail generations to avoid memory issues
 const generationLimit = pLimit(4);
@@ -44,7 +45,7 @@ export async function ensureThumbnail(
       });
 
       if (!post) {
-        console.warn(`Post not found for thumbnail generation: ${hash}`);
+        thumbnailLog.warn({ hash }, 'Post not found for thumbnail generation');
         return;
       }
 
@@ -71,7 +72,7 @@ export async function ensureThumbnail(
 
       await generateThumbnail(post as PostForThumbnail, size);
     } catch (err) {
-      console.error(`Error in ensureThumbnail for ${hash}:`, err);
+      thumbnailLog.error({ hash, error: err instanceof Error ? err.message : String(err) }, 'Error in ensureThumbnail');
     }
   });
 
