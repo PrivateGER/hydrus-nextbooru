@@ -1,94 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { wildcardPatternCache, WildcardCacheEntry } from "@/lib/cache";
 import {
   isWildcardPattern,
-  wildcardToSqlPattern,
   validateWildcardPattern,
-  WILDCARD_TAG_LIMIT,
+  parseTagsParamWithNegation,
+  resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { wildcardLog } from "@/lib/logger";
 
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
-
-/**
- * Split a comma-separated tag string into included and excluded tag lists.
- *
- * Leading/trailing whitespace is trimmed and tags are lowercased; empty entries are ignored.
- *
- * @param tagsParam - Comma-separated tags where tags prefixed with `-` denote exclusion (e.g., "cat,-dog,  bird")
- * @returns An object with `includeTags` (tags to include) and `excludeTags` (tags to exclude)
- */
-export function parseTagsWithNegation(tagsParam: string): {
-  includeTags: string[];
-  excludeTags: string[];
-} {
-  const allTags = tagsParam
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 0);
-
-  const includeTags: string[] = [];
-  const excludeTags: string[] = [];
-
-  for (const tag of allTags) {
-    if (tag.startsWith("-") && tag.length > 1) {
-      excludeTags.push(tag.slice(1));
-    } else {
-      includeTags.push(tag);
-    }
-  }
-
-  return { includeTags, excludeTags };
-}
-
-/**
- * Resolve a wildcard pattern to matching tags.
- * Results are cached for 5 minutes.
- *
- * @param pattern - The wildcard pattern (without negation prefix)
- * @returns Cached entry with matching tag IDs, names, and truncation status
- */
-async function resolveWildcardPattern(pattern: string): Promise<WildcardCacheEntry> {
-  // Check cache first
-  const cached = wildcardPatternCache.get(pattern);
-  if (cached) {
-    wildcardLog.debug({ pattern, count: cached.tagNames.length }, "Cache HIT");
-    return cached;
-  }
-
-  // Convert to SQL LIKE pattern and use raw SQL for accurate wildcard matching
-  const sqlPattern = wildcardToSqlPattern(pattern);
-  wildcardLog.debug({ pattern, sqlPattern }, "Cache MISS, querying");
-
-  const matchingTags = await prisma.$queryRaw<Array<{ id: number; name: string; category: string }>>`
-    SELECT id, name, category FROM "Tag"
-    WHERE name ILIKE ${sqlPattern}
-    ORDER BY "postCount" DESC
-    LIMIT ${WILDCARD_TAG_LIMIT + 1}
-  `;
-
-  wildcardLog.debug(
-    { pattern, count: matchingTags.length, sample: matchingTags.slice(0, 10).map(t => t.name) },
-    "Resolved wildcard"
-  );
-
-  const truncated = matchingTags.length > WILDCARD_TAG_LIMIT;
-  const limitedTags = matchingTags.slice(0, WILDCARD_TAG_LIMIT);
-  const result: WildcardCacheEntry = {
-    tagIds: limitedTags.map((t) => t.id),
-    tagNames: limitedTags.map((t) => t.name),
-    tagCategories: limitedTags.map((t) => t.category),
-    truncated,
-  };
-
-  // Cache the result
-  wildcardPatternCache.set(pattern, result);
-
-  return result;
-}
 
 /**
  * Handle GET requests to search posts filtered by included and excluded tags with pagination.
@@ -113,7 +34,7 @@ export async function GET(request: NextRequest) {
   );
 
   // Parse tags with negation support
-  const { includeTags, excludeTags } = parseTagsWithNegation(tagsParam);
+  const { includeTags, excludeTags } = parseTagsParamWithNegation(tagsParam);
 
   if (includeTags.length === 0 && excludeTags.length === 0) {
     return NextResponse.json({
@@ -165,7 +86,7 @@ export async function GET(request: NextRequest) {
   // Resolve include wildcards
   const includeWildcardTagIds: number[][] = [];
   for (const pattern of wildcardIncludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern);
+    const resolved = await resolveWildcardPattern(pattern, "posts-api");
     includeWildcardTagIds.push(resolved.tagIds);
     resolvedWildcards.push({
       pattern,
@@ -180,7 +101,7 @@ export async function GET(request: NextRequest) {
   // Resolve exclude wildcards
   const excludeWildcardTagIds: number[] = [];
   for (const pattern of wildcardExcludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern);
+    const resolved = await resolveWildcardPattern(pattern, "posts-api");
     excludeWildcardTagIds.push(...resolved.tagIds);
     resolvedWildcards.push({
       pattern: `-${pattern}`,
