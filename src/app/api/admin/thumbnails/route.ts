@@ -7,6 +7,7 @@ import {
   ThumbnailStatus,
   getThumbnailBasePath,
 } from "@/lib/thumbnails";
+import { apiLog, thumbnailLog } from "@/lib/logger";
 
 // Track if batch generation is running
 let batchRunning = false;
@@ -23,7 +24,7 @@ export async function GET() {
       batchProgress: batchRunning ? batchProgress : null,
     });
   } catch (error) {
-    console.error("Error getting thumbnail stats:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get thumbnail stats');
     return NextResponse.json(
       { error: "Failed to get thumbnail stats" },
       { status: 500 }
@@ -50,6 +51,8 @@ export async function POST(request: NextRequest) {
     batchRunning = true;
     batchProgress = { processed: 0, total: 0 };
 
+    thumbnailLog.info({ limit: limit || 'unlimited', batchSize: batchSize || 50 }, 'Starting batch thumbnail generation');
+
     batchGenerateThumbnails({
       limit,
       batchSize,
@@ -58,10 +61,10 @@ export async function POST(request: NextRequest) {
       },
     })
       .then((result) => {
-        console.log("Batch thumbnail generation completed:", result);
+        thumbnailLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, 'Batch thumbnail generation completed');
       })
       .catch((error) => {
-        console.error("Batch thumbnail generation failed:", error);
+        thumbnailLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Batch thumbnail generation failed');
       })
       .finally(() => {
         batchRunning = false;
@@ -73,7 +76,7 @@ export async function POST(request: NextRequest) {
       batchSize: batchSize || 50,
     });
   } catch (error) {
-    console.error("Error starting batch generation:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to start batch generation');
     return NextResponse.json(
       { error: "Failed to start batch generation" },
       { status: 500 }
@@ -120,7 +123,7 @@ export async function DELETE(request: NextRequest) {
       try {
         await rm(basePath, { recursive: true, force: true });
       } catch (fsError) {
-        console.warn("Could not delete thumbnail directory:", fsError);
+        thumbnailLog.warn({ error: fsError instanceof Error ? fsError.message : String(fsError) }, 'Could not delete thumbnail directory');
       }
 
       return NextResponse.json({
@@ -151,7 +154,7 @@ export async function DELETE(request: NextRequest) {
       { status: 400 }
     );
   } catch (error) {
-    console.error("Error managing thumbnails:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to manage thumbnails');
     return NextResponse.json(
       { error: "Failed to manage thumbnails" },
       { status: 500 }

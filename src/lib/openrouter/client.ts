@@ -7,6 +7,7 @@ import type {
   ImageTranslationRequest,
   ImageTranslationResult,
 } from "./types";
+import { aiLog } from "@/lib/logger";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "google/gemini-2.5-flash";
@@ -50,30 +51,39 @@ export class OpenRouterClient {
    * Send a chat completion request to OpenRouter
    */
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+    const model = request.model || this.model;
+    const startTime = Date.now();
+    aiLog.debug({ model }, 'OpenRouter API request');
+
     const response = await fetch(OPENROUTER_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-        "X-Title": "Booru Note Translator",
+        "HTTP-Referer": "https://github.com/PrivateGER/hydrus-nextbooru",
+        "X-Title": "Nextbooru",
       },
       body: JSON.stringify({
-        model: request.model || this.model,
+        model,
         messages: request.messages,
         temperature: request.temperature ?? 0.3,
         max_tokens: request.max_tokens ?? 2048,
       }),
     });
 
+    const durationMs = Date.now() - startTime;
+
     if (!response.ok) {
       const errorText = await response.text();
+      aiLog.error({ model, status: response.status, body: errorText.slice(0, 500), durationMs }, 'OpenRouter API error');
       throw new OpenRouterApiError(
         `OpenRouter API error: ${response.status} ${response.statusText}`,
         response.status,
         errorText
       );
     }
+
+    aiLog.debug({ model, status: response.status, durationMs }, 'OpenRouter API response');
 
     return response.json() as Promise<ChatCompletionResponse>;
   }

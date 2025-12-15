@@ -8,6 +8,7 @@ import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
+import { syncLog } from "@/lib/logger";
 
 const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -142,8 +143,10 @@ async function bulkEnsureTags(
   // Verify all tags were resolved
   if (result.size !== tagArray.length) {
     const missing = tagArray.filter(t => !result.has(`${t.category}:${t.name.toLowerCase()}`));
-    console.error(`Failed to resolve ${missing.length} tags:`, missing.slice(0, 5));
+    syncLog.error({ missingCount: missing.length, sample: missing.slice(0, 5) }, 'Failed to resolve tags during bulk insert');
   }
+
+  syncLog.debug({ tagCount: tagArray.length, resolvedCount: result.size }, 'Bulk tag insert completed');
 
   return result;
 }
@@ -199,8 +202,10 @@ async function bulkEnsureGroups(
   // Verify all groups were resolved
   if (result.size !== groupArray.length) {
     const missing = groupArray.filter(g => !result.has(`${g.sourceType}:${g.sourceId}`));
-    console.error(`Failed to resolve ${missing.length} groups:`, missing.slice(0, 5));
+    syncLog.error({ missingCount: missing.length, sample: missing.slice(0, 5) }, 'Failed to resolve groups during bulk insert');
   }
+
+  syncLog.debug({ groupCount: groupArray.length, resolvedCount: result.size }, 'Bulk group insert completed');
 
   return result;
 }
@@ -241,7 +246,7 @@ async function processBatchWithPrepopulation(
       } else {
         const errorMsg = `Error processing file ${chunk[k].hash}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
         progress.errors.push(errorMsg);
-        console.error(errorMsg);
+        syncLog.error({ hash: chunk[k].hash, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }, 'Error processing file in batch');
       }
     }
 
@@ -280,6 +285,7 @@ async function processFileWithLookups(
     if (isRetryable && retryCount < MAX_RETRIES) {
       // Exponential backoff: 50ms, 100ms, 200ms
       const delay = 50 * Math.pow(2, retryCount);
+      syncLog.debug({ hash: metadata.hash, retryCount: retryCount + 1, delayMs: delay }, 'Retrying file processing after transient failure');
       await new Promise(resolve => setTimeout(resolve, delay));
       return processFileWithLookups(metadata, lookups, retryCount + 1);
     }
@@ -331,7 +337,7 @@ async function processFileSafe(
 
   // Log warning if any tags couldn't be resolved (shouldn't happen normally)
   if (missingTags.length > 0) {
-    console.warn(`[${metadata.hash}] Missing ${missingTags.length} tag IDs from lookup:`, missingTags.slice(0, 5));
+    syncLog.warn({ hash: metadata.hash, missingCount: missingTags.length, sample: missingTags.slice(0, 5) }, 'Missing tag IDs from lookup');
   }
 
   // Parse source URLs and lookup group IDs
@@ -365,7 +371,7 @@ async function processFileSafe(
 
   // Log warning if any groups couldn't be resolved (shouldn't happen normally)
   if (missingGroups.length > 0) {
-    console.warn(`[${metadata.hash}] Missing ${missingGroups.length} group IDs from lookup:`, missingGroups);
+    syncLog.warn({ hash: metadata.hash, missingCount: missingGroups.length, groups: missingGroups }, 'Missing group IDs from lookup');
   }
 
   // Determine thumbnail status based on mime type
@@ -456,6 +462,7 @@ async function processFileSafe(
  */
 export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncProgress> {
   const client = new HydrusClient();
+  const startTime = Date.now();
   const progress: SyncProgress = {
     phase: "searching",
     totalFiles: 0,
@@ -466,6 +473,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
   };
 
   const onProgress = options.onProgress || (() => {});
+  const searchTags = options.tags || ["system:everything"];
+
+  syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
 
   try {
     // Prevent concurrent sync operations - check if one is already running
@@ -481,7 +491,6 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     progress.phase = "searching";
     onProgress(progress);
 
-    const searchTags = options.tags || ["system:everything"];
     const searchResult = await client.searchFiles({
       tags: searchTags,
       returnHashes: true,
@@ -490,6 +499,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const fileIds = searchResult.file_ids;
     progress.totalFiles = fileIds.length;
     progress.totalBatches = Math.ceil(fileIds.length / BATCH_SIZE);
+    syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
     onProgress(progress);
 
     // Update with total count
@@ -517,6 +527,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       onProgress(progress);
 
       const batchIds = fileIds.slice(i, i + BATCH_SIZE);
+      syncLog.debug({ batch: progress.currentBatch, batchSize: batchIds.length }, 'Processing batch');
 
       try {
         // Fetch metadata for this batch
@@ -539,7 +550,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       } catch (err) {
         const errorMsg = `Error processing batch ${progress.currentBatch}: ${err instanceof Error ? err.message : String(err)}`;
         progress.errors.push(errorMsg);
-        console.error(errorMsg);
+        syncLog.error({ batch: progress.currentBatch, error: err instanceof Error ? err.message : String(err) }, 'Error processing batch');
       }
     }
 
@@ -557,6 +568,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       count: progress.processedFiles,
       processedFiles: progress.processedFiles,
     });
+
+    const durationMs = Date.now() - startTime;
+    syncLog.info({ processedFiles: progress.processedFiles, errors: progress.errors.length, durationMs }, 'Sync completed');
     onProgress(progress);
 
     return progress;
@@ -625,7 +639,7 @@ function extractTags(metadata: HydrusFileMetadata): ReturnType<typeof parseTag>[
     }
   } catch (error) {
     // Log error but return what we have so far - don't crash the entire sync
-    console.error(`Error extracting tags for file ${metadata.hash}:`, error);
+    syncLog.error({ hash: metadata.hash, error: error instanceof Error ? error.message : String(error) }, 'Error extracting tags from file metadata');
   }
 
   return tags;

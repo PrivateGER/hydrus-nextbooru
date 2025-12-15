@@ -6,8 +6,8 @@ const isDev = process.env.NODE_ENV === "development";
 /**
  * Application logger using pino.
  *
- * In development: pretty-printed, colorized output via stream
- * In production: JSON logs for aggregation
+ * Pretty-printed output in both dev and production.
+ * Colorized in development only.
  *
  * Note: Uses pino-pretty as a stream (not transport) to avoid worker thread
  * issues with Next.js bundling.
@@ -17,13 +17,11 @@ const isDev = process.env.NODE_ENV === "development";
  *   const log = logger.child({ module: "wildcard" });
  *   log.debug({ pattern, sqlPattern }, "Resolving wildcard");
  */
-const stream = isDev
-  ? pretty({
-      colorize: true,
-      ignore: "pid,hostname",
-      translateTime: "HH:MM:ss",
-    })
-  : undefined;
+const stream = pretty({
+  colorize: isDev,
+  ignore: "pid,hostname",
+  translateTime: "HH:MM:ss",
+});
 
 export const logger = pino(
   {
@@ -47,3 +45,7 @@ export const wildcardLog = createLogger("wildcard");
 export const dbLog = createLogger("db");
 export const apiLog = createLogger("api");
 export const syncLog = createLogger("sync");
+export const hydrusLog = createLogger("hydrus");
+export const thumbnailLog = createLogger("thumbnail");
+export const fileLog = createLogger("file");
+export const aiLog = createLogger("ai");

@@ -1,6 +1,7 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
+import { dbLog } from "@/lib/logger";
 
 /**
  * Escape characters in a string for safe use in SQL LIKE/ILIKE patterns.
@@ -44,8 +45,10 @@ function createPrismaClient() {
 
   // Log pool errors for observability
   pool.on('error', (err) => {
-    console.error('Unexpected database pool error:', err);
+    dbLog.error({ error: err instanceof Error ? err.message : String(err) }, 'Unexpected database pool error');
   });
+
+  dbLog.debug({ maxConnections: 40, idleTimeoutMs: 30000, connectionTimeoutMs: 30000 }, 'Database pool initialized');
 
   // Store pool reference for potential cleanup
   globalForPrisma.pool = pool;
@@ -87,7 +90,7 @@ export async function getTotalPostCount(): Promise<number> {
 
   const parsed = parseInt(setting.value, 10);
   if (isNaN(parsed) || parsed < 0) {
-    console.error(`Invalid totalPostCount value: "${setting.value}", falling back to 0`);
+    dbLog.error({ value: setting.value }, 'Invalid totalPostCount value, falling back to 0');
     return 0;
   }
 
