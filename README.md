@@ -7,7 +7,7 @@ A live demo filled with random Touhou images is running at https://nextbooru-dem
 You can browse, search by tags, and view images/videos **without** depending on Hydrus once the sync is done. Only the location Hydrus stores the files is required to be accessible from the server.
 
 Supports:
-- Tag-based search with autocomplete and co-occurrence filtering 
+- Tag-based search with autocomplete and co-occurrence filtering + wildcards
 - Category-colored tags (artist, character, copyright, meta, general)
 - Automatic post grouping based on source URLs (Pixiv, Twitter, dA, Danbooru, Gelbooru) and titles (experimental!)
 - Lazy loading images with blurhash placeholders and thumbnail previews
@@ -66,3 +66,9 @@ Supports:
 1. Enable the Client API in Hydrus (services > manage services > client api)
 2. Create an API key with "search for and fetch files" and "see local file paths" permissions
 3. Start a sync in the admin panel
+
+## Performance
+
+My personal "production" server running Nextbooru holds 110k files with 140k tags, with 60k groups. Up to this database size I will optimize for speed, I cannot guarantee how it scales past it.
+
+Open for improvements, PRs and whatever of course.
