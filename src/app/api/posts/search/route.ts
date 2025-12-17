@@ -13,17 +13,13 @@ const MAX_LIMIT = 100;
 const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
 
 /**
- * Handle GET requests to search posts filtered by included and excluded tags with pagination.
+ * Search posts by included and excluded tags with pagination and support for wildcard patterns.
  *
- * Supports wildcard patterns using `*` (e.g., `character:*`, `*_eyes`).
- *
- * If both include and exclude tag lists are empty, responds with empty results.
- *
- * @returns A JSON object with:
- *   - `posts`: array of matching posts
+ * @returns An object containing:
+ *   - `posts`: array of matching posts (selected fields: `id`, `hash`, `width`, `height`, `blurhash`, `mimeType`)
  *   - `totalCount`: total number of matching posts
- *   - `totalPages`: number of pages
- *   - `resolvedWildcards`: (optional) array of resolved wildcard patterns with matched tags
+ *   - `totalPages`: number of pages based on the requested `limit`
+ *   - `resolvedWildcards` (optional): array of resolved wildcard patterns with matched `tagIds`, `tagNames`, `tagCategories`, and `truncated` flag
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
