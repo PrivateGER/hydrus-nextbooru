@@ -1,0 +1,6 @@
+# Development overrides - exposes PostgreSQL for local tooling
+# This file is automatically loaded by docker compose
+services:
+  postgres:
+    ports:
+      - "5432:5432"

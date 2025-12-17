@@ -26,8 +26,6 @@ services:
       POSTGRES_USER: booru
       POSTGRES_PASSWORD: booru
       POSTGRES_DB: booru
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
