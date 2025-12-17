@@ -44,6 +44,12 @@ function buildDownloadFilename(
   return `${parts.join("_")}.${extension}`;
 }
 
+/**
+ * Serve a stored file identified by the route filename (hash and extension) and stream it to the client with download headers.
+ *
+ * @param params - Route parameters; `params.filename` must be in the format `{64-hex-hash}.{extension}` (case-insensitive).
+ * @returns A NextResponse that on success contains the file stream with `Content-Type`, `Content-Length`, `Content-Disposition` (attachment with a generated filename), and caching headers; on failure returns a JSON error response with an appropriate HTTP status (400 for invalid requests or extension mismatch, 404 if the file or database record is not found, 500 for other server errors).
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ filename: string }> }

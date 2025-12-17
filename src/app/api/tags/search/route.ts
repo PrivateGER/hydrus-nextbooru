@@ -13,11 +13,18 @@ import {
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
  *
- * @param request - Next.js request whose URL query provides:
- *   - `q`: search string (empty string yields no results)
- *   - `limit`: maximum number of tags to return (default 20, capped at 50)
- *   - `selected`: comma-separated tag names to require co-occurrence with; prefix a name with `-` to exclude posts containing that tag
- * @returns An object with a `tags` array; each element contains `id`, `name`, `category`, and numeric `count` indicating matching tag metadata and co-occurrence counts
+ * The request's URL query controls behavior:
+ * - `q`: search string (empty string disables name filtering)
+ * - `limit`: maximum number of tags to return (default 20, capped at 50)
+ * - `selected`: comma-separated tag names to require co-occurrence; prefix a name with `-` to exclude posts containing that tag
+ *
+ * @param request - Next.js request containing the above query parameters
+ * @returns An object with a `tags` array. Each tag object contains:
+ *   - `id`: tag id
+ *   - `name`: tag name
+ *   - `category`: tag category
+ *   - `count`: number of matching posts that include this tag
+ *   - `remainingCount`: number of matching posts that do not include this tag (zero or greater)
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
