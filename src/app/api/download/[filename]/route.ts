@@ -75,14 +75,20 @@ export async function GET(
             },
           },
         },
-        include: {
-          tag: true,
+        select: {
+          tag: {
+            select: {
+              name: true,
+              category: true,
+            },
+          },
         },
       },
       groups: {
-        include: {
+        select: {
+          position: true,
           group: {
-            include: {
+            select: {
               _count: { select: { posts: true } },
             },
           },
