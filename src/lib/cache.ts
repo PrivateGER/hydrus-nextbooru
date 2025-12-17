@@ -33,6 +33,10 @@ export class LRUCache<T> {
     this.cache.set(key, value);
   }
 
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
+
   clear(): void {
     this.cache.clear();
   }
@@ -61,6 +65,8 @@ export class TTLCache<T> {
 
     // Check if expired
     if (Date.now() - cached.timestamp > this.ttlMs) {
+      // Delete expired entry to prevent memory leak
+      this.cache.delete(key);
       return undefined;
     }
 

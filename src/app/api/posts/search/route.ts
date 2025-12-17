@@ -10,6 +10,7 @@ import {
 
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
+const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
 
 /**
  * Handle GET requests to search posts filtered by included and excluded tags with pagination.
@@ -27,7 +28,10 @@ const MAX_LIMIT = 100;
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
-  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+  const page = Math.min(
+    MAX_PAGE,
+    Math.max(1, parseInt(searchParams.get("page") || "1", 10))
+  );
   const limit = Math.min(
     parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10),
     MAX_LIMIT

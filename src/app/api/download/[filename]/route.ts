@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createReadStream, statSync } from "fs";
+import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import { Readable } from "stream";
 import { prisma } from "@/lib/db";
 import { buildFilePath } from "@/lib/hydrus/paths";
@@ -75,14 +76,20 @@ export async function GET(
             },
           },
         },
-        include: {
-          tag: true,
+        select: {
+          tag: {
+            select: {
+              name: true,
+              category: true,
+            },
+          },
         },
       },
       groups: {
-        include: {
+        select: {
+          position: true,
           group: {
-            include: {
+            select: {
               _count: { select: { posts: true } },
             },
           },
@@ -121,7 +128,7 @@ export async function GET(
   const filePath = buildFilePath(hash, post.extension);
 
   try {
-    const stats = statSync(filePath);
+    const stats = await stat(filePath);
     const stream = createReadStream(filePath);
     const webStream = Readable.toWeb(stream) as ReadableStream;
 
