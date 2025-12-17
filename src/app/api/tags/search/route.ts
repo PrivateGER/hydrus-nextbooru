@@ -120,19 +120,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Step 1: Resolve wildcards to tag IDs
-  const wildcardIncludeTagIds: number[][] = [];
-  const wildcardExcludeTagIds: number[] = [];
+  // Step 1: Resolve wildcards to tag IDs (in parallel for performance)
+  const [resolvedIncludes, resolvedExcludes] = await Promise.all([
+    Promise.all(wildcardIncludePatterns.map(pattern => resolveWildcardPattern(pattern, "tags-api"))),
+    Promise.all(wildcardExcludePatterns.map(pattern => resolveWildcardPattern(pattern, "tags-api"))),
+  ]);
 
-  for (const pattern of wildcardIncludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "tags-api");
-    wildcardIncludeTagIds.push(resolved.tagIds);
-  }
-
-  for (const pattern of wildcardExcludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "tags-api");
-    wildcardExcludeTagIds.push(...resolved.tagIds);
-  }
+  const wildcardIncludeTagIds = resolvedIncludes.map(r => r.tagIds);
+  const wildcardExcludeTagIds = resolvedExcludes.flatMap(r => r.tagIds);
 
   // Step 2: Find tag IDs for regular (non-wildcard) selected tag names
   const tagIdsByName = new Map<string, number[]>();
