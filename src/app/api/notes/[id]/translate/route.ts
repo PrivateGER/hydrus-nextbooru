@@ -11,13 +11,12 @@ interface TranslateRequestBody {
 /**
  * Translate a note's content identified by the route `id` and persist translation metadata.
  *
- * Validates the route `id` and note content, invokes the OpenRouter translation client with optional
- * `sourceLang`/`targetLang` from the request body, updates the note record with translation results,
- * and returns the updated note fields or an error payload.
+ * Translations are stored in the NoteTranslation table keyed by content hash, so identical
+ * note content across different posts shares the same translation.
  *
  * @param request - The incoming NextRequest whose JSON body may include optional `sourceLang` and `targetLang`.
  * @param params - An object with a Promise that resolves to route parameters; expected to contain `id` as a string.
- * @returns A JSON response containing the updated note fields (`id`, `name`, `content`, `translatedContent`, `sourceLanguage`, `targetLanguage`, `translatedAt`) on success, or an `{ error: string }` payload with an appropriate HTTP status code on failure.
+ * @returns A JSON response containing the note with translation data on success, or an error payload on failure.
  */
 export async function POST(
   request: NextRequest,
@@ -33,7 +32,7 @@ export async function POST(
 
     const body: TranslateRequestBody = await request.json().catch(() => ({}));
 
-    // Fetch the note
+    // Fetch the note with its content hash
     const note = await prisma.note.findUnique({
       where: { id: noteId },
     });
@@ -59,10 +58,17 @@ export async function POST(
       targetLang: body.targetLang,
     });
 
-    // Update the note with translation
-    const updatedNote = await prisma.note.update({
-      where: { id: noteId },
-      data: {
+    // Upsert translation into NoteTranslation table (shared by all notes with same content)
+    const translation = await prisma.noteTranslation.upsert({
+      where: { contentHash: note.contentHash },
+      create: {
+        contentHash: note.contentHash,
+        translatedContent: result.translatedText,
+        sourceLanguage: result.sourceLang,
+        targetLanguage: result.targetLang,
+        translatedAt: new Date(),
+      },
+      update: {
         translatedContent: result.translatedText,
         sourceLanguage: result.sourceLang,
         targetLanguage: result.targetLang,
@@ -70,14 +76,16 @@ export async function POST(
       },
     });
 
+    aiLog.info({ noteId, contentHash: note.contentHash }, 'Translation saved to NoteTranslation table');
+
     return NextResponse.json({
-      id: updatedNote.id,
-      name: updatedNote.name,
-      content: updatedNote.content,
-      translatedContent: updatedNote.translatedContent,
-      sourceLanguage: updatedNote.sourceLanguage,
-      targetLanguage: updatedNote.targetLanguage,
-      translatedAt: updatedNote.translatedAt?.toISOString(),
+      id: note.id,
+      name: note.name,
+      content: note.content,
+      translatedContent: translation.translatedContent,
+      sourceLanguage: translation.sourceLanguage,
+      targetLanguage: translation.targetLanguage,
+      translatedAt: translation.translatedAt?.toISOString(),
     });
   } catch (error) {
     aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating note');

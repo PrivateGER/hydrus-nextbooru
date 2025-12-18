@@ -27,6 +27,7 @@ async function getPost(hash: string) {
         },
       },
       notes: {
+        include: { translation: true },
         orderBy: { name: "asc" },
       },
       groups: {
