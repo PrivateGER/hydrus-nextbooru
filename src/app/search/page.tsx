@@ -1,18 +1,11 @@
 import { Suspense } from "react";
-import { prisma } from "@/lib/db";
 import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
-import {
-  isWildcardPattern,
-  validateWildcardPattern,
-  parseTagsWithNegation,
-  resolveWildcardPattern,
-  ResolvedWildcard,
-} from "@/lib/wildcard";
+import { NoteSearchResult } from "@/components/note-search-result";
+import { searchPosts, searchNotes } from "@/lib/search";
+import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
-
-const POSTS_PER_PAGE = 48;
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
@@ -23,231 +16,59 @@ const CATEGORY_COLORS: Record<TagCategory, string> = {
 };
 
 interface SearchPageProps {
-  searchParams: Promise<{ tags?: string; page?: string }>;
+  searchParams: Promise<{ tags?: string; notes?: string; page?: string }>;
 }
 
-/**
- * Search posts by included and excluded tags and return a single paginated result page.
- *
- * Supports wildcard patterns using `*` (e.g., `character:*`, `*_eyes`).
- */
-async function searchPosts(tags: string[], page: number) {
-  const skip = (page - 1) * POSTS_PER_PAGE;
-
-  const { includeTags, excludeTags } = parseTagsWithNegation(tags);
-
-  if (includeTags.length === 0 && excludeTags.length === 0) {
-    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
-  }
-
-  // Separate wildcards from regular tags
-  const regularIncludeTags: string[] = [];
-  const wildcardIncludePatterns: string[] = [];
-  const regularExcludeTags: string[] = [];
-  const wildcardExcludePatterns: string[] = [];
-  const validationErrors: string[] = [];
-
-  for (const tag of includeTags) {
-    if (isWildcardPattern(tag)) {
-      const validation = validateWildcardPattern(tag);
-      if (!validation.valid) {
-        validationErrors.push(validation.error ?? "Invalid wildcard pattern");
-      } else {
-        wildcardIncludePatterns.push(tag);
-      }
-    } else {
-      regularIncludeTags.push(tag);
-    }
-  }
-
-  for (const tag of excludeTags) {
-    if (isWildcardPattern(tag)) {
-      const validation = validateWildcardPattern(`-${tag}`);
-      if (!validation.valid) {
-        validationErrors.push(validation.error ?? "Invalid wildcard pattern");
-      } else {
-        wildcardExcludePatterns.push(tag);
-      }
-    } else {
-      regularExcludeTags.push(tag);
-    }
-  }
-
-  if (validationErrors.length > 0) {
-    return {
-      posts: [],
-      totalPages: 0,
-      totalCount: 0,
-      queryTimeMs: 0,
-      resolvedWildcards: [],
-      error: validationErrors[0],
-    };
-  }
-
-  // Resolve wildcards to tag IDs
-  const resolvedWildcards: ResolvedWildcard[] = [];
-  const includeWildcardTagIds: number[][] = [];
-  const excludeWildcardTagIds: number[] = [];
-
-  for (const pattern of wildcardIncludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "page");
-    includeWildcardTagIds.push(resolved.tagIds);
-    resolvedWildcards.push({
-      pattern,
-      negated: false,
-      tagIds: resolved.tagIds,
-      tagNames: resolved.tagNames,
-      tagCategories: resolved.tagCategories,
-      truncated: resolved.truncated,
-    });
-  }
-
-  for (const pattern of wildcardExcludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "page");
-    excludeWildcardTagIds.push(...resolved.tagIds);
-    resolvedWildcards.push({
-      pattern: `-${pattern}`,
-      negated: true,
-      tagIds: resolved.tagIds,
-      tagNames: resolved.tagNames,
-      tagCategories: resolved.tagCategories,
-      truncated: resolved.truncated,
-    });
-  }
-
-  // Build where clause
-  const andConditions: object[] = [];
-
-  // Regular include tags
-  for (const tagName of regularIncludeTags) {
-    andConditions.push({
-      tags: {
-        some: {
-          tag: { name: { equals: tagName, mode: "insensitive" as const } },
-        },
-      },
-    });
-  }
-
-  // Wildcard include tags
-  for (const tagIds of includeWildcardTagIds) {
-    if (tagIds.length === 0) {
-      return {
-        posts: [],
-        totalPages: 0,
-        totalCount: 0,
-        queryTimeMs: 0,
-        resolvedWildcards,
-      };
-    }
-    andConditions.push({
-      tags: { some: { tagId: { in: tagIds } } },
-    });
-  }
-
-  // Regular exclude tags
-  for (const tagName of regularExcludeTags) {
-    andConditions.push({
-      tags: {
-        none: {
-          tag: { name: { equals: tagName, mode: "insensitive" as const } },
-        },
-      },
-    });
-  }
-
-  // Wildcard exclude tags
-  if (excludeWildcardTagIds.length > 0) {
-    andConditions.push({
-      tags: { none: { tagId: { in: excludeWildcardTagIds } } },
-    });
-  }
-
-  const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
-
-  const startTime = performance.now();
-  const [posts, totalCount] = await Promise.all([
-    prisma.post.findMany({
-      where: whereClause,
-      orderBy: { importedAt: "desc" },
-      skip,
-      take: POSTS_PER_PAGE,
-      select: {
-        id: true,
-        hash: true,
-        width: true,
-        height: true,
-        blurhash: true,
-        mimeType: true,
-      },
-    }),
-    prisma.post.count({ where: whereClause }),
-  ]);
-  const queryTimeMs = performance.now() - startTime;
-
-  return {
-    posts,
-    totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
-    totalCount,
-    queryTimeMs,
-    resolvedWildcards,
-  };
-}
-
-/**
- * Renders the search page, performing a tag-based query and displaying results with pagination.
- *
- * @param searchParams - A promise resolving to an object with optional `tags` (comma-separated string; individual tags may be negated with a leading `-`) and optional `page` (page number as a string). The component normalizes these values, performs the search, and uses them to render the UI.
- * @returns The search results page element containing the search bar, results header (including tag badges and query timing), conditional empty/no-results messages, a posts grid, and pagination when applicable.
- */
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const params = await searchParams;
   const tagsParam = params.tags || "";
-  const tags = tagsParam
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 0);
+  const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const notesQuery = params.notes?.trim() || "";
   const page = Math.max(1, parseInt(params.page || "1", 10));
+  const isNotesSearch = notesQuery.length >= 2;
 
-  const { posts, totalPages, totalCount, queryTimeMs, resolvedWildcards, error } = await searchPosts(tags, page);
+  // Execute search
+  const result = isNotesSearch
+    ? await searchNotes(notesQuery, page)
+    : tags.length > 0
+      ? await searchPosts(tags, page)
+      : null;
 
-  // Build a map of wildcard patterns to their resolved info for display
-  const wildcardMap = new Map(
-    resolvedWildcards.map((w) => [w.pattern, w])
-  );
+  const posts = result && "posts" in result ? result.posts : [];
+  const notes = result && "notes" in result ? result.notes : [];
+  const totalCount = result?.totalCount ?? 0;
+  const totalPages = result?.totalPages ?? 0;
+  const queryTimeMs = result?.queryTimeMs ?? 0;
+  const resolvedWildcards: ResolvedWildcard[] = result && "resolvedWildcards" in result ? result.resolvedWildcards : [];
+  const error = result?.error;
+
+  const wildcardMap = new Map(resolvedWildcards.map((w) => [w.pattern, w]));
+  const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
+  const hasQuery = isNotesSearch || tags.length > 0;
 
   return (
     <div className="space-y-6">
-      {/* Search bar */}
       <div className="flex justify-center">
-        <SearchBar initialTags={tags} />
+        <SearchBar initialTags={tags} initialNotesQuery={notesQuery} initialMode={isNotesSearch ? "notes" : "tags"} />
       </div>
 
-      {/* Error message */}
       {error && (
         <div className="rounded-lg bg-red-900/50 border border-red-700 p-4 text-center">
           <p className="text-red-300">{error}</p>
         </div>
       )}
 
-      {/* Wildcard expansion summary */}
-      {resolvedWildcards.length > 0 && (
+      {!isNotesSearch && resolvedWildcards.length > 0 && (
         <div className="rounded-lg bg-zinc-800/50 border border-zinc-700 p-3 text-sm">
-          <div className="text-zinc-400 text-xs uppercase tracking-wide mb-2">
-            Wildcard expansions
-          </div>
+          <div className="text-zinc-400 text-xs uppercase tracking-wide mb-2">Wildcard expansions</div>
           <div className="space-y-1">
             {resolvedWildcards.map((w) => (
               <details key={w.pattern} className="group">
                 <summary className="cursor-pointer list-none flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-700/50 transition-colors">
                   <span className="text-zinc-500 group-open:rotate-90 transition-transform">▶</span>
-                  <span className={w.negated ? "text-red-400 line-through" : "text-purple-400"}>
-                    {w.pattern}
-                  </span>
+                  <span className={w.negated ? "text-red-400 line-through" : "text-purple-400"}>{w.pattern}</span>
                   <span className="text-zinc-500">→</span>
-                  <span className="text-zinc-300 truncate flex-1">
-                    {w.tagNames.join(", ")}
-                  </span>
+                  <span className="text-zinc-300 truncate flex-1">{w.tagNames.join(", ")}</span>
                   <span className="text-zinc-500 text-xs whitespace-nowrap">
                     ({w.tagIds.length}{w.truncated ? "+" : ""} {w.tagIds.length === 1 ? "tag" : "tags"})
                   </span>
@@ -255,18 +76,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 <div className="pl-7 pr-2 pb-2 pt-1">
                   {w.tagNames.length > 0 ? (
                     <div className="flex flex-wrap gap-1.5">
-                      {w.tagNames.map((name, idx) => {
-                        const category = w.tagCategories[idx] as TagCategory;
-                        const colorClass = CATEGORY_COLORS[category] || "bg-zinc-700 text-zinc-300";
-                        return (
-                          <span
-                            key={name}
-                            className={`px-2 py-0.5 rounded border text-xs ${colorClass}`}
-                          >
-                            {name.replace(/_/g, " ")}
-                          </span>
-                        );
-                      })}
+                      {w.tagNames.map((name, idx) => (
+                        <span key={name} className={`px-2 py-0.5 rounded border text-xs ${CATEGORY_COLORS[w.tagCategories[idx] as TagCategory] || "bg-zinc-700 text-zinc-300"}`}>
+                          {name.replace(/_/g, " ")}
+                        </span>
+                      ))}
                       {w.truncated && (
                         <span className="px-2 py-0.5 rounded bg-zinc-600 text-zinc-400 text-xs italic border border-zinc-500">
                           +more (limit {w.tagIds.length})
@@ -283,43 +97,35 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       )}
 
-      {/* Results header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">
-          {tags.length > 0 ? (
+          {isNotesSearch ? (
+            <>
+              Notes containing: <span className="text-amber-400">&ldquo;{notesQuery}&rdquo;</span>
+              {tags.length > 0 && (
+                <span className="text-zinc-500 text-lg ml-2">
+                  (filtered by {tags.length} {tags.length === 1 ? "tag" : "tags"})
+                </span>
+              )}
+            </>
+          ) : tags.length > 0 ? (
             <>
               Search:{" "}
               <span className="inline-flex flex-wrap items-center gap-1">
                 {tags.map((tag, i) => {
                   const isNegated = tag.startsWith("-") && tag.length > 1;
                   const baseTag = isNegated ? tag.slice(1) : tag;
-                  const displayName = baseTag;
                   const isWildcard = baseTag.includes("*");
-                  const wildcardInfo = wildcardMap.get(tag);
-
+                  const info = wildcardMap.get(tag);
                   return (
-                    <span key={tag} className="group relative">
+                    <span key={tag}>
                       {i > 0 && <span className="text-zinc-500 mx-1">{isNegated ? "-" : "+"}</span>}
                       <span
-                        className={
-                          isNegated
-                            ? "text-red-400 line-through"
-                            : isWildcard
-                            ? "text-purple-400"
-                            : "text-blue-400"
-                        }
-                        title={
-                          wildcardInfo
-                            ? `Matches ${wildcardInfo.tagIds.length} tags${wildcardInfo.truncated ? " (truncated)" : ""}: ${wildcardInfo.tagNames.slice(0, 5).join(", ")}${wildcardInfo.tagNames.length > 5 ? "..." : ""}`
-                            : undefined
-                        }
+                        className={isNegated ? "text-red-400 line-through" : isWildcard ? "text-purple-400" : "text-blue-400"}
+                        title={info ? `Matches ${info.tagIds.length} tags: ${info.tagNames.slice(0, 5).join(", ")}${info.tagNames.length > 5 ? "..." : ""}` : undefined}
                       >
-                        {displayName}
-                        {wildcardInfo && (
-                          <span className="text-zinc-500 text-sm ml-1">
-                            ({wildcardInfo.tagIds.length}{wildcardInfo.truncated ? "+" : ""})
-                          </span>
-                        )}
+                        {baseTag}
+                        {info && <span className="text-zinc-500 text-sm ml-1">({info.tagIds.length}{info.truncated ? "+" : ""})</span>}
                       </span>
                     </span>
                   );
@@ -332,7 +138,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </h1>
         <span className="text-sm text-zinc-400">
           {totalCount.toLocaleString()} {totalCount === 1 ? "result" : "results"}
-          {tags.length > 0 && (
+          {hasQuery && (
             <span className="ml-2 text-zinc-500">
               ({queryTimeMs < 1000 ? `${Math.round(queryTimeMs)}ms` : `${(queryTimeMs / 1000).toFixed(2)}s`})
             </span>
@@ -340,37 +146,36 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </span>
       </div>
 
-      {/* No results message */}
-      {tags.length > 0 && posts.length === 0 && !error && (
+      {!hasQuery && (
         <div className="rounded-lg bg-zinc-800 p-8 text-center">
-          <p className="text-lg text-zinc-400">No posts found matching all tags</p>
+          <p className="text-lg text-zinc-400">Enter tags or note content to search</p>
+          <p className="mt-2 text-sm text-zinc-500">Use the &ldquo;Tags&rdquo; tab to search by tags, or &ldquo;Notes&rdquo; tab to search note content</p>
+        </div>
+      )}
+
+      {hasQuery && !hasResults && !error && (
+        <div className="rounded-lg bg-zinc-800 p-8 text-center">
+          <p className="text-lg text-zinc-400">
+            {isNotesSearch ? `No notes found containing "${notesQuery}"` : "No posts found matching all tags"}
+          </p>
           <p className="mt-2 text-sm text-zinc-500">
-            Try removing some tags or using different search terms
+            {isNotesSearch ? "Try different search terms or check your spelling" : "Try removing some tags or using different search terms"}
           </p>
         </div>
       )}
 
-      {/* Empty search state */}
-      {tags.length === 0 && (
-        <div className="rounded-lg bg-zinc-800 p-8 text-center">
-          <p className="text-lg text-zinc-400">Enter tags to search</p>
-          <p className="mt-2 text-sm text-zinc-500">
-            Add multiple tags to find posts matching all of them
-          </p>
+      {isNotesSearch && notes.length > 0 && (
+        <div className="space-y-3">
+          {notes.map((note) => <NoteSearchResult key={note.id} note={note} />)}
         </div>
       )}
 
-      {/* Posts grid */}
-      {posts.length > 0 && (
+      {!isNotesSearch && posts.length > 0 && (
         <Suspense
           fallback={
             <div className="columns-2 gap-3 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6">
               {Array.from({ length: 24 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800"
-                  style={{ aspectRatio: [1, 0.75, 1.33, 0.8, 1.2][i % 5] }}
-                />
+                <div key={i} className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800" style={{ aspectRatio: [1, 0.75, 1.33, 0.8, 1.2][i % 5] }} />
               ))}
             </div>
           }
@@ -379,7 +184,6 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </Suspense>
       )}
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
           <Pagination currentPage={page} totalPages={totalPages} basePath="/search" />

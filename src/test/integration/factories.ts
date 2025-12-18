@@ -188,3 +188,42 @@ export async function createPostInGroup(
 
   return post;
 }
+
+/**
+ * Create a note attached to a post
+ */
+export async function createNote(
+  prisma: PrismaClient,
+  postId: number,
+  overrides: Partial<{
+    name: string;
+    content: string;
+    translatedContent: string;
+    sourceLanguage: string;
+    targetLanguage: string;
+  }> = {}
+) {
+  return prisma.note.create({
+    data: {
+      postId,
+      name: overrides.name ?? 'Note',
+      content: overrides.content ?? 'Default note content',
+      translatedContent: overrides.translatedContent,
+      sourceLanguage: overrides.sourceLanguage,
+      targetLanguage: overrides.targetLanguage,
+    },
+  });
+}
+
+/**
+ * Create a post with a note
+ */
+export async function createPostWithNote(
+  prisma: PrismaClient,
+  noteOverrides: Parameters<typeof createNote>[2] = {},
+  postOverrides: Parameters<typeof createPost>[1] = {}
+) {
+  const post = await createPost(prisma, postOverrides);
+  const note = await createNote(prisma, post.id, noteOverrides);
+  return { post, note };
+}
