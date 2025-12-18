@@ -83,6 +83,41 @@ function sanitizeHeadline(headline: string | null): string | null {
 }
 
 /**
+ * Adjust headline highlighting to only mark the matched prefix, not the full word.
+ * e.g., searching "back" in "background" → "<mark>back</mark>ground" instead of "<mark>background</mark>"
+ */
+function adjustPrefixHighlighting(headline: string | null, query: string): string | null {
+  if (!headline) return null;
+
+  // Extract search terms from query (ignore operators, quotes)
+  const terms = query
+    .toLowerCase()
+    .replace(/["()-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && t !== "or");
+
+  if (terms.length === 0) return headline;
+
+  // Replace each <mark>word</mark> with prefix-only highlighting
+  return headline.replace(/<mark>([^<]+)<\/mark>/gi, (match, word: string) => {
+    const wordLower = word.toLowerCase();
+
+    // Find which search term matches as prefix
+    for (const term of terms) {
+      if (wordLower.startsWith(term)) {
+        const prefixLen = term.length;
+        const prefix = word.slice(0, prefixLen);
+        const rest = word.slice(prefixLen);
+        return `<mark>${prefix}</mark>${rest}`;
+      }
+    }
+
+    // No prefix match found (exact match or other), keep as-is
+    return match;
+  });
+}
+
+/**
  * Search notes by content using PostgreSQL full-text search.
  *
  * Searches both original note content and translations (via NoteTranslation table).
@@ -108,51 +143,111 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
   const startTime = performance.now();
 
   try {
-    const [notes, countResult] = await Promise.all([
-      prisma.$queryRaw<NoteResult[]>`
-        SELECT
-          n.id,
-          n."postId",
-          n.name,
-          n.content,
-          n."contentHash",
-          CASE
-            WHEN to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-            THEN ts_headline('simple', n.content, websearch_to_tsquery('simple', ${query}),
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2')
-            ELSE ts_headline('simple', COALESCE(nt."translatedContent", ''), websearch_to_tsquery('simple', ${query}),
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2')
-          END as headline,
-          jsonb_build_object(
-            'id', p.id, 'hash', p.hash, 'width', p.width, 'height', p.height,
-            'blurhash', p.blurhash, 'mimeType', p."mimeType"
-          ) as post
-        FROM "Note" n
-        JOIN "Post" p ON n."postId" = p.id
-        LEFT JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
-        WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-           OR to_tsvector('simple', COALESCE(nt."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
-        ORDER BY GREATEST(
-                   ts_rank_cd(to_tsvector('simple', n.content), websearch_to_tsquery('simple', ${query})),
-                   ts_rank_cd(to_tsvector('simple', COALESCE(nt."translatedContent", '')), websearch_to_tsquery('simple', ${query}))
-                 ) DESC,
-                 p."importedAt" DESC
-        LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
-      `,
-      prisma.$queryRaw<[{ count: bigint }]>`
-        SELECT COUNT(*)::bigint as count FROM "Note" n
-        LEFT JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
-        WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-           OR to_tsvector('simple', COALESCE(nt."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
-      `,
-    ]);
+    // CTE to compute tsquery with prefix matching
+    // Uses websearch_to_tsquery for parsing (supports quotes, OR, -)
+    // Then converts each lexeme to prefix match (e.g., 'back' → 'back':* matches 'background')
+    // UNION allows each subquery to use its own GIN index efficiently
+    // Count using window function
+    const results = await prisma.$queryRaw<(NoteResult & { total_count: bigint })[]>`
+      WITH
+        query AS (
+          SELECT regexp_replace(
+            websearch_to_tsquery('simple', ${query})::text,
+            '''([^'']+)''',
+            '''\\1'':*',
+            'g'
+          )::tsquery AS q
+        ),
+        matches AS (
+          -- Match in note content (uses Note_contentTsv_idx GIN index)
+          SELECT DISTINCT ON (n.id)
+            n.id,
+            n."postId",
+            n.name,
+            n.content,
+            n."contentHash",
+            n."contentTsv",
+            ts_rank_cd(n."contentTsv", q.q) AS rank,
+            ts_headline('simple', n.content, q.q,
+              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            p.id AS post_id,
+            p.hash AS post_hash,
+            p.width AS post_width,
+            p.height AS post_height,
+            p.blurhash AS post_blurhash,
+            p."mimeType" AS post_mime,
+            p."importedAt" AS imported_at
+          FROM "Note" n
+          CROSS JOIN query q
+          JOIN "Post" p ON n."postId" = p.id
+          WHERE n."contentTsv" @@ q.q
 
-    const totalCount = Number(countResult[0].count);
+          UNION
+
+          -- Match in translation content (uses NoteTranslation_translatedTsv_idx GIN index)
+          SELECT DISTINCT ON (n.id)
+            n.id,
+            n."postId",
+            n.name,
+            n.content,
+            n."contentHash",
+            n."contentTsv",
+            ts_rank_cd(nt."translatedTsv", q.q) AS rank,
+            ts_headline('simple', nt."translatedContent", q.q,
+              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            p.id AS post_id,
+            p.hash AS post_hash,
+            p.width AS post_width,
+            p.height AS post_height,
+            p.blurhash AS post_blurhash,
+            p."mimeType" AS post_mime,
+            p."importedAt" AS imported_at
+          FROM "Note" n
+          CROSS JOIN query q
+          JOIN "Post" p ON n."postId" = p.id
+          JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
+          WHERE nt."translatedTsv" @@ q.q
+        ),
+        deduplicated AS (
+          -- Deduplicate notes that match in both content and translation, keeping highest rank
+          SELECT DISTINCT ON (id)
+            id, "postId", name, content, "contentHash", headline,
+            post_id, post_hash, post_width, post_height, post_blurhash, post_mime,
+            rank, imported_at
+          FROM matches
+          ORDER BY id, rank DESC
+        ),
+        counted AS (
+          SELECT *, COUNT(*) OVER() AS total_count
+          FROM deduplicated
+          ORDER BY rank DESC, imported_at DESC
+          LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
+        )
+      SELECT
+        id,
+        "postId",
+        name,
+        content,
+        "contentHash",
+        headline,
+        jsonb_build_object(
+          'id', post_id, 'hash', post_hash, 'width', post_width, 'height', post_height,
+          'blurhash', post_blurhash, 'mimeType', post_mime
+        ) AS post,
+        total_count
+      FROM counted
+    `;
+
+    const totalCount = results.length > 0 ? Number(results[0].total_count) : 0;
 
     return {
-      notes: notes.map((n) => ({
-        ...n,
-        headline: sanitizeHeadline(n.headline),
+      notes: results.map((n) => ({
+        id: n.id,
+        postId: n.postId,
+        name: n.name,
+        content: n.content,
+        contentHash: n.contentHash,
+        headline: adjustPrefixHighlighting(sanitizeHeadline(n.headline), query),
         post: n.post as PostResult,
       })),
       totalCount,
