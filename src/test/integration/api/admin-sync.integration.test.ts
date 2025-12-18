@@ -191,7 +191,7 @@ describe('/api/admin/sync (Integration)', () => {
 
 // Helper to wait for background sync to complete
 async function waitForSyncToComplete(timeoutMs = 5000): Promise<void> {
-  const { prisma } = await import('@/lib/db');
+  const prisma = getTestPrisma();
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeoutMs) {
