@@ -1,3 +1,4 @@
+import DOMPurify from "isomorphic-dompurify";
 import { prisma } from "@/lib/db";
 import {
   isWildcardPattern,
@@ -45,9 +46,21 @@ export interface NoteSearchResult extends BaseSearchResult {
 }
 
 /**
+ * Sanitize headline HTML, allowing only <mark> tags from ts_headline.
+ */
+function sanitizeHeadline(headline: string | null): string | null {
+  if (!headline) return null;
+  return DOMPurify.sanitize(headline, { ALLOWED_TAGS: ["mark"] });
+}
+
+/**
  * Search notes by content and translations using PostgreSQL full-text search.
  */
 export async function searchNotes(query: string, page: number): Promise<NoteSearchResult> {
+  if (!query || query.trim().length < 2) {
+    return { notes: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
   const skip = (page - 1) * POSTS_PER_PAGE;
   const startTime = performance.now();
 
@@ -93,7 +106,8 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
     return {
       notes: notes.map((n) => ({
         ...n,
-        post: typeof n.post === "string" ? JSON.parse(n.post) : n.post,
+        headline: sanitizeHeadline(n.headline),
+        post: n.post as PostResult,
       })),
       totalCount,
       totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),

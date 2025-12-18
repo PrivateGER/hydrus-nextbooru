@@ -102,11 +102,6 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           {isNotesSearch ? (
             <>
               Notes containing: <span className="text-amber-400">&ldquo;{notesQuery}&rdquo;</span>
-              {tags.length > 0 && (
-                <span className="text-zinc-500 text-lg ml-2">
-                  (filtered by {tags.length} {tags.length === 1 ? "tag" : "tags"})
-                </span>
-              )}
             </>
           ) : tags.length > 0 ? (
             <>
