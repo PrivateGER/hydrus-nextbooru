@@ -43,7 +43,7 @@ function createTranslationResponse(state: MockOpenRouterState): ChatCompletionRe
     id: 'mock-completion-id',
     model: 'google/gemini-2.5-flash',
     object: 'chat.completion',
-    created: Date.now(),
+    created: Math.floor(Date.now() / 1000),
     choices: [
       {
         index: 0,
@@ -77,7 +77,7 @@ function createImageTranslationResponse(
     id: 'mock-completion-id',
     model: 'google/gemini-2.5-flash',
     object: 'chat.completion',
-    created: Date.now(),
+    created: Math.floor(Date.now() / 1000),
     choices: [
       {
         index: 0,
