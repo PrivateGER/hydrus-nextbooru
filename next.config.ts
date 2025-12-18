@@ -6,6 +6,14 @@ const nextConfig: NextConfig = {
     viewTransition: true,
   },
   serverExternalPackages: ["pino", "pino-pretty"],
+  images: {
+    localPatterns: [
+      {
+        pathname: "/api/thumbnails/**",
+        search: "?size=*",
+      },
+    ],
+  },
 };
 
 export default nextConfig;

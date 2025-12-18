@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma, escapeSqlLike } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -14,6 +15,14 @@ const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
 
 /**
  * Search posts by included and excluded tags with pagination and support for wildcard patterns.
+ * Also supports filtering by note content.
+ *
+ * Query parameters:
+ * - `tags`: comma-separated tag names; prefix with `-` to exclude
+ * - `notes`: search query for note content (full-text search)
+ * - `notesMode`: "fulltext" (default) or "partial" for ILIKE matching
+ * - `page`: page number (default 1)
+ * - `limit`: results per page (default 48, max 100)
  *
  * @returns An object containing:
  *   - `posts`: array of matching posts (selected fields: `id`, `hash`, `width`, `height`, `blurhash`, `mimeType`)
@@ -24,6 +33,8 @@ const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
+  const notesQuery = searchParams.get("notes")?.trim() || "";
+  const notesMode = searchParams.get("notesMode") || "fulltext";
   const page = Math.min(
     MAX_PAGE,
     Math.max(1, parseInt(searchParams.get("page") || "1", 10))
@@ -36,7 +47,10 @@ export async function GET(request: NextRequest) {
   // Parse tags with negation support
   const { includeTags, excludeTags } = parseTagsParamWithNegation(tagsParam);
 
-  if (includeTags.length === 0 && excludeTags.length === 0) {
+  const hasTagFilters = includeTags.length > 0 || excludeTags.length > 0;
+  const hasNotesFilter = notesQuery.length >= 2;
+
+  if (!hasTagFilters && !hasNotesFilter) {
     return NextResponse.json({
       posts: [],
       totalCount: 0,
@@ -183,6 +197,59 @@ export async function GET(request: NextRequest) {
         },
       },
     });
+  }
+
+  // Notes filter: use Prisma's relational queries to avoid loading all post IDs into memory
+  if (hasNotesFilter) {
+    if (notesMode === "partial") {
+      // Partial matching using ILIKE with trigram index
+      const searchPattern = `%${escapeSqlLike(notesQuery)}%`;
+      andConditions.push({
+        notes: {
+          some: {
+            OR: [
+              {
+                content: {
+                  contains: notesQuery,
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                name: {
+                  contains: notesQuery,
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          },
+        },
+      });
+    } else {
+      // Full-text search using tsvector - search both content AND name for consistency
+      const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
+        SELECT DISTINCT "postId"
+        FROM "Note"
+        WHERE to_tsvector('simple', content) @@ websearch_to_tsquery('simple', ${notesQuery})
+           OR to_tsvector('simple', name) @@ websearch_to_tsquery('simple', ${notesQuery})
+      `;
+      const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
+
+      // If no notes match, return empty results early
+      if (noteMatchingPostIds.length === 0) {
+        return NextResponse.json({
+          posts: [],
+          totalCount: 0,
+          totalPages: 0,
+          ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+        });
+      }
+
+      andConditions.push({
+        id: {
+          in: noteMatchingPostIds,
+        },
+      });
+    }
   }
 
   const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
