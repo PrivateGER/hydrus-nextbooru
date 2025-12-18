@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { unstable_cache } from "next/cache";
 import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
@@ -7,7 +8,18 @@ import { searchPosts, searchNotes } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 
-export const revalidate = 300; // Cache page for 5 minutes
+// Cache search results for 5 minutes, keyed by search parameters
+const getCachedPostSearch = unstable_cache(
+  async (tags: string[], page: number) => searchPosts(tags, page),
+  ["post-search"],
+  { revalidate: 300 }
+);
+
+const getCachedNoteSearch = unstable_cache(
+  async (query: string, page: number) => searchNotes(query, page),
+  ["note-search"],
+  { revalidate: 300 }
+);
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
@@ -29,11 +41,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const page = Math.max(1, parseInt(params.page || "1", 10));
   const isNotesSearch = notesQuery.length >= 2;
 
-  // Execute search
+  // Execute search (cached for 5 minutes)
   const result = isNotesSearch
-    ? await searchNotes(notesQuery, page)
+    ? await getCachedNoteSearch(notesQuery, page)
     : tags.length > 0
-      ? await searchPosts(tags, page)
+      ? await getCachedPostSearch(tags, page)
       : null;
 
   const posts = result && "posts" in result ? result.posts : [];
