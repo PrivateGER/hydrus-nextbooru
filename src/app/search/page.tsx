@@ -7,6 +7,8 @@ import { searchPosts, searchNotes } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 
+export const revalidate = 300; // Cache page for 5 minutes
+
 const CATEGORY_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
   [TagCategory.COPYRIGHT]: "bg-purple-900/50 text-purple-300 border-purple-700",
