@@ -197,7 +197,7 @@ async function waitForSyncToComplete(timeoutMs = 5000): Promise<void> {
   while (Date.now() - startTime < timeoutMs) {
     const state = await prisma.syncState.findFirst();
     // Wait for state to exist AND be in a terminal state
-    if (state && (state.status === 'completed' || state.status === 'error')) {
+    if (state && (state.status === 'completed' || state.status === 'error' || state.status === 'cancelled')) {
       return;
     }
     await new Promise((r) => setTimeout(r, 100));
