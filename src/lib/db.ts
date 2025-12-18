@@ -67,7 +67,7 @@ function createPrismaClient() {
   if (enableQueryLog) {
     const originalQuery = pool.query.bind(pool);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (pool as any).query = async (...args: any[]) => {
+    (pool as any).query = async (...args: [any, ...any[]]) => {
       const start = performance.now();
       try {
         const result = await originalQuery(...args);
