@@ -23,10 +23,10 @@ const MAX_PAGE = 10000;
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q")?.trim() || "";
-  const page = Math.min(
-    MAX_PAGE,
-    Math.max(1, parseInt(searchParams.get("page") || "1", 10))
-  );
+
+  const parsedPage = parseInt(searchParams.get("page") || "1", 10);
+  const pageNumber = Number.isFinite(parsedPage) ? parsedPage : 1;
+  const page = Math.min(MAX_PAGE, Math.max(1, pageNumber));
 
   if (query.length < 2) {
     return NextResponse.json(
