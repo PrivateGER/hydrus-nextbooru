@@ -322,10 +322,6 @@ export function SearchBar({
       const query = inputValue.trim();
       if (query.length >= 2) {
         params.set("notes", query);
-        // Include tags filter if any are selected
-        if (selectedTags.length > 0) {
-          params.set("tags", selectedTags.join(","));
-        }
         router.push(`/search?${params.toString()}`);
       }
     } else {

@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     Math.max(1, parseInt(searchParams.get("page") || "1", 10))
   );
   const limit = Math.min(
-    parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10),
+    Math.max(1, parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10)),
     MAX_LIMIT
   );
 

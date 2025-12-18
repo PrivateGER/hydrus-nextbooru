@@ -199,44 +199,57 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Notes filter: find posts that have notes matching the search query
-  let noteMatchingPostIds: number[] | null = null;
+  // Notes filter: use Prisma's relational queries to avoid loading all post IDs into memory
   if (hasNotesFilter) {
     if (notesMode === "partial") {
       // Partial matching using ILIKE with trigram index
       const searchPattern = `%${escapeSqlLike(notesQuery)}%`;
-      const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
-        SELECT DISTINCT "postId"
-        FROM "Note"
-        WHERE content ILIKE ${searchPattern}
-           OR name ILIKE ${searchPattern}
-      `;
-      noteMatchingPostIds = matchingNotes.map((n) => n.postId);
+      andConditions.push({
+        notes: {
+          some: {
+            OR: [
+              {
+                content: {
+                  contains: notesQuery,
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                name: {
+                  contains: notesQuery,
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          },
+        },
+      });
     } else {
-      // Full-text search using tsvector
+      // Full-text search using tsvector - search both content AND name for consistency
       const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
         SELECT DISTINCT "postId"
         FROM "Note"
         WHERE to_tsvector('simple', content) @@ websearch_to_tsquery('simple', ${notesQuery})
+           OR to_tsvector('simple', name) @@ websearch_to_tsquery('simple', ${notesQuery})
       `;
-      noteMatchingPostIds = matchingNotes.map((n) => n.postId);
-    }
+      const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
 
-    // If no notes match, return empty results early
-    if (noteMatchingPostIds.length === 0) {
-      return NextResponse.json({
-        posts: [],
-        totalCount: 0,
-        totalPages: 0,
-        ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+      // If no notes match, return empty results early
+      if (noteMatchingPostIds.length === 0) {
+        return NextResponse.json({
+          posts: [],
+          totalCount: 0,
+          totalPages: 0,
+          ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+        });
+      }
+
+      andConditions.push({
+        id: {
+          in: noteMatchingPostIds,
+        },
       });
     }
-
-    andConditions.push({
-      id: {
-        in: noteMatchingPostIds,
-      },
-    });
   }
 
   const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
