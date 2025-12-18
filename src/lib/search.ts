@@ -83,6 +83,41 @@ function sanitizeHeadline(headline: string | null): string | null {
 }
 
 /**
+ * Adjust headline highlighting to only mark the matched prefix, not the full word.
+ * e.g., searching "back" in "background" → "<mark>back</mark>ground" instead of "<mark>background</mark>"
+ */
+function adjustPrefixHighlighting(headline: string | null, query: string): string | null {
+  if (!headline) return null;
+
+  // Extract search terms from query (ignore operators, quotes)
+  const terms = query
+    .toLowerCase()
+    .replace(/["()-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && t !== "or");
+
+  if (terms.length === 0) return headline;
+
+  // Replace each <mark>word</mark> with prefix-only highlighting
+  return headline.replace(/<mark>([^<]+)<\/mark>/gi, (match, word: string) => {
+    const wordLower = word.toLowerCase();
+
+    // Find which search term matches as prefix
+    for (const term of terms) {
+      if (wordLower.startsWith(term)) {
+        const prefixLen = term.length;
+        const prefix = word.slice(0, prefixLen);
+        const rest = word.slice(prefixLen);
+        return `<mark>${prefix}</mark>${rest}`;
+      }
+    }
+
+    // No prefix match found (exact match or other), keep as-is
+    return match;
+  });
+}
+
+/**
  * Search notes by content using PostgreSQL full-text search.
  *
  * Searches both original note content and translations (via NoteTranslation table).
@@ -108,12 +143,21 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
   const startTime = performance.now();
 
   try {
-    // CTE to compute tsquery
+    // CTE to compute tsquery with prefix matching
+    // Uses websearch_to_tsquery for parsing (supports quotes, OR, -)
+    // Then converts each lexeme to prefix match (e.g., 'back' → 'back':* matches 'background')
     // UNION allows each subquery to use its own GIN index efficiently
     // Count using window function
     const results = await prisma.$queryRaw<(NoteResult & { total_count: bigint })[]>`
       WITH
-        query AS (SELECT websearch_to_tsquery('simple', ${query}) AS q),
+        query AS (
+          SELECT regexp_replace(
+            websearch_to_tsquery('simple', ${query})::text,
+            '''([^'']+)''',
+            '''\\1'':*',
+            'g'
+          )::tsquery AS q
+        ),
         matches AS (
           -- Match in note content (uses Note_contentTsv_idx GIN index)
           SELECT DISTINCT ON (n.id)
@@ -203,7 +247,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         name: n.name,
         content: n.content,
         contentHash: n.contentHash,
-        headline: sanitizeHeadline(n.headline),
+        headline: adjustPrefixHighlighting(sanitizeHeadline(n.headline), query),
         post: n.post as PostResult,
       })),
       totalCount,
