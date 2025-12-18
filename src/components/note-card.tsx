@@ -56,7 +56,7 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
           translatedContent: data.translatedContent,
           sourceLanguage: data.sourceLanguage,
           targetLanguage: data.targetLanguage,
-          translatedAt: data.translatedAt ? new Date(data.translatedAt) : new Date(),
+          translatedAt: new Date(data.translatedAt),
         },
       });
     } catch (err) {
