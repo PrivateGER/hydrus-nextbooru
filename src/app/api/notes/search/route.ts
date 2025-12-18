@@ -1,26 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { searchNotes } from "@/lib/search";
 
-const DEFAULT_LIMIT = 48;
-const MAX_LIMIT = 100;
 const MAX_PAGE = 10000;
-
-interface NoteSearchResult {
-  id: number;
-  postId: number;
-  name: string;
-  content: string;
-  contentHash: string;
-  headline: string | null;
-  post: {
-    id: number;
-    hash: string;
-    width: number | null;
-    height: number | null;
-    blurhash: string | null;
-    mimeType: string;
-  };
-}
 
 /**
  * Search notes by content using full-text search.
@@ -28,12 +9,6 @@ interface NoteSearchResult {
  * Query parameters:
  * - `q`: search query (required, min 2 characters)
  * - `page`: page number (default 1)
- * - `limit`: results per page (default 48, max 100)
- *
- * @returns Object with:
- *   - `notes`: array of matching notes with post info and headline snippets
- *   - `totalCount`: total number of matching notes
- *   - `totalPages`: total pages available
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -41,10 +16,6 @@ export async function GET(request: NextRequest) {
   const page = Math.min(
     MAX_PAGE,
     Math.max(1, parseInt(searchParams.get("page") || "1", 10))
-  );
-  const limit = Math.min(
-    Math.max(1, parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10)),
-    MAX_LIMIT
   );
 
   if (query.length < 2) {
@@ -54,60 +25,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const skip = (page - 1) * limit;
+  const result = await searchNotes(query, page);
 
-  // Full-text search using tsvector with websearch_to_tsquery
-  // This provides word-based matching with support for:
-  // - Multiple words (AND by default)
-  // - Quoted phrases for exact sequences
-  // - OR for alternative terms
-  // - - (minus) for exclusions
-  const [notes, totalCount] = await Promise.all([
-    prisma.$queryRaw<NoteSearchResult[]>`
-      SELECT
-        n.id,
-        n."postId",
-        n.name,
-        n.content,
-        n."contentHash",
-        ts_headline(
-          'simple',
-          n.content,
-          websearch_to_tsquery('simple', ${query}),
-          'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2'
-        ) as headline,
-        jsonb_build_object(
-          'id', p.id,
-          'hash', p.hash,
-          'width', p.width,
-          'height', p.height,
-          'blurhash', p.blurhash,
-          'mimeType', p."mimeType"
-        ) as post
-      FROM "Note" n
-      JOIN "Post" p ON n."postId" = p.id
-      WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-      ORDER BY ts_rank(to_tsvector('simple', n.content), websearch_to_tsquery('simple', ${query})) DESC,
-               p."importedAt" DESC
-      LIMIT ${limit}
-      OFFSET ${skip}
-    `,
-    prisma.$queryRaw<[{ count: bigint }]>`
-      SELECT COUNT(*)::bigint as count
-      FROM "Note" n
-      WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-    `.then((r) => Number(r[0].count)),
-  ]);
+  if (result.error) {
+    return NextResponse.json({ error: result.error }, { status: 500 });
+  }
 
-  return NextResponse.json({
-    notes: notes.map((n) => ({
-      ...n,
-      post:
-        typeof n.post === "string"
-          ? JSON.parse(n.post)
-          : n.post,
-    })),
-    totalCount,
-    totalPages: Math.ceil(totalCount / limit),
-  });
+  return NextResponse.json(result);
 }
