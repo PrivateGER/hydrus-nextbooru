@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchNotes } from "@/lib/search";
 
+export const revalidate = 300; // Cache for 5 minutes
+
 const MAX_PAGE = 10000;
 
 /**
