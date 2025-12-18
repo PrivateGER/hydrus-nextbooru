@@ -16,6 +16,7 @@
     "test:watch": "cross-env NODE_OPTIONS='--no-webstorage' vitest",
     "test:ui": "cross-env NODE_OPTIONS='--no-webstorage' vitest --ui --api 3001",
     "test:coverage": "cross-env NODE_OPTIONS='--no-webstorage' vitest run --coverage",
+    "test:coverage:ui": "cross-env NODE_OPTIONS='--no-webstorage' vitest --ui --api 3001 --coverage",
     "test:sync": "cross-env NODE_OPTIONS='--no-webstorage' vitest run src/lib/hydrus/sync",
     "test:integration": "cross-env NODE_OPTIONS='--no-webstorage' vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "cross-env NODE_OPTIONS='--no-webstorage' vitest --config vitest.integration.config.ts",

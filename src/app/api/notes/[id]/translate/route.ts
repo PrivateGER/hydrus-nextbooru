@@ -30,7 +30,15 @@ export async function POST(
       return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
     }
 
-    const body: TranslateRequestBody = await request.json().catch(() => ({}));
+    let body: TranslateRequestBody = {};
+    try {
+      const text = await request.text();
+      if (text) {
+        body = JSON.parse(text);
+      }
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
 
     // Fetch the note with its content hash
     const note = await prisma.note.findUnique({
