@@ -21,6 +21,7 @@ const stream = pretty({
   colorize: isDev,
   ignore: "pid,hostname",
   translateTime: "HH:MM:ss",
+  messageKey: "msg", // ensures newlines in messages render correctly
 });
 
 export const logger = pino(

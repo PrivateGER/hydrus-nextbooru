@@ -1,6 +1,7 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
+import { format as formatSql } from "sql-formatter";
 import { dbLog } from "@/lib/logger";
 
 /**
@@ -32,6 +33,9 @@ export function setTestPrisma(client: PrismaClient | null): void {
 }
 
 function createPrismaClient() {
+  // Enable query logging when LOG_QUERIES=true
+  const enableQueryLog = process.env.LOG_QUERIES === 'true';
+
   // Configure pool for concurrent sync operations:
   // - max: 40 connections (20 concurrent files + bulk operations + API requests)
   // - idleTimeoutMillis: 30s before closing idle connections
@@ -41,6 +45,12 @@ function createPrismaClient() {
     max: 40,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 30000,
+    // Enable query logging at the pg level (works with driver adapters)
+    ...(enableQueryLog && {
+      log: (msg: string) => {
+        dbLog.debug({ pgLog: msg }, 'pg pool');
+      },
+    }),
   });
 
   // Log pool errors for observability
@@ -48,10 +58,35 @@ function createPrismaClient() {
     dbLog.error({ error: err instanceof Error ? err.message : String(err) }, 'Unexpected database pool error');
   });
 
-  dbLog.debug({ maxConnections: 40, idleTimeoutMs: 30000, connectionTimeoutMs: 30000 }, 'Database pool initialized');
+  dbLog.debug({ maxConnections: 40, idleTimeoutMs: 30000, connectionTimeoutMs: 30000, queryLogging: enableQueryLog }, 'Database pool initialized');
 
   // Store pool reference for potential cleanup
   globalForPrisma.pool = pool;
+
+  // Wrap pool.query to log queries with timing when LOG_QUERIES=true
+  if (enableQueryLog) {
+    const originalQuery = pool.query.bind(pool);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (pool as any).query = async (...args: any[]) => {
+      const start = performance.now();
+      try {
+        const result = await originalQuery(...args);
+        const duration = performance.now() - start;
+        const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+        // Put formatted SQL in message (2nd arg) so pino-pretty renders newlines
+        dbLog.debug({ duration: `${duration.toFixed(2)}ms` }, '\n' + formatSql(queryText || '', { language: 'postgresql' }));
+        return result;
+      } catch (err) {
+        const duration = performance.now() - start;
+        const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+        dbLog.error(
+          { duration: `${duration.toFixed(2)}ms`, error: err instanceof Error ? err.message : String(err) },
+          'FAILED:\n' + formatSql(queryText || '', { language: 'postgresql' })
+        );
+        throw err;
+      }
+    };
+  }
 
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });

@@ -77,6 +77,13 @@ HYDRUS_API_KEY      # Hydrus API access key
 HYDRUS_FILES_PATH   # Path to Hydrus file storage directory
 ```
 
+### Debugging
+```bash
+LOG_QUERIES=true npm run dev  # Log all SQL queries with timing
+```
+
+Query logging outputs formatted SQL with execution duration via pino. Useful for debugging slow queries.
+
 ## Key Patterns
 
 - **Tag categorization**: Namespaced tags (e.g., `artist:name`) map to categories via `tag-mapper.ts`
