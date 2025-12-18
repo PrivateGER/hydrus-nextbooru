@@ -17,7 +17,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
   });
 
   describe('file serving', () => {
-    it('should serve an existing file', async () => {
+    it('should serve an existing file with correct content', async () => {
       const hash = randomHash();
       const content = createPngBuffer();
       await createTestFile(hash, '.png', content);
@@ -28,6 +28,10 @@ describe('GET /api/files/[filename] (Integration)', () => {
       expect(response.status).toBe(200);
       expect(response.headers.get('Content-Type')).toBe('image/png');
       expect(response.headers.get('Content-Length')).toBe(String(content.length));
+
+      // Verify actual file content is returned correctly
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content);
     });
 
     it('should return 404 for non-existent file', async () => {
@@ -99,6 +103,10 @@ describe('GET /api/files/[filename] (Integration)', () => {
       expect(response.status).toBe(206);
       expect(response.headers.get('Content-Range')).toBe('bytes 0-99/1000');
       expect(response.headers.get('Content-Length')).toBe('100');
+
+      // Verify the correct byte range is returned
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content.subarray(0, 100));
     });
 
     it('should set Accept-Ranges header', async () => {
