@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import DOMPurify from "isomorphic-dompurify";
 
 interface NoteSearchResultProps {
   note: {
@@ -23,7 +24,13 @@ interface NoteSearchResultProps {
 export function NoteSearchResult({ note }: NoteSearchResultProps) {
   const thumbnailUrl = `/api/thumbnails/${note.post.hash}.webp?size=grid`;
   const postUrl = `/post/${note.post.hash}`;
-  const displayContent = note.headline || note.content.slice(0, 300);
+  const rawContent = note.headline || note.content.slice(0, 300);
+
+  // Sanitize HTML to prevent XSS while preserving search highlight <mark> tags
+  const displayContent = DOMPurify.sanitize(rawContent, {
+    ALLOWED_TAGS: ["mark"],
+    KEEP_CONTENT: true,
+  });
 
   const isVideo = note.post.mimeType.startsWith("video/");
   const isAnimated = note.post.mimeType === "image/gif" || note.post.mimeType === "image/apng";
