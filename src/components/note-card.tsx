@@ -3,14 +3,18 @@
 import { useState } from "react";
 import { Markdown } from "./markdown";
 
+interface NoteTranslation {
+  translatedContent: string;
+  sourceLanguage: string | null;
+  targetLanguage: string | null;
+  translatedAt: Date;
+}
+
 interface Note {
   id: number;
   name: string;
   content: string;
-  translatedContent: string | null;
-  sourceLanguage: string | null;
-  targetLanguage: string | null;
-  translatedAt: Date | null;
+  translation: NoteTranslation | null;
 }
 
 interface NoteCardProps {
@@ -45,13 +49,15 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
         throw new Error(data.error || "Translation failed");
       }
 
-      const updatedNote = await response.json();
+      const data = await response.json();
       setNote({
         ...note,
-        translatedContent: updatedNote.translatedContent,
-        sourceLanguage: updatedNote.sourceLanguage,
-        targetLanguage: updatedNote.targetLanguage,
-        translatedAt: updatedNote.translatedAt ? new Date(updatedNote.translatedAt) : null,
+        translation: {
+          translatedContent: data.translatedContent,
+          sourceLanguage: data.sourceLanguage,
+          targetLanguage: data.targetLanguage,
+          translatedAt: new Date(data.translatedAt),
+        },
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Translation failed");
@@ -60,9 +66,9 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
     }
   };
 
-  const hasTranslation = note.translatedContent !== null;
+  const hasTranslation = note.translation !== null;
   const displayContent =
-    hasTranslation && !showOriginal ? note.translatedContent : note.content;
+    hasTranslation && !showOriginal ? note.translation!.translatedContent : note.content;
 
   return (
     <div className="rounded bg-zinc-700/50 p-3">
@@ -131,10 +137,10 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
 
       <Markdown content={displayContent || ""} className="text-sm" />
 
-      {hasTranslation && !showOriginal && note.sourceLanguage && note.targetLanguage && (
+      {hasTranslation && !showOriginal && note.translation?.sourceLanguage && note.translation?.targetLanguage && (
         <p className="mt-2 text-xs text-zinc-500">
-          Translated from {note.sourceLanguage.toUpperCase()} to{" "}
-          {note.targetLanguage.toUpperCase()}
+          Translated from {note.translation.sourceLanguage.toUpperCase()} to{" "}
+          {note.translation.targetLanguage.toUpperCase()}
         </p>
       )}
     </div>
