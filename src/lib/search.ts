@@ -91,8 +91,8 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
            OR to_tsvector('simple', COALESCE(nt."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
         ORDER BY GREATEST(
-                   ts_rank(to_tsvector('simple', n.content), websearch_to_tsquery('simple', ${query})),
-                   ts_rank(to_tsvector('simple', COALESCE(nt."translatedContent", '')), websearch_to_tsquery('simple', ${query}))
+                   ts_rank_cd(to_tsvector('simple', n.content), websearch_to_tsquery('simple', ${query})),
+                   ts_rank_cd(to_tsvector('simple', COALESCE(nt."translatedContent", '')), websearch_to_tsquery('simple', ${query}))
                  ) DESC,
                  p."importedAt" DESC
         LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
