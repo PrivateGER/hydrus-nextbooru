@@ -155,14 +155,26 @@ model Note {
   name    String // Note name/label from Hydrus
   content String // Note text content
 
-  // Translation fields
-  translatedContent String?
-  sourceLanguage    String?
-  targetLanguage    String?
-  translatedAt      DateTime?
+  // Content hash for sharing translations across identical notes (generated column)
+  contentHash String @default(dbgenerated("encode(digest(content, 'sha256'::text), 'hex'::text)")) @db.Char(64)
+
+  // Relation to shared translation (via contentHash)
+  translation NoteTranslation? @relation(fields: [contentHash], references: [contentHash])
 
   @@unique([postId, name])
   @@index([postId])
+  @@index([contentHash])
+}
+
+model NoteTranslation {
+  contentHash       String   @id @db.Char(64)
+  translatedContent String
+  sourceLanguage    String?
+  targetLanguage    String?
+  translatedAt      DateTime @default(now())
+
+  // Back-relation to notes with this content
+  notes Note[]
 }
 
 // ============================================
