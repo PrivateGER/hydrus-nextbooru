@@ -76,7 +76,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             WHEN to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
             THEN ts_headline('simple', n.content, websearch_to_tsquery('simple', ${query}),
               'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2')
-            ELSE ts_headline('simple', COALESCE(n."translatedContent", ''), websearch_to_tsquery('simple', ${query}),
+            ELSE ts_headline('simple', COALESCE(nt."translatedContent", ''), websearch_to_tsquery('simple', ${query}),
               'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2')
           END as headline,
           jsonb_build_object(
@@ -85,19 +85,21 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           ) as post
         FROM "Note" n
         JOIN "Post" p ON n."postId" = p.id
+        LEFT JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
         WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-           OR to_tsvector('simple', COALESCE(n."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
+           OR to_tsvector('simple', COALESCE(nt."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
         ORDER BY GREATEST(
                    ts_rank(to_tsvector('simple', n.content), websearch_to_tsquery('simple', ${query})),
-                   ts_rank(to_tsvector('simple', COALESCE(n."translatedContent", '')), websearch_to_tsquery('simple', ${query}))
+                   ts_rank(to_tsvector('simple', COALESCE(nt."translatedContent", '')), websearch_to_tsquery('simple', ${query}))
                  ) DESC,
                  p."importedAt" DESC
         LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
       `,
       prisma.$queryRaw<[{ count: bigint }]>`
         SELECT COUNT(*)::bigint as count FROM "Note" n
+        LEFT JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
         WHERE to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
-           OR to_tsvector('simple', COALESCE(n."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
+           OR to_tsvector('simple', COALESCE(nt."translatedContent", '')) @@ websearch_to_tsquery('simple', ${query})
       `,
     ]);
 

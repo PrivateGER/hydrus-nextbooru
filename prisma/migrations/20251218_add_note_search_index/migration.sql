@@ -8,6 +8,3 @@ CREATE INDEX IF NOT EXISTS "Note_content_fts_idx" ON "Note" USING GIN (to_tsvect
 
 -- Also index the note name for searching by title
 CREATE INDEX IF NOT EXISTS "Note_name_trgm_idx" ON "Note" USING GIN (name gin_trgm_ops);
-
--- Index translated content for full-text search
-CREATE INDEX IF NOT EXISTS "Note_translatedContent_fts_idx" ON "Note" USING GIN (to_tsvector('simple', COALESCE("translatedContent", '')));

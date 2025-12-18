@@ -9,6 +9,9 @@ CREATE TABLE "NoteTranslation" (
     CONSTRAINT "NoteTranslation_pkey" PRIMARY KEY ("contentHash")
 );
 
+-- Add GIN index for full-text search on translated content
+CREATE INDEX "NoteTranslation_translatedContent_fts_idx" ON "NoteTranslation" USING GIN (to_tsvector('simple', "translatedContent"));
+
 -- Migrate existing translations from Note to NoteTranslation
 -- Use DISTINCT ON to handle duplicate contentHash values (pick the most recent)
 INSERT INTO "NoteTranslation" ("contentHash", "translatedContent", "sourceLanguage", "targetLanguage", "translatedAt")
