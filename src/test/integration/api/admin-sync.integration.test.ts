@@ -1,18 +1,26 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createSyncState } from '../factories';
+import { createMockHydrusServer, createMockHydrusState, addFilesToState, type MockHydrusState } from '@/test/mocks/hydrus-server';
+import { createMockFileMetadata } from '@/test/mocks/fixtures/hydrus-metadata';
+import type { SetupServer } from 'msw/node';
 
 let GET: typeof import('@/app/api/admin/sync/route').GET;
+let POST: typeof import('@/app/api/admin/sync/route').POST;
 let DELETE: typeof import('@/app/api/admin/sync/route').DELETE;
 
 describe('/api/admin/sync (Integration)', () => {
+  let server: SetupServer;
+  let hydrusState: MockHydrusState;
+
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
     const module = await import('@/app/api/admin/sync/route');
     GET = module.GET;
+    POST = module.POST;
     DELETE = module.DELETE;
   });
 
@@ -23,6 +31,15 @@ describe('/api/admin/sync (Integration)', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+
+    // Create fresh mock state and server for each test
+    hydrusState = createMockHydrusState(0);
+    server = createMockHydrusServer(hydrusState);
+    server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  afterEach(() => {
+    server.close();
   });
 
   describe('GET - sync status', () => {
@@ -127,6 +144,63 @@ describe('/api/admin/sync (Integration)', () => {
     });
   });
 
-  // Note: POST is not tested here as it triggers background sync
-  // which requires mocking the Hydrus client
+  describe('POST - start sync', () => {
+    it('should return 409 if sync is already running', async () => {
+      const prisma = getTestPrisma();
+      await createSyncState(prisma, 'running');
+
+      const request = new NextRequest('http://localhost/api/admin/sync', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(data.error).toBe('Sync is already running');
+    });
+
+    it('should start sync and return success', async () => {
+      // Add some files to mock Hydrus
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+
+      const request = new NextRequest('http://localhost/api/admin/sync', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.message).toBe('Sync started');
+      expect(data.tags).toEqual(['system:everything']);
+
+      // Wait for background sync to complete
+      await waitForSyncToComplete();
+
+      // Verify sync actually ran and created data
+      const prisma = getTestPrisma();
+      const posts = await prisma.post.findMany();
+      expect(posts).toHaveLength(1);
+      expect(posts[0].hash).toBe('a'.repeat(64));
+    });
+  });
 });
+
+// Helper to wait for background sync to complete
+async function waitForSyncToComplete(timeoutMs = 5000): Promise<void> {
+  const { prisma } = await import('@/lib/db');
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    const state = await prisma.syncState.findFirst();
+    if (!state || state.status === 'completed' || state.status === 'error') {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  throw new Error('Sync did not complete within timeout');
+}
