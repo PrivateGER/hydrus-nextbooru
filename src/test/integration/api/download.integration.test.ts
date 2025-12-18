@@ -71,7 +71,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
   });
 
   describe('file serving', () => {
-    it('should serve file with Content-Disposition header', async () => {
+    it('should serve file with Content-Disposition header and correct content', async () => {
       const prisma = getTestPrisma();
       const hash = randomHash();
       const content = createPngBuffer();
@@ -85,6 +85,10 @@ describe('GET /api/download/[filename] (Integration)', () => {
       expect(response.headers.get('Content-Type')).toBe('image/png');
       expect(response.headers.get('Content-Disposition')).toContain('attachment');
       expect(response.headers.get('Content-Length')).toBe(String(content.length));
+
+      // Verify actual file content is returned
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content);
     });
 
     it('should return 404 when file not on disk', async () => {
