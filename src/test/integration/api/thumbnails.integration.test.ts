@@ -100,7 +100,8 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
       // Create actual thumbnail file
       const thumbnailDir = join(TEST_THUMBNAIL_PATH, 'grid', hash.substring(0, 2));
       await mkdir(thumbnailDir, { recursive: true });
-      await writeFile(join(thumbnailDir, `${hash}.webp`), Buffer.from('fake webp content'));
+      const thumbnailContent = Buffer.from('fake webp content');
+      await writeFile(join(thumbnailDir, `${hash}.webp`), thumbnailContent);
 
       const request = new NextRequest(`http://localhost/api/thumbnails/${hash}.webp`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.webp` }) });
@@ -109,6 +110,10 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
       expect(response.headers.get('Content-Type')).toBe('image/webp');
       expect(response.headers.get('X-Thumbnail-Source')).toBe('generated');
       expect(response.headers.get('Cache-Control')).toContain('immutable');
+
+      // Verify actual content is returned
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(thumbnailContent);
     });
 
     it('should serve preview size when requested', async () => {
