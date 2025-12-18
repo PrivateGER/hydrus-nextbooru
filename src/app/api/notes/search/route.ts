@@ -4,11 +4,21 @@ import { searchNotes } from "@/lib/search";
 const MAX_PAGE = 10000;
 
 /**
- * Search notes by content using full-text search.
+ * GET /api/notes/search - Search notes by content
+ *
+ * Full-text search across note content and translations using PostgreSQL.
+ * Results are ranked by cover density (terms closer together rank higher).
  *
  * Query parameters:
- * - `q`: search query (required, min 2 characters)
- * - `page`: page number (default 1)
+ * - `q` (required): Search query, minimum 2 characters
+ *   - Supports: multiple words (AND), "quoted phrases", OR, -exclusions
+ * - `page` (optional): Page number, default 1, max 10000
+ *
+ * Response: { notes, totalCount, totalPages, queryTimeMs, error? }
+ *
+ * Notes with identical content share `contentHash` for client-side grouping.
+ *
+ * @example GET /api/notes/search?q=dragon&page=1
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;

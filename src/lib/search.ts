@@ -1,3 +1,13 @@
+/**
+ * Search functionality for posts and notes.
+ *
+ * This module provides two main search capabilities:
+ * - `searchNotes`: Full-text search across note content and translations
+ * - `searchPosts`: Tag-based search with wildcard and negation support
+ *
+ * @module lib/search
+ */
+
 import DOMPurify from "isomorphic-dompurify";
 import { prisma } from "@/lib/db";
 import {
@@ -8,9 +18,13 @@ import {
   ResolvedWildcard,
 } from "@/lib/wildcard";
 
+/** Number of results per page for paginated searches */
 const POSTS_PER_PAGE = 48;
 
-// Shared types
+/**
+ * Minimal post data returned in search results.
+ * Contains only fields needed for rendering thumbnails and links.
+ */
 export interface PostResult {
   id: number;
   hash: string;
@@ -20,16 +34,26 @@ export interface PostResult {
   mimeType: string;
 }
 
+/**
+ * Note search result with associated post data.
+ * Notes with identical content share the same `contentHash`,
+ * which can be used for client-side grouping/deduplication.
+ */
 export interface NoteResult {
   id: number;
   postId: number;
+  /** Note label/title from Hydrus */
   name: string;
+  /** Original note text content */
   content: string;
+  /** SHA256 hash of content, used for translation deduplication */
   contentHash: string;
+  /** Search result snippet with <mark> tags highlighting matches */
   headline: string | null;
   post: PostResult;
 }
 
+/** Common fields for paginated search results */
 interface BaseSearchResult {
   totalCount: number;
   totalPages: number;
@@ -37,17 +61,21 @@ interface BaseSearchResult {
   error?: string;
 }
 
+/** Result of searching posts by tags */
 export interface TagSearchResult extends BaseSearchResult {
   posts: PostResult[];
+  /** Wildcard patterns that were expanded, with their matched tags */
   resolvedWildcards: ResolvedWildcard[];
 }
 
+/** Result of searching notes by content */
 export interface NoteSearchResult extends BaseSearchResult {
   notes: NoteResult[];
 }
 
 /**
- * Sanitize headline HTML, allowing only <mark> tags from ts_headline.
+ * Sanitize headline HTML from PostgreSQL ts_headline.
+ * Only allows <mark> tags for search term highlighting.
  */
 function sanitizeHeadline(headline: string | null): string | null {
   if (!headline) return null;
@@ -55,7 +83,21 @@ function sanitizeHeadline(headline: string | null): string | null {
 }
 
 /**
- * Search notes by content and translations using PostgreSQL full-text search.
+ * Search notes by content using PostgreSQL full-text search.
+ *
+ * Searches both original note content and translations (via NoteTranslation table).
+ * Results are ranked using `ts_rank_cd` (cover density) which prioritizes
+ * results where search terms appear closer together.
+ *
+ * Search syntax (via `websearch_to_tsquery`):
+ * - Multiple words: AND by default ("hello world" matches notes with both)
+ * - Quoted phrases: exact sequence ("hello world" as phrase)
+ * - OR: alternative terms (hello OR world)
+ * - Minus: exclusions (hello -world)
+ *
+ * @param query - Search query (minimum 2 characters)
+ * @param page - Page number (1-indexed)
+ * @returns Paginated notes with highlighted snippets and post data
  */
 export async function searchNotes(query: string, page: number): Promise<NoteSearchResult> {
   if (!query || query.trim().length < 2) {
@@ -125,6 +167,18 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
 /**
  * Search posts by tags with wildcard and negation support.
+ *
+ * Supports complex tag queries:
+ * - Regular tags: exact match (case-insensitive)
+ * - Wildcards: `*` matches any characters (e.g., `artist:*`, `*_hair`)
+ * - Negation: prefix with `-` to exclude (e.g., `-solo`, `-artist:*`)
+ *
+ * All included tags are ANDed together (posts must have all of them).
+ * Excluded tags filter out any posts containing them.
+ *
+ * @param tags - Array of tag names, optionally prefixed with `-` for negation
+ * @param page - Page number (1-indexed)
+ * @returns Paginated posts with resolved wildcard information
  */
 export async function searchPosts(tags: string[], page: number): Promise<TagSearchResult> {
   const skip = (page - 1) * POSTS_PER_PAGE;
