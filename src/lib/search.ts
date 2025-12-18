@@ -25,6 +25,7 @@ export interface NoteResult {
   postId: number;
   name: string;
   content: string;
+  contentHash: string;
   headline: string | null;
   post: PostResult;
 }
@@ -72,6 +73,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           n."postId",
           n.name,
           n.content,
+          n."contentHash",
           CASE
             WHEN to_tsvector('simple', n.content) @@ websearch_to_tsquery('simple', ${query})
             THEN ts_headline('simple', n.content, websearch_to_tsquery('simple', ${query}),

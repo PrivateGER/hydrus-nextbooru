@@ -35,7 +35,20 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       : null;
 
   const posts = result && "posts" in result ? result.posts : [];
-  const notes = result && "notes" in result ? result.notes : [];
+  const rawNotes = result && "notes" in result ? result.notes : [];
+
+  // Group notes by contentHash to merge duplicate content (e.g., same Pixiv description across multiple images)
+  const groupedNotes = rawNotes.reduce((acc, note) => {
+    const existing = acc.get(note.contentHash);
+    if (existing) {
+      existing.posts.push(note.post);
+    } else {
+      acc.set(note.contentHash, { ...note, posts: [note.post] });
+    }
+    return acc;
+  }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
+  const notes = Array.from(groupedNotes.values());
+
   const totalCount = result?.totalCount ?? 0;
   const totalPages = result?.totalPages ?? 0;
   const queryTimeMs = result?.queryTimeMs ?? 0;
@@ -161,7 +174,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
       {isNotesSearch && notes.length > 0 && (
         <div className="space-y-3">
-          {notes.map((note) => <NoteSearchResult key={note.id} note={note} />)}
+          {notes.map((note) => <NoteSearchResult key={note.contentHash} note={note} />)}
         </div>
       )}
 
