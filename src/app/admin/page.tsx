@@ -346,6 +346,24 @@ export default function AdminPage() {
     onConfirm: () => {},
   });
 
+  // Polling interval refs for cleanup on unmount
+  const syncPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const thumbPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      if (syncPollIntervalRef.current) {
+        clearInterval(syncPollIntervalRef.current);
+        syncPollIntervalRef.current = null;
+      }
+      if (thumbPollIntervalRef.current) {
+        clearInterval(thumbPollIntervalRef.current);
+        thumbPollIntervalRef.current = null;
+      }
+    };
+  }, []);
+
   // Show success animation helper
   const triggerSuccessAnimation = () => {
     setShowSuccessAnimation(true);
@@ -448,13 +466,16 @@ export default function AdminPage() {
 
       setMessage({ type: "success", text: "Sync started! You can monitor progress below." });
 
-      const pollInterval = setInterval(async () => {
+      syncPollIntervalRef.current = setInterval(async () => {
         await fetchStatus();
         const statusResponse = await fetch("/api/admin/sync");
         const statusData = await statusResponse.json();
 
         if (statusData.status !== "running") {
-          clearInterval(pollInterval);
+          if (syncPollIntervalRef.current) {
+            clearInterval(syncPollIntervalRef.current);
+            syncPollIntervalRef.current = null;
+          }
           setIsSyncing(false);
 
           if (statusData.status === "completed") {
@@ -539,13 +560,16 @@ export default function AdminPage() {
 
       setMessage({ type: "success", text: "Generating thumbnails..." });
 
-      const pollInterval = setInterval(async () => {
+      thumbPollIntervalRef.current = setInterval(async () => {
         await fetchThumbStats();
         const statsResponse = await fetch("/api/admin/thumbnails");
         const statsData = await statsResponse.json();
 
         if (!statsData.batchRunning) {
-          clearInterval(pollInterval);
+          if (thumbPollIntervalRef.current) {
+            clearInterval(thumbPollIntervalRef.current);
+            thumbPollIntervalRef.current = null;
+          }
           setIsGeneratingThumbs(false);
           triggerSuccessAnimation();
           setMessage({
