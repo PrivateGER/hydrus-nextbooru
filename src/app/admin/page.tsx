@@ -49,7 +49,7 @@ const POPULAR_MODELS = [
  *
  * @returns The React JSX element for the admin sync page
  */
-export default function AdminSyncPage() {
+export default function AdminPage() {
   const router = useRouter();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);

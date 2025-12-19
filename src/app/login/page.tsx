@@ -47,8 +47,8 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const rawReturnTo = searchParams.get("returnTo") || "/admin/sync";
-  const returnTo = isValidReturnPath(rawReturnTo) ? rawReturnTo : "/admin/sync";
+  const rawReturnTo = searchParams.get("returnTo") || "/admin";
+  const returnTo = isValidReturnPath(rawReturnTo) ? rawReturnTo : "/admin";
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
