@@ -17,6 +17,7 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
+import { isTagBlacklisted } from "@/lib/tag-blacklist";
 
 /** Number of results per page for paginated searches */
 const POSTS_PER_PAGE = 48;
@@ -277,7 +278,12 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
  */
 export async function searchPosts(tags: string[], page: number): Promise<TagSearchResult> {
   const skip = (page - 1) * POSTS_PER_PAGE;
-  const { includeTags, excludeTags } = parseTagsWithNegation(tags);
+  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsWithNegation(tags);
+
+  // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
+  // For wildcards, we check if the pattern itself is blacklisted (e.g., "hydl-import-time:*")
+  const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
+  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
 
   if (includeTags.length === 0 && excludeTags.length === 0) {
     return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };

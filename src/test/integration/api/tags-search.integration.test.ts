@@ -1100,4 +1100,115 @@ describe('GET /api/tags/search (Integration)', () => {
       });
     });
   });
+
+  describe('blacklist filtering', () => {
+    it('should exclude blacklisted tags from simple search results', async () => {
+      const prisma = getTestPrisma();
+      // site:pixiv is in the default blacklist
+      await createPostWithTags(prisma, ['site:pixiv', 'normal_tag']);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=site');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).not.toContain('site:pixiv');
+    });
+
+    it('should exclude blacklisted tags matching wildcard pattern from results', async () => {
+      const prisma = getTestPrisma();
+      // hydl-import-time:* is in the default blacklist
+      await createPostWithTags(prisma, ['hydl-import-time:2024-01-01', 'normal_tag']);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=hydl');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).not.toContain('hydl-import-time:2024-01-01');
+    });
+
+    it('should filter blacklisted tags from selected tags parameter', async () => {
+      const prisma = getTestPrisma();
+      // Create posts where site:pixiv is used as a filter
+      await createPostWithTags(prisma, ['site:pixiv', 'co_occurring_tag']);
+      await createPostWithTags(prisma, ['other_source', 'different_tag']);
+
+      // Try to use blacklisted tag as selected filter
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Since site:pixiv is blacklisted and stripped, this should fall back to popular tags
+      // (no selected tags after filtering = return popular tags)
+      expect(response.status).toBe(200);
+      // Both co_occurring_tag and different_tag should be returned (popular tags mode)
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).toContain('co_occurring_tag');
+      expect(names).toContain('different_tag');
+    });
+
+    it('should filter blacklisted tags from excluded tags in selected parameter', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['base_tag', 'site:pixiv', 'result_a']);
+      await createPostWithTags(prisma, ['base_tag', 'other', 'result_b']);
+
+      // Try to exclude blacklisted tag - should be ignored
+      const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=base_tag,-site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Both result_a and result_b should be returned since -site:pixiv is stripped
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).toContain('result_a');
+      expect(names).toContain('result_b');
+    });
+
+    it('should exclude blacklisted tags from co-occurrence results', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['normal_selected', 'site:pixiv', 'visible_tag']);
+      await createPostWithTags(prisma, ['normal_selected', 'hydl-import-time:2024', 'visible_tag']);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=normal_selected');
+      const response = await GET(request);
+      const data = await response.json();
+
+      const names = data.tags.map((t: { name: string }) => t.name);
+      // Blacklisted tags should not appear in co-occurrence results
+      expect(names).not.toContain('site:pixiv');
+      expect(names).not.toContain('hydl-import-time:2024');
+      // Normal tags should appear
+      expect(names).toContain('visible_tag');
+    });
+
+    it('should handle mixed blacklisted and normal tags in selected parameter', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['normal_tag', 'result_tag']);
+      await createPostWithTags(prisma, ['normal_tag', 'other_result']);
+
+      // Mix of blacklisted and normal - blacklisted should be stripped
+      const request = new NextRequest('http://localhost/api/tags/search?q=result&selected=normal_tag,site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should work as if only normal_tag was selected
+      const names = data.tags.map((t: { name: string }) => t.name);
+      expect(names).toContain('result_tag');
+    });
+
+    it('should return popular tags when all selected tags are blacklisted', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['popular_tag1']);
+      await createPostWithTags(prisma, ['popular_tag2']);
+
+      // All blacklisted selected tags - should fall back to popular tags
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=site:pixiv,hydl-import-time:2024');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should return popular tags since all selected were stripped
+      expect(response.status).toBe(200);
+      expect(data.tags.length).toBeGreaterThan(0);
+    });
+  });
 });

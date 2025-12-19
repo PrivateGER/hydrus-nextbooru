@@ -395,4 +395,76 @@ describe('GET /api/posts/search (Integration)', () => {
       expect(data.posts).toHaveLength(1);
     });
   });
+
+  describe('blacklist filtering', () => {
+    it('should filter out blacklisted tags from search (exact match)', async () => {
+      const prisma = getTestPrisma();
+      // site:pixiv is in the default blacklist
+      await createPostWithTags(prisma, ['site:pixiv', 'other_tag']);
+
+      // Searching for a blacklisted tag should return empty results
+      const request = new NextRequest('http://localhost/api/posts/search?tags=site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+    });
+
+    it('should filter out blacklisted tags from search (wildcard pattern)', async () => {
+      const prisma = getTestPrisma();
+      // hydl-import-time:* is in the default blacklist
+      await createPostWithTags(prisma, ['hydl-import-time:2024-01-01', 'other_tag']);
+
+      // Searching for a blacklisted tag should return empty results
+      const request = new NextRequest('http://localhost/api/posts/search?tags=hydl-import-time:2024-01-01');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+    });
+
+    it('should filter out blacklisted tags from negated search', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['site:pixiv', 'normal_tag']);
+      await createPostWithTags(prisma, ['normal_tag', 'other']);
+
+      // Trying to exclude a blacklisted tag should be ignored (tag is stripped)
+      // This means both posts match just 'normal_tag'
+      const request = new NextRequest('http://localhost/api/posts/search?tags=normal_tag,-site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Both posts should be returned since -site:pixiv is stripped
+      expect(data.posts).toHaveLength(2);
+    });
+
+    it('should allow searching with non-blacklisted tags when blacklisted tags are also provided', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['normal_tag', 'another_tag']);
+      await createPostWithTags(prisma, ['normal_tag']);
+
+      // Mix of blacklisted and normal tags - blacklisted are stripped
+      const request = new NextRequest('http://localhost/api/posts/search?tags=normal_tag,site:pixiv');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Should find posts with normal_tag (site:pixiv is stripped)
+      expect(data.posts).toHaveLength(2);
+    });
+
+    it('should return empty when all provided tags are blacklisted', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['site:pixiv', 'hydl-import-time:2024']);
+
+      // All blacklisted tags - should return empty
+      const request = new NextRequest('http://localhost/api/posts/search?tags=site:pixiv,hydl-import-time:2024');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+    });
+  });
 });
