@@ -257,3 +257,17 @@ export async function createPostWithNote(
   const note = await createNote(prisma, post.id, noteOverrides);
   return { post, note };
 }
+
+/**
+ * Create a post with both tags and a note
+ */
+export async function createPostWithTagsAndNote(
+  prisma: PrismaClient,
+  tags: Array<string | { name: string; category?: TagCategory }>,
+  noteOverrides: Parameters<typeof createNote>[2] = {},
+  postOverrides: Parameters<typeof createPost>[1] = {}
+) {
+  const post = await createPostWithTags(prisma, tags, postOverrides);
+  const note = await createNote(prisma, post.id, noteOverrides);
+  return { post, note };
+}

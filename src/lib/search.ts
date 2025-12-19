@@ -17,7 +17,7 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted, withPostHidingFilter } from "@/lib/tag-blacklist";
+import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition, hasPostHidingPatterns } from "@/lib/tag-blacklist";
 
 /** Number of results per page for paginated searches */
 const POSTS_PER_PAGE = 48;
@@ -142,6 +142,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
   const skip = (page - 1) * POSTS_PER_PAGE;
   const startTime = performance.now();
+  const postHidingCondition = getPostHidingSqlCondition('p.id');
 
   try {
     // CTE to compute tsquery with prefix matching
@@ -182,6 +183,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           CROSS JOIN query q
           JOIN "Post" p ON n."postId" = p.id
           WHERE n."contentTsv" @@ q.q
+            AND ${postHidingCondition}
 
           UNION
 
@@ -208,6 +210,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           JOIN "Post" p ON n."postId" = p.id
           JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
           WHERE nt."translatedTsv" @@ q.q
+            AND ${postHidingCondition}
         ),
         deduplicated AS (
           -- Deduplicate notes that match in both content and translation, keeping highest rank

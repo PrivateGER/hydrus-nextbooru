@@ -467,4 +467,144 @@ describe('GET /api/posts/search (Integration)', () => {
       expect(data.totalCount).toBe(0);
     });
   });
+
+  describe('post hiding (HIDE_POSTS_WITH_TAGS)', () => {
+    const originalEnv = process.env.HIDE_POSTS_WITH_TAGS;
+
+    afterEach(() => {
+      // Restore original env var
+      if (originalEnv === undefined) {
+        delete process.env.HIDE_POSTS_WITH_TAGS;
+      } else {
+        process.env.HIDE_POSTS_WITH_TAGS = originalEnv;
+      }
+      clearPatternCache();
+    });
+
+    it('should hide posts containing tags from HIDE_POSTS_WITH_TAGS (exact match)', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['nsfw', 'some_tag']);
+      await createPostWithTags(prisma, ['some_tag', 'safe']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=some_tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Only the safe post should be returned
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should hide posts containing tags from HIDE_POSTS_WITH_TAGS (wildcard pattern)', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'rating:*';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['rating:explicit', 'character:saber']);
+      await createPostWithTags(prisma, ['rating:safe', 'character:saber']);
+      await createPostWithTags(prisma, ['character:saber', 'no_rating']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=character:saber');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Only the post without any rating:* tag should be returned
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should hide posts with multiple hiding patterns', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw,explicit,rating:explicit';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['nsfw', 'tag1']);
+      await createPostWithTags(prisma, ['explicit', 'tag1']);
+      await createPostWithTags(prisma, ['rating:explicit', 'tag1']);
+      await createPostWithTags(prisma, ['tag1', 'safe']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Only the safe post should be returned
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should be case insensitive for post hiding', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['NSFW', 'tag1']);
+      await createPostWithTags(prisma, ['Nsfw', 'tag1']);
+      await createPostWithTags(prisma, ['tag1', 'safe']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Only the safe post should be returned (case insensitive match)
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should return all posts when HIDE_POSTS_WITH_TAGS is empty', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = '';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['nsfw', 'tag1']);
+      await createPostWithTags(prisma, ['tag1', 'safe']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // Both posts should be returned when hiding is disabled
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+    });
+
+    it('should hide posts even when searching for the hidden tag directly', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'private_content';
+      clearPatternCache();
+
+      await createPostWithTags(prisma, ['private_content', 'art']);
+
+      // Even if user searches for the tag, posts with it should be hidden
+      const request = new NextRequest('http://localhost/api/posts/search?tags=private_content');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.posts).toEqual([]);
+      expect(data.totalCount).toBe(0);
+    });
+
+    it('should work with both post hiding and tag blacklisting', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'hidden_tag';
+      clearPatternCache();
+
+      // Post with hidden tag (should be hidden)
+      await createPostWithTags(prisma, ['hidden_tag', 'normal']);
+      // Post with blacklisted tag (tag can't be searched, but post is visible)
+      await createPostWithTags(prisma, ['site:pixiv', 'normal']);
+      // Normal post
+      await createPostWithTags(prisma, ['normal', 'safe']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=normal');
+      const response = await GET(request);
+      const data = await response.json();
+
+      // hidden_tag post is excluded, site:pixiv post is included
+      expect(data.posts).toHaveLength(2);
+      expect(data.totalCount).toBe(2);
+    });
+  });
 });

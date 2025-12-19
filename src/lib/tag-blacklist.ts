@@ -209,8 +209,10 @@ export function withPostHidingFilter(where: Prisma.PostWhereInput = {}): Prisma.
  * Generate SQL WHERE clause fragment for excluding posts with hidden tags.
  * For use with raw SQL queries.
  * Returns a Prisma.Sql object that can be interpolated into raw queries.
+ *
+ * @param postIdExpr - SQL expression for the post ID (default: '"Post".id')
  */
-export function getPostHidingSqlCondition(): Prisma.Sql {
+export function getPostHidingSqlCondition(postIdExpr: string = '"Post".id'): Prisma.Sql {
   const patterns = getPostHidingPatternsWithCache();
   if (patterns.length === 0) return Prisma.sql`TRUE`;
 
@@ -229,10 +231,11 @@ export function getPostHidingSqlCondition(): Prisma.Sql {
     i === 0 ? cond : Prisma.sql`${acc} OR ${cond}`
   );
 
+  // Use Prisma.raw for the post ID expression since it's a column reference, not user input
   return Prisma.sql`NOT EXISTS (
     SELECT 1 FROM "PostTag" pt
     JOIN "Tag" t ON t.id = pt."tagId"
-    WHERE pt."postId" = "Post".id
+    WHERE pt."postId" = ${Prisma.raw(postIdExpr)}
     AND (${combinedCondition})
   )`;
 }

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPost, createNote, createPostWithNote } from '../factories';
+import { createPost, createNote, createPostWithNote, createPostWithTagsAndNote } from '../factories';
 import { searchNotes } from '@/lib/search';
+import { clearPatternCache } from '@/lib/tag-blacklist';
 
 describe('searchNotes (Integration)', () => {
   beforeAll(async () => {
@@ -17,6 +18,7 @@ describe('searchNotes (Integration)', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+    clearPatternCache();
   });
 
   describe('content search', () => {
@@ -300,6 +302,99 @@ describe('searchNotes (Integration)', () => {
       expect(result.notes).toHaveLength(2);
       expect(result.notes[0].postId).toBe(post.id);
       expect(result.notes[1].postId).toBe(post.id);
+    });
+  });
+
+  describe('post hiding (HIDE_POSTS_WITH_TAGS)', () => {
+    const originalEnv = process.env.HIDE_POSTS_WITH_TAGS;
+
+    afterEach(() => {
+      // Restore original env var
+      if (originalEnv === undefined) {
+        delete process.env.HIDE_POSTS_WITH_TAGS;
+      } else {
+        process.env.HIDE_POSTS_WITH_TAGS = originalEnv;
+      }
+      clearPatternCache();
+    });
+
+    it('should hide notes from posts with hidden tags (exact match)', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
+      clearPatternCache();
+
+      // Post with hidden tag should not return its notes
+      await createPostWithTagsAndNote(prisma, ['nsfw', 'art'], { content: 'Hidden note about searchterm' });
+      // Post without hidden tag should return its notes
+      await createPostWithTagsAndNote(prisma, ['sfw', 'art'], { content: 'Visible note about searchterm' });
+
+      const result = await searchNotes('searchterm', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toContain('Visible');
+      expect(result.totalCount).toBe(1);
+    });
+
+    it('should hide notes from posts with hidden tags (wildcard pattern)', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'rating:*';
+      clearPatternCache();
+
+      await createPostWithTagsAndNote(prisma, ['rating:explicit'], { content: 'Note with keyword' });
+      await createPostWithTagsAndNote(prisma, ['rating:safe'], { content: 'Another note with keyword' });
+      await createPostWithTagsAndNote(prisma, ['no_rating'], { content: 'Third note with keyword' });
+
+      const result = await searchNotes('keyword', 1);
+
+      // Only the post without rating:* tag should have its notes returned
+      expect(result.notes).toHaveLength(1);
+      expect(result.totalCount).toBe(1);
+    });
+
+    it('should return all notes when HIDE_POSTS_WITH_TAGS is empty', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = '';
+      clearPatternCache();
+
+      await createPostWithTagsAndNote(prisma, ['nsfw'], { content: 'Note about testing' });
+      await createPostWithTagsAndNote(prisma, ['sfw'], { content: 'Another note about testing' });
+
+      const result = await searchNotes('testing', 1);
+
+      expect(result.notes).toHaveLength(2);
+      expect(result.totalCount).toBe(2);
+    });
+
+    it('should be case insensitive for post hiding', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
+      clearPatternCache();
+
+      await createPostWithTagsAndNote(prisma, ['NSFW'], { content: 'Uppercase hidden note' });
+      await createPostWithTagsAndNote(prisma, ['Nsfw'], { content: 'Mixed case hidden note' });
+      await createPostWithTagsAndNote(prisma, ['sfw'], { content: 'Visible note' });
+
+      const result = await searchNotes('note', 1);
+
+      // Only the post without any nsfw variant should have its notes returned
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toContain('Visible');
+    });
+
+    it('should hide notes with multiple hiding patterns', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw,explicit,private:*';
+      clearPatternCache();
+
+      await createPostWithTagsAndNote(prisma, ['nsfw'], { content: 'Hidden by nsfw' });
+      await createPostWithTagsAndNote(prisma, ['explicit'], { content: 'Hidden by explicit' });
+      await createPostWithTagsAndNote(prisma, ['private:personal'], { content: 'Hidden by private:*' });
+      await createPostWithTagsAndNote(prisma, ['safe', 'public'], { content: 'Visible note' });
+
+      const result = await searchNotes('note', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toContain('Visible');
     });
   });
 });
