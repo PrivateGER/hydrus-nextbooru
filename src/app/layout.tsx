@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { MobileNav } from "@/components/mobile-nav";
-import { SiteLockGuard } from "@/components/site-lock-guard";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -86,9 +85,7 @@ export default function RootLayout({
         </header>
 
         {/* Main content */}
-        <main className="mx-auto max-w-7xl px-4 py-6">
-          <SiteLockGuard>{children}</SiteLockGuard>
-        </main>
+        <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
       </body>
     </html>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { login } from "./actions";
 
@@ -18,19 +18,37 @@ function isValidReturnPath(path: string): boolean {
 }
 
 /**
- * Login page for authentication.
- *
- * Handles both admin authentication (ADMIN_PASSWORD) and site-wide lock (site password).
- * Redirects to the returnTo URL after successful login.
+ * Loading fallback for the login form
  */
-export default function LoginPage() {
+function LoginFormSkeleton() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="w-full max-w-sm">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
+          <div className="mb-2 h-7 w-32 animate-pulse rounded bg-zinc-800" />
+          <div className="mb-6 h-5 w-48 animate-pulse rounded bg-zinc-800" />
+          <div className="space-y-4">
+            <div>
+              <div className="mb-1 h-4 w-20 animate-pulse rounded bg-zinc-800" />
+              <div className="h-10 w-full animate-pulse rounded bg-zinc-800" />
+            </div>
+            <div className="h-10 w-full animate-pulse rounded bg-zinc-800" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Login form that uses useSearchParams (must be wrapped in Suspense)
+ */
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const rawReturnTo = searchParams.get("returnTo") || "/";
-  const returnTo = isValidReturnPath(rawReturnTo) ? rawReturnTo : "/";
-  const loginType = searchParams.get("type") || "site";
-  const isAdminLogin = loginType === "admin";
+  const rawReturnTo = searchParams.get("returnTo") || "/admin/sync";
+  const returnTo = isValidReturnPath(rawReturnTo) ? rawReturnTo : "/admin/sync";
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +60,7 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      const result = await login(password, isAdminLogin);
+      const result = await login(password);
 
       if (result.success) {
         router.push(returnTo);
@@ -62,12 +80,10 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
           <h1 className="mb-2 text-xl font-semibold text-zinc-100">
-            {isAdminLogin ? "Admin Login" : "Site Login"}
+            Admin Login
           </h1>
           <p className="mb-6 text-sm text-zinc-400">
-            {isAdminLogin
-              ? "Enter the admin password to access admin features."
-              : "This site is password protected. Enter the password to continue."}
+            Enter the admin password to access admin features.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -104,14 +120,22 @@ export default function LoginPage() {
               {isLoading ? "Signing in..." : "Sign In"}
             </button>
           </form>
-
-          {isAdminLogin && (
-            <p className="mt-4 text-center text-xs text-zinc-500">
-              Admin access is required for this page.
-            </p>
-          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Admin login page.
+ *
+ * Authenticates with ADMIN_PASSWORD env var.
+ * Redirects to the returnTo URL after successful login.
+ */
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFormSkeleton />}>
+      <LoginForm />
+    </Suspense>
   );
 }

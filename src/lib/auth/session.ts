@@ -201,7 +201,7 @@ export async function verifySession(
   }
 
   // Validate session type
-  if (payload.type !== "admin" && payload.type !== "site") {
+  if (payload.type !== "admin") {
     return null;
   }
 
