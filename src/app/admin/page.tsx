@@ -75,9 +75,19 @@ export default function AdminPage() {
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
-    await logout();
-    router.push("/");
-    router.refresh();
+    try {
+      await logout();
+      router.push("/");
+      router.refresh();
+    } catch (error) {
+      console.error("Logout failed:", error);
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to logout",
+      });
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   const fetchThumbStats = useCallback(async () => {
