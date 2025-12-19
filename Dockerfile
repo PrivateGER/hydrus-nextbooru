@@ -41,7 +41,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 # Install prisma CLI for migrations and create thumbnails dir
-RUN bun add prisma dotenv && \
+RUN rm -f package.json bun.lock && \
+    bun add prisma dotenv && \
     rm -rf ~/.bun/install/cache && \
     mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
 
