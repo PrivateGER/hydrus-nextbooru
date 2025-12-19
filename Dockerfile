@@ -42,7 +42,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 # Install prisma CLI for migrations and create thumbnails dir
 RUN rm -f package.json bun.lock && \
-    bun add prisma dotenv && \
+    bun add prisma dotenv pino pino-pretty && \
     rm -rf ~/.bun/install/cache && \
     mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
 
