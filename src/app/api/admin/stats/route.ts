@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { invalidateAllCaches } from "@/lib/cache";
+import { verifyAdminSession } from "@/lib/auth";
+import { apiLog } from "@/lib/logger";
 
 /**
  * Recalculate postCount for all tags.
@@ -31,6 +33,9 @@ async function updateTotalPostCount(): Promise<void> {
  * Recalculate all tag counts and homepage stats.
  */
 export async function POST() {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     // Recalculate tag counts
     await recalculateTagCounts();
@@ -49,7 +54,7 @@ export async function POST() {
       message: "All stats recalculated successfully",
     });
   } catch (error) {
-    console.error("Error recalculating stats:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to recalculate stats");
     return NextResponse.json(
       {
         error:

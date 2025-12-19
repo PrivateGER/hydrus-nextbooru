@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncFromHydrus, getSyncState } from "@/lib/hydrus";
 import { prisma } from "@/lib/db";
+import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, syncLog } from "@/lib/logger";
 
 // GET - Get sync status
 export async function GET() {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const syncState = await getSyncState();
 
@@ -30,6 +34,9 @@ export async function GET() {
 
 // POST - Start a sync
 export async function POST(request: NextRequest) {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
     const tags = body.tags as string[] | undefined;
@@ -71,6 +78,9 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Cancel running sync
 export async function DELETE() {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const result = await prisma.syncState.updateMany({
       where: { status: "running" },

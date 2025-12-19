@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { logout } from "@/app/login/actions";
 
 interface SyncStatus {
   status: "idle" | "running" | "completed" | "error" | "cancelled";
@@ -34,11 +36,6 @@ interface TranslationSettings {
   defaultModel: string;
 }
 
-interface AuthSettings {
-  siteLockEnabled: boolean;
-  hasSitePassword: boolean;
-}
-
 const POPULAR_MODELS = [
   { id: "google/gemini-2.5-flash", name: "Gemini Flash 2.5" },
   { id: "deepseek/deepseek-v3.2", name: "DeepSeek v3.2" },
@@ -53,11 +50,13 @@ const POPULAR_MODELS = [
  * @returns The React JSX element for the admin sync page
  */
 export default function AdminSyncPage() {
+  const router = useRouter();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [customTags, setCustomTags] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Thumbnail generation state
   const [thumbStats, setThumbStats] = useState<ThumbnailStats | null>(null);
@@ -74,11 +73,12 @@ export default function AdminSyncPage() {
   const [customModel, setCustomModel] = useState("");
   const [targetLang, setTargetLang] = useState("");
 
-  // Auth settings state
-  const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
-  const [isSavingAuthSettings, setIsSavingAuthSettings] = useState(false);
-  const [siteLockEnabled, setSiteLockEnabled] = useState(false);
-  const [sitePassword, setSitePassword] = useState("");
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    await logout();
+    router.push("/");
+    router.refresh();
+  };
 
   const fetchThumbStats = useCallback(async () => {
     try {
@@ -110,17 +110,6 @@ export default function AdminSyncPage() {
     }
   }, []);
 
-  const fetchAuthSettings = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/auth");
-      const data: AuthSettings = await response.json();
-      setAuthSettings(data);
-      setSiteLockEnabled(data.siteLockEnabled);
-    } catch (error) {
-      console.error("Error fetching auth settings:", error);
-    }
-  }, []);
-
   const fetchStatus = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/sync");
@@ -138,7 +127,6 @@ export default function AdminSyncPage() {
     fetchStatus();
     fetchThumbStats();
     fetchTranslationSettings();
-    fetchAuthSettings();
 
     // Poll for status while syncing or generating thumbnails
     const interval = setInterval(() => {
@@ -151,7 +139,7 @@ export default function AdminSyncPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, fetchAuthSettings, isSyncing, isGeneratingThumbs]);
+  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, isSyncing, isGeneratingThumbs]);
 
   const startSync = async (tags?: string[]) => {
     setIsSyncing(true);
@@ -413,45 +401,6 @@ export default function AdminSyncPage() {
     }
   };
 
-  const handleSaveAuthSettings = async () => {
-    setIsSavingAuthSettings(true);
-    setMessage(null);
-
-    try {
-      const body: { siteLockEnabled: boolean; sitePassword?: string } = {
-        siteLockEnabled,
-      };
-
-      // Only include password if it's been entered
-      if (sitePassword) {
-        body.sitePassword = sitePassword;
-      }
-
-      const response = await fetch("/api/admin/auth", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to save auth settings");
-      }
-
-      setMessage({ type: "success", text: "Security settings saved!" });
-      setSitePassword(""); // Clear password field after save
-      await fetchAuthSettings();
-    } catch (error) {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : "Failed to save auth settings",
-      });
-    } finally {
-      setIsSavingAuthSettings(false);
-    }
-  };
-
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "Never";
     return new Date(dateString).toLocaleString();
@@ -467,7 +416,16 @@ export default function AdminSyncPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8">
-      <h1 className="text-2xl font-bold">Sync Manager</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin</h1>
+        <button
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isLoggingOut ? "Logging out..." : "Logout"}
+        </button>
+      </div>
 
       {/* Status card */}
       <div className="rounded-lg bg-zinc-800 p-6">
@@ -856,64 +814,6 @@ export default function AdminSyncPage() {
               </span>
             ) : (
               "Save Settings"
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Site Security */}
-      <div className="rounded-lg bg-zinc-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold">Site Security</h2>
-        <p className="mb-4 text-sm text-zinc-400">
-          Enable site-wide password protection. When enabled, all visitors must authenticate
-          before accessing any page. Admin password always grants full access.
-        </p>
-
-        <div className="space-y-4">
-          {/* Site Lock Toggle */}
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              checked={siteLockEnabled}
-              onChange={(e) => setSiteLockEnabled(e.target.checked)}
-              className="h-5 w-5 rounded border-zinc-600 bg-zinc-900 text-blue-600 focus:ring-blue-500 focus:ring-offset-zinc-800"
-            />
-            <span className="text-sm font-medium">Enable site-wide password protection</span>
-          </label>
-
-          {/* Site Password */}
-          <div>
-            <label htmlFor="sitePassword" className="mb-1 block text-sm font-medium">
-              Site Password
-            </label>
-            <input
-              type="password"
-              id="sitePassword"
-              value={sitePassword}
-              onChange={(e) => setSitePassword(e.target.value)}
-              placeholder={authSettings?.hasSitePassword ? "••••••••••••" : "Enter site password"}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
-            <p className="mt-1 text-xs text-zinc-500">
-              {authSettings?.hasSitePassword
-                ? "Leave blank to keep current password. Min 8 characters to change."
-                : "Set a password for site access. Min 8 characters."}
-            </p>
-          </div>
-
-          {/* Save Button */}
-          <button
-            onClick={handleSaveAuthSettings}
-            disabled={isSavingAuthSettings}
-            className="rounded-lg bg-blue-600 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSavingAuthSettings ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                Saving...
-              </span>
-            ) : (
-              "Save Security Settings"
             )}
           </button>
         </div>

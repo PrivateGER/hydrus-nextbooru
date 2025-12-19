@@ -7,6 +7,7 @@ import {
   ThumbnailStatus,
   getThumbnailBasePath,
 } from "@/lib/thumbnails";
+import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, thumbnailLog } from "@/lib/logger";
 
 // Track if batch generation is running
@@ -15,6 +16,9 @@ let batchProgress = { processed: 0, total: 0 };
 
 // GET - Get thumbnail generation statistics
 export async function GET() {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const stats = await getThumbnailStats();
 
@@ -34,6 +38,9 @@ export async function GET() {
 
 // POST - Start batch thumbnail generation
 export async function POST(request: NextRequest) {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
     const limit = body.limit as number | undefined;
@@ -86,6 +93,9 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Reset failed thumbnails or clear all thumbnails
 export async function DELETE(request: NextRequest) {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const body = await request.json().catch(() => ({}));
     const resetFailed = body.resetFailed as boolean | undefined;
