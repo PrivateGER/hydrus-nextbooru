@@ -9,6 +9,9 @@ export {
 } from "./settings";
 export {
   SETTINGS_KEYS,
+  POPULAR_MODELS,
+  modelSupportsVision,
+  type ModelDefinition,
   type OpenRouterClientConfig,
   type OpenRouterSettings,
   type ChatMessage,

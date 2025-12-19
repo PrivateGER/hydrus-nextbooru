@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import { prisma } from "@/lib/db";
-import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
+import { getOpenRouterClient, getOpenRouterSettings, OpenRouterApiError, modelSupportsVision } from "@/lib/openrouter";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { aiLog } from "@/lib/logger";
+import { OpenRouterClient } from "@/lib/openrouter/client";
 
 interface TranslateImageRequestBody {
   targetLang?: string;
@@ -62,6 +63,20 @@ export async function POST(
 
     const base64 = imageData.toString("base64");
     const dataUrl = `data:${post.mimeType};base64,${base64}`;
+
+    // Get settings and check if model supports vision
+    const settings = await getOpenRouterSettings();
+    const configuredModel = settings.model || OpenRouterClient.getDefaultModel();
+
+    if (!modelSupportsVision(configuredModel)) {
+      return NextResponse.json(
+        {
+          error: "The configured model does not support image translation. Please select a vision-capable model in Admin Settings.",
+          code: "MODEL_NO_VISION"
+        },
+        { status: 400 }
+      );
+    }
 
     // Get OpenRouter client
     const client = await getOpenRouterClient();

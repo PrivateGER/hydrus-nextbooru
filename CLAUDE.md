@@ -34,6 +34,7 @@ Tests use Vitest with real PostgreSQL via Testcontainers. Integration tests requ
 - **Next.js 16** with App Router and React 19
 - **Prisma ORM** with PostgreSQL (via @prisma/adapter-pg)
 - **Tailwind CSS** for styling
+- **Heroicons** (`@heroicons/react`) for icons - use outline (24px) or solid variants
 - **TypeScript** with path alias `@/*` → `./src/*`
 
 ### Database Models (prisma/schema.prisma)

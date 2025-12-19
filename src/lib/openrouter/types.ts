@@ -84,3 +84,35 @@ export interface OpenRouterSettings {
   model: string | null;
   targetLang: string | null;
 }
+
+// Model definitions with capabilities
+export interface ModelDefinition {
+  id: string;
+  name: string;
+  vision?: boolean;
+  expensive?: boolean;
+}
+
+// Popular models available for selection
+export const POPULAR_MODELS: ModelDefinition[] = [
+  // Vision models (can translate text in images)
+  { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview", vision: true },
+  { id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro Preview", vision: true, expensive: true },
+  { id: "openai/gpt-5.2", name: "GPT-5.2", vision: true, expensive: true },
+  { id: "x-ai/grok-4.1-fast", name: "Grok 4.1 Fast", vision: true },
+  { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", vision: true, expensive: true },
+  // Text-only models (notes only)
+  { id: "deepseek/deepseek-v3.2", name: "DeepSeek V3.2" },
+  { id: "mistralai/mistral-small-creative", name: "Mistral Small Creative" },
+];
+
+/**
+ * Check if a model supports vision/image input
+ * Unknown models are assumed to support vision (fail at API level if not)
+ */
+export function modelSupportsVision(modelId: string): boolean {
+  const model = POPULAR_MODELS.find((m) => m.id === modelId);
+  // If model is in our list, check its vision flag
+  // If unknown model, assume it supports vision (let API handle it)
+  return model ? model.vision === true : true;
+}
