@@ -9,7 +9,7 @@ import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parse
 import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
-import { filterBlacklistedTags } from "@/lib/tag-blacklist";
+import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 
@@ -18,8 +18,9 @@ interface PostPageProps {
 }
 
 async function getPost(hash: string) {
-  const post = await prisma.post.findUnique({
-    where: { hash },
+  // Use withPostHidingFilter to ensure hidden posts return null
+  const post = await prisma.post.findFirst({
+    where: withPostHidingFilter({ hash }),
     include: {
       tags: {
         include: {

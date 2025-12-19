@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
+import { withBlacklistFilter, filterBlacklistedTags, isTagBlacklisted } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
 import {
   isWildcardPattern,
@@ -33,7 +33,11 @@ export async function GET(request: NextRequest) {
   const selectedParam = searchParams.get("selected") || "";
 
   // Parse selected tags with negation support
-  const { includeTags: selectedTags, excludeTags } = parseTagsParamWithNegation(selectedParam);
+  const { includeTags: rawSelectedTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(selectedParam);
+
+  // Filter out blacklisted tags from selected tags - users should not be able to filter using blacklisted tags
+  const selectedTags = rawSelectedTags.filter(tag => !isTagBlacklisted(tag));
+  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
 
   // Return popular tags if no query AND no selected tags (for initial suggestions)
   if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
