@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { logout } from "@/app/login/actions";
 
 interface SyncStatus {
   status: "idle" | "running" | "completed" | "error" | "cancelled";
@@ -47,12 +49,14 @@ const POPULAR_MODELS = [
  *
  * @returns The React JSX element for the admin sync page
  */
-export default function AdminSyncPage() {
+export default function AdminPage() {
+  const router = useRouter();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [customTags, setCustomTags] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Thumbnail generation state
   const [thumbStats, setThumbStats] = useState<ThumbnailStats | null>(null);
@@ -68,6 +72,23 @@ export default function AdminSyncPage() {
   const [model, setModel] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [targetLang, setTargetLang] = useState("");
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      router.push("/");
+      router.refresh();
+    } catch (error) {
+      console.error("Logout failed:", error);
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to logout",
+      });
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   const fetchThumbStats = useCallback(async () => {
     try {
@@ -405,7 +426,16 @@ export default function AdminSyncPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8">
-      <h1 className="text-2xl font-bold">Sync Manager</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin</h1>
+        <button
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isLoggingOut ? "Logging out..." : "Logout"}
+        </button>
+      </div>
 
       {/* Status card */}
       <div className="rounded-lg bg-zinc-800 p-6">

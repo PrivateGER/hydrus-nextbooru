@@ -75,7 +75,7 @@ export default function RootLayout({
                 Groups
               </Link>
               <Link
-                href="/admin/sync"
+                href="/admin"
                 className="text-sm font-medium text-zinc-300 hover:text-white"
               >
                 Admin

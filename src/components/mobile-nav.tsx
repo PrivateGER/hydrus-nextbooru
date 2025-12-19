@@ -9,7 +9,7 @@ const navLinks = [
   { href: "/tags", label: "Tags" },
   { href: "/tree", label: "Tree" },
   { href: "/groups", label: "Groups" },
-  { href: "/admin/sync", label: "Admin" },
+  { href: "/admin", label: "Admin" },
 ];
 
 export function MobileNav() {

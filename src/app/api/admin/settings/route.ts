@@ -6,6 +6,7 @@ import {
   SETTINGS_KEYS,
 } from "@/lib/openrouter";
 import { OpenRouterClient } from "@/lib/openrouter";
+import { verifyAdminSession } from "@/lib/auth";
 import { apiLog } from "@/lib/logger";
 
 interface SettingsUpdateBody {
@@ -26,6 +27,9 @@ interface SettingsUpdateBody {
  * - `defaultModel`: the OpenRouter default model
  */
 export async function GET() {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const settings = await getOpenRouterSettings();
 
@@ -54,6 +58,9 @@ export async function GET() {
  * @returns On success, JSON with `message`, `apiKey` (masked string or `null`), `apiKeyConfigured` (`true` if an API key is configured, `false` otherwise), `model` (updated or default), and `targetLang` (updated or default). Returns a 400 JSON error when no updatable fields are provided, and a 500 JSON error on failure.
  */
 export async function PUT(request: NextRequest) {
+  const auth = await verifyAdminSession();
+  if (!auth.authorized) return auth.response;
+
   try {
     const body: SettingsUpdateBody = await request.json();
 
