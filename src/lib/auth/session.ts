@@ -2,6 +2,9 @@
  * Session management with signed cookies
  *
  * Uses HMAC-SHA256 via Web Crypto API for Edge Runtime compatibility.
+ * The signing key is derived from ADMIN_PASSWORD using HKDF for proper
+ * key separation and 256-bit key strength regardless of password length.
+ *
  * Changing ADMIN_PASSWORD invalidates all existing sessions.
  */
 
@@ -13,6 +16,12 @@ import {
 
 /** Maximum token payload size (prevents DoS via huge tokens) */
 const MAX_PAYLOAD_SIZE = 1024;
+
+/** Salt for HKDF key derivation (domain separation) */
+const HKDF_SALT = "booru-session-signing-v1";
+
+/** Info parameter for HKDF (key purpose separation) */
+const HKDF_INFO = "session-hmac";
 
 /** Cached crypto key for HMAC operations */
 let cachedKey: CryptoKey | null = null;
@@ -31,7 +40,12 @@ function getSecret(): string {
 }
 
 /**
- * Get or create the HMAC crypto key
+ * Derive an HMAC signing key from the admin password using HKDF.
+ *
+ * This provides:
+ * - Proper 256-bit key regardless of password length
+ * - Domain separation via salt (prevents cross-application attacks)
+ * - Key purpose separation via info parameter
  */
 async function getKey(): Promise<CryptoKey> {
   const secret = getSecret();
@@ -42,9 +56,25 @@ async function getKey(): Promise<CryptoKey> {
   }
 
   const encoder = new TextEncoder();
-  cachedKey = await crypto.subtle.importKey(
+
+  // Import password as key material for HKDF
+  const keyMaterial = await crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
+    "HKDF",
+    false,
+    ["deriveKey"]
+  );
+
+  // Derive a proper 256-bit HMAC key
+  cachedKey = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: encoder.encode(HKDF_SALT),
+      info: encoder.encode(HKDF_INFO),
+    },
+    keyMaterial,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
