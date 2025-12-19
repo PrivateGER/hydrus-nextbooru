@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
@@ -6,6 +6,11 @@ import { createSyncState } from '../factories';
 import { createMockHydrusServer, createMockHydrusState, addFilesToState, type MockHydrusState } from '@/test/mocks/hydrus-server';
 import { createMockFileMetadata } from '@/test/mocks/fixtures/hydrus-metadata';
 import type { SetupServer } from 'msw/node';
+
+// Mock admin session verification to bypass auth in tests
+vi.mock('@/lib/auth', () => ({
+  verifyAdminSession: vi.fn().mockResolvedValue({ authorized: true }),
+}));
 
 let GET: typeof import('@/app/api/admin/sync/route').GET;
 let POST: typeof import('@/app/api/admin/sync/route').POST;
