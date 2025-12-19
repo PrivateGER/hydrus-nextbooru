@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Markdown } from "./markdown";
 
 interface TranslateImageButtonProps {
@@ -18,6 +19,11 @@ interface TranslationResult {
   sourceLanguage: string;
   targetLanguage: string;
   hasText: boolean;
+}
+
+interface TranslationError {
+  message: string;
+  code?: string;
 }
 
 /**
@@ -40,7 +46,7 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
         }
       : null
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TranslationError | null>(null);
 
   // Only show for images
   if (!mimeType.startsWith("image/")) {
@@ -61,13 +67,19 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || "Translation failed");
+        setError({
+          message: data.error || "Translation failed",
+          code: data.code,
+        });
+        return;
       }
 
       const data: TranslationResult = await response.json();
       setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Translation failed");
+      setError({
+        message: err instanceof Error ? err.message : "Translation failed",
+      });
     } finally {
       setIsTranslating(false);
     }
@@ -130,7 +142,17 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
       </div>
 
       {error && (
-        <p className="mt-3 text-sm text-red-400">{error}</p>
+        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3">
+          <p className="text-sm text-red-400">{error.message}</p>
+          {error.code === "MODEL_NO_VISION" && (
+            <Link
+              href="/admin"
+              className="mt-2 inline-flex items-center gap-1 text-sm text-red-300 underline hover:text-red-200"
+            >
+              Go to Admin Settings →
+            </Link>
+          )}
+        </div>
       )}
 
       {result && (
