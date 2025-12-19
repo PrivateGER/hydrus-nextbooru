@@ -11,9 +11,12 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/types";
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Only protect admin routes
+  // Only protect admin routes (exact match or with trailing path)
   const isAdminRoute =
-    pathname.startsWith("/admin") || pathname.startsWith("/api/admin");
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/") ||
+    pathname === "/api/admin" ||
+    pathname.startsWith("/api/admin/");
 
   if (!isAdminRoute) {
     return NextResponse.next();
