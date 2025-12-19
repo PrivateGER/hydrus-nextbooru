@@ -131,13 +131,30 @@ function ConfirmModal({
 function Tooltip({ children, content }: { children: React.ReactNode; content: string }) {
   const [show, setShow] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handleMouseEnter = () => {
-    timeoutRef.current = setTimeout(() => setShow(true), 500);
+    timeoutRef.current = setTimeout(() => {
+      if (mountedRef.current) setShow(true);
+    }, 500);
   };
 
   const handleMouseLeave = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
     setShow(false);
   };
 
