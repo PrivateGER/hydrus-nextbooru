@@ -1168,6 +1168,8 @@ describe('GET /api/tags/search (Integration)', () => {
       const prisma = getTestPrisma();
       await createPostWithTags(prisma, ['normal_selected', 'site:pixiv', 'visible_tag']);
       await createPostWithTags(prisma, ['normal_selected', 'hydl-import-time:2024', 'visible_tag']);
+      // Add a third post without visible_tag so it's not omnipresent (remainingCount > 0)
+      await createPostWithTags(prisma, ['normal_selected', 'other_tag']);
 
       const request = new NextRequest('http://localhost/api/tags/search?q=&selected=normal_selected');
       const response = await GET(request);
@@ -1177,7 +1179,7 @@ describe('GET /api/tags/search (Integration)', () => {
       // Blacklisted tags should not appear in co-occurrence results
       expect(names).not.toContain('site:pixiv');
       expect(names).not.toContain('hydl-import-time:2024');
-      // Normal tags should appear
+      // Normal tags should appear (visible_tag appears in 2/3 posts, not omnipresent)
       expect(names).toContain('visible_tag');
     });
 

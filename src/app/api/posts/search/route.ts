@@ -8,6 +8,7 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
+import { isTagBlacklisted } from "@/lib/tag-blacklist";
 
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
@@ -45,7 +46,11 @@ export async function GET(request: NextRequest) {
   );
 
   // Parse tags with negation support
-  const { includeTags, excludeTags } = parseTagsParamWithNegation(tagsParam);
+  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(tagsParam);
+
+  // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
+  const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
+  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
 
   const hasTagFilters = includeTags.length > 0 || excludeTags.length > 0;
   const hasNotesFilter = notesQuery.length >= 2;
