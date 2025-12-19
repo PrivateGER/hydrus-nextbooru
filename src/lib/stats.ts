@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { TagCategory } from "@/generated/prisma/client";
+import { withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 
 export interface HomeStats {
   totalPosts: number;
@@ -189,6 +190,7 @@ export async function getRandomPosts(limit = 12): Promise<
 > {
   // Generate a random seed for this request
   const seed = Math.random().toString(36).substring(2, 10);
+  const postHidingCondition = getPostHidingSqlCondition();
 
   return prisma.$queryRaw<
     Array<{
@@ -202,6 +204,7 @@ export async function getRandomPosts(limit = 12): Promise<
   >`
     SELECT id, hash, width, height, blurhash, "mimeType"
     FROM "Post"
+    WHERE ${postHidingCondition}
     ORDER BY MD5(hash || ${seed})
     LIMIT ${limit}
   `;
@@ -214,8 +217,8 @@ export async function getRandomPosts(limit = 12): Promise<
 export async function getRecentImportCount(): Promise<number> {
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return prisma.post.count({
-    where: {
+    where: withPostHidingFilter({
       importedAt: { gte: oneDayAgo },
-    },
+    }),
   });
 }

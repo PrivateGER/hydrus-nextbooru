@@ -8,7 +8,7 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted } from "@/lib/tag-blacklist";
+import { isTagBlacklisted, withPostHidingFilter } from "@/lib/tag-blacklist";
 
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
@@ -257,7 +257,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const whereClause = andConditions.length > 0 ? { AND: andConditions } : {};
+  const baseWhereClause = andConditions.length > 0 ? { AND: andConditions } : {};
+  const whereClause = withPostHidingFilter(baseWhereClause);
 
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({

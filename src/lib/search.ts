@@ -17,7 +17,7 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted } from "@/lib/tag-blacklist";
+import { isTagBlacklisted, withPostHidingFilter } from "@/lib/tag-blacklist";
 
 /** Number of results per page for paginated searches */
 const POSTS_PER_PAGE = 48;
@@ -355,7 +355,8 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
     conditions.push({ tags: { none: { tagId: { in: excludeWildcardIds } } } });
   }
 
-  const where = conditions.length > 0 ? { AND: conditions } : {};
+  const baseWhere = conditions.length > 0 ? { AND: conditions } : {};
+  const where = withPostHidingFilter(baseWhere);
 
   const startTime = performance.now();
   const [posts, totalCount] = await Promise.all([
