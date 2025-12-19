@@ -4,12 +4,26 @@
  * Follows the pattern established in src/lib/openrouter/settings.ts
  */
 
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
-import { promisify } from "util";
+import { scrypt, randomBytes, timingSafeEqual, ScryptOptions } from "crypto";
 import { prisma } from "@/lib/db";
 import { AUTH_SETTINGS_KEYS, type AuthSettings } from "./types";
 
-const scryptAsync = promisify(scrypt);
+/**
+ * Promisified scrypt with options support
+ */
+function scryptAsync(
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: ScryptOptions
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, keylen, options, (err, derivedKey) => {
+      if (err) reject(err);
+      else resolve(derivedKey);
+    });
+  });
+}
 
 /** Salt length for password hashing */
 const SALT_LENGTH = 16;
@@ -57,7 +71,7 @@ function validatePassword(password: string): void {
 async function hashPassword(password: string): Promise<string> {
   validatePassword(password);
   const salt = randomBytes(SALT_LENGTH);
-  const hash = (await scryptAsync(password, salt, KEY_LENGTH, SCRYPT_OPTIONS)) as Buffer;
+  const hash = await scryptAsync(password, salt, KEY_LENGTH, SCRYPT_OPTIONS);
   return `${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
@@ -95,7 +109,7 @@ async function verifyPassword(
       return false;
     }
 
-    const derivedKey = (await scryptAsync(password, salt, KEY_LENGTH, SCRYPT_OPTIONS)) as Buffer;
+    const derivedKey = await scryptAsync(password, salt, KEY_LENGTH, SCRYPT_OPTIONS);
 
     return timingSafeEqual(derivedKey, storedKey);
   } catch {
