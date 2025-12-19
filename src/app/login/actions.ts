@@ -8,6 +8,7 @@ import {
   SESSION_DURATION_HOURS,
 } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { apiLog } from "@/lib/logger";
 
 /** Maximum login attempts per window */
 const LOGIN_LIMIT = 5;
@@ -20,6 +21,38 @@ interface LoginResult {
 }
 
 /**
+ * Extract client IP from request headers.
+ * Returns null if no valid IP is found in production (fail closed).
+ *
+ * Set SKIP_IP_HEADER_CHECK=1 to allow direct access without reverse proxy.
+ */
+function getClientIP(headersList: Headers): string | null {
+  const forwardedFor = headersList.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  const realIP = headersList.get("x-real-ip");
+  if (realIP) {
+    return realIP.trim();
+  }
+
+  // Allow override for direct access (no reverse proxy)
+  if (process.env.SKIP_IP_HEADER_CHECK === "1") {
+    return "direct";
+  }
+
+  // In production, require proper IP headers from reverse proxy
+  if (process.env.NODE_ENV === "production") {
+    apiLog.error({}, "Missing IP headers for rate limiting - check reverse proxy configuration (X-Forward-For) or set SKIP_IP_HEADER_CHECK=1");
+    return null;
+  }
+
+  // In development, allow fallback to "localhost"
+  return "localhost";
+}
+
+/**
  * Authenticate user with admin password.
  * Rate limited to prevent brute force attacks.
  *
@@ -29,10 +62,15 @@ interface LoginResult {
 export async function login(password: string): Promise<LoginResult> {
   // Get client IP for rate limiting
   const headersList = await headers();
-  const ip =
-    headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headersList.get("x-real-ip") ||
-    "unknown";
+  const ip = getClientIP(headersList);
+
+  // Fail closed if IP cannot be determined in production
+  if (!ip) {
+    return {
+      success: false,
+      error: "Service configuration error. Missing forwarded IP headers (X-Forwarded-For) or set SKIP_IP_HEADER_CHECK=1. Do not expose this service directly unless needed.",
+    };
+  }
 
   // Check rate limit
   const rateLimit = checkRateLimit(`login:${ip}`, LOGIN_LIMIT, LOGIN_WINDOW_MS);
