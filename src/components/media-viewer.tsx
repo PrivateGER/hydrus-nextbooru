@@ -52,6 +52,7 @@ export function MediaViewer({
 
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
+  const [showBlurhash, setShowBlurhash] = useState(false);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
@@ -111,14 +112,39 @@ export function MediaViewer({
     }
   }, [blurhash]);
 
-  // Reset loading states when hash changes, but check if already cached
+  // Reset loading states when hash changes
   useEffect(() => {
-    // Check if images are already loaded (cached)
-    const previewComplete = previewRef.current?.complete && previewRef.current.naturalWidth > 0;
-    const fullComplete = fullRef.current?.complete && fullRef.current.naturalWidth > 0;
+    setPreviewLoaded(false);
+    setFullLoaded(false);
+    setShowBlurhash(false);
 
-    setPreviewLoaded(previewComplete ?? false);
-    setFullLoaded(fullComplete ?? false);
+    let rafId2: number | null = null;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    // Double rAF ensures DOM has updated with new src before checking cache
+    const rafId1 = requestAnimationFrame(() => {
+      rafId2 = requestAnimationFrame(() => {
+        // Check if images are already loaded (cached)
+        const previewCached =
+          previewRef.current?.complete && previewRef.current.naturalWidth > 0;
+        const fullCached =
+          fullRef.current?.complete && fullRef.current.naturalWidth > 0;
+
+        if (previewCached) setPreviewLoaded(true);
+        if (fullCached) setFullLoaded(true);
+
+        // Only show blurhash after 100ms if images aren't already loaded
+        if (!previewCached && !fullCached) {
+          timerId = setTimeout(() => setShowBlurhash(true), 100);
+        }
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(rafId1);
+      if (rafId2) cancelAnimationFrame(rafId2);
+      if (timerId) clearTimeout(timerId);
+    };
   }, [hash]);
 
   // Calculate aspect ratio for stable container sizing
@@ -180,14 +206,14 @@ export function MediaViewer({
             width: width && height ? `min(100%, min(85vh * ${aspectRatio}, ${width}px))` : "auto",
           }}
         >
-          {/* Layer 1: Blurhash placeholder */}
+          {/* Layer 1: Blurhash placeholder (delayed 100ms to avoid flash on fast loads) */}
           {blurhash && (
             <canvas
               ref={canvasRef}
               width={32}
               height={32}
               className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
-                previewLoaded ? "opacity-0" : "opacity-100"
+                showBlurhash && !previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
               }`}
             />
           )}
@@ -197,12 +223,8 @@ export function MediaViewer({
             ref={previewRef}
             src={`/api/thumbnails/${hash}.webp?size=preview`}
             alt=""
-            onLoad={() => {
-              // Only show preview if full image hasn't loaded yet
-              if (!fullLoaded) {
-                setPreviewLoaded(true);
-              }
-            }}
+            onLoad={() => setPreviewLoaded(true)}
+            onError={() => setPreviewLoaded(true)}
             className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
               previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
             }`}
@@ -214,6 +236,7 @@ export function MediaViewer({
             src={`/api/files/${hash}${extension}`}
             alt=""
             onLoad={() => setFullLoaded(true)}
+            onError={() => setFullLoaded(true)}
             className={`h-full w-full object-contain transition-opacity duration-300 ${
               fullLoaded ? "opacity-100" : "opacity-0"
             }`}
