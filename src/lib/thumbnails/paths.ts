@@ -11,13 +11,27 @@ export function getThumbnailBasePath(): string {
 }
 
 /**
+ * Get the size directory name for a thumbnail size.
+ */
+function getSizeDir(size: ThumbnailSize): string {
+  switch (size) {
+    case "GRID":
+      return "grid";
+    case "PREVIEW":
+      return "preview";
+    case "ANIMATED":
+      return "animated";
+  }
+}
+
+/**
  * Get the full path for a generated thumbnail.
  * Structure: {base}/{size}/{prefix}/{hash}.webp
  */
 export function getThumbnailPath(hash: string, size: ThumbnailSize): string {
   const basePath = getThumbnailBasePath();
   const prefix = hash.substring(0, 2).toLowerCase();
-  const sizeDir = size === "GRID" ? "grid" : "preview";
+  const sizeDir = getSizeDir(size);
   return `${basePath}${sep}${sizeDir}${sep}${prefix}${sep}${hash}.webp`;
 }
 
@@ -27,7 +41,7 @@ export function getThumbnailPath(hash: string, size: ThumbnailSize): string {
  */
 export function getThumbnailRelativePath(hash: string, size: ThumbnailSize): string {
   const prefix = hash.substring(0, 2).toLowerCase();
-  const sizeDir = size === "GRID" ? "grid" : "preview";
+  const sizeDir = getSizeDir(size);
   return `${sizeDir}${sep}${prefix}${sep}${hash}.webp`;
 }
 
