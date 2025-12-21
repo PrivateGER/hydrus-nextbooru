@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { prisma } from "@/lib/db";
 import { ThumbnailSize, ThumbnailStatus, PostForThumbnail } from "./types";
-import { generateThumbnail, generateAllThumbnails } from "./generator";
+import { generateThumbnail, generateAllThumbnails, generateAnimatedThumbnail, canGenerateAnimatedPreview } from "./generator";
 import { thumbnailLog } from "@/lib/logger";
 
 // Limit concurrent thumbnail generations to avoid memory issues
@@ -37,6 +37,7 @@ export async function ensureThumbnail(
           extension: true,
           mimeType: true,
           thumbnailStatus: true,
+          duration: true,
           thumbnails: {
             where: { size },
             select: { id: true },
@@ -67,6 +68,14 @@ export async function ensureThumbnail(
         !post.mimeType.startsWith("image/") &&
         !post.mimeType.startsWith("video/")
       ) {
+        return;
+      }
+
+      // Handle animated thumbnails separately
+      if (size === ThumbnailSize.ANIMATED) {
+        if (canGenerateAnimatedPreview(post as PostForThumbnail)) {
+          await generateAnimatedThumbnail(post as PostForThumbnail);
+        }
         return;
       }
 

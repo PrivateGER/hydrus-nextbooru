@@ -42,4 +42,6 @@ export interface PostForThumbnail {
   extension: string;
   mimeType: string;
   thumbnailStatus: ThumbnailStatus;
+  /** Duration in milliseconds (for videos/animated images) */
+  duration?: number | null;
 }

@@ -10,9 +10,10 @@ import {
   PostForThumbnail,
 } from "./types";
 import { getThumbnailPath, getThumbnailRelativePath } from "./paths";
-import { extractVideoFrame, isFfmpegAvailable } from "./video-extractor";
+import { extractVideoFrame, isFfmpegAvailable, generateAnimatedPreview } from "./video-extractor";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { thumbnailLog } from "@/lib/logger";
+import { ANIMATED_PREVIEW_CONFIG } from "./types";
 
 // Cache ffmpeg availability check
 let ffmpegAvailable: boolean | null = null;
@@ -241,4 +242,107 @@ export async function generateAllThumbnails(
   });
 
   return { grid: gridResult, preview: previewResult };
+}
+
+/**
+ * Check if a post can have an animated preview generated.
+ * Only videos and animated images (GIF, APNG) are eligible.
+ */
+export function canGenerateAnimatedPreview(post: PostForThumbnail): boolean {
+  const isVideo = post.mimeType.startsWith("video/");
+  const isAnimatedImage = post.mimeType === "image/gif" || post.mimeType === "image/apng";
+
+  if (!isVideo && !isAnimatedImage) return false;
+
+  // Need duration to determine if long enough
+  if (!post.duration) return false;
+
+  const minDuration = isVideo
+    ? ANIMATED_PREVIEW_CONFIG.minVideoDuration
+    : ANIMATED_PREVIEW_CONFIG.minGifDuration;
+
+  return post.duration >= minDuration;
+}
+
+/**
+ * Generate an animated preview thumbnail for a video or GIF.
+ */
+export async function generateAnimatedThumbnail(
+  post: PostForThumbnail
+): Promise<ThumbnailResult> {
+  // Verify this post is eligible for animated preview
+  if (!canGenerateAnimatedPreview(post)) {
+    return {
+      success: false,
+      error: "Post is not eligible for animated preview",
+    };
+  }
+
+  // Check ffmpeg availability (required for all animated previews)
+  const hasFfmpeg = await checkFfmpeg();
+  if (!hasFfmpeg) {
+    return {
+      success: false,
+      error: "ffmpeg not available for animated preview generation",
+    };
+  }
+
+  const outputPath = getThumbnailPath(post.hash, ThumbnailSize.ANIMATED);
+  const relativePath = getThumbnailRelativePath(post.hash, ThumbnailSize.ANIMATED);
+  const filePath = buildFilePath(post.hash, post.extension);
+  const isGif = post.mimeType === "image/gif" || post.mimeType === "image/apng";
+
+  try {
+    // Ensure output directory exists
+    await mkdir(dirname(outputPath), { recursive: true });
+
+    // Generate animated preview
+    await generateAnimatedPreview(filePath, outputPath, {
+      durationMs: post.duration!,
+      isGif,
+    });
+
+    // Get file stats
+    const fileStats = await stat(outputPath);
+
+    // Save to database
+    await prisma.thumbnail.upsert({
+      where: {
+        postId_size: { postId: post.id, size: ThumbnailSize.ANIMATED },
+      },
+      create: {
+        postId: post.id,
+        size: ThumbnailSize.ANIMATED,
+        format: "webp",
+        width: THUMBNAIL_DIMENSIONS.ANIMATED,
+        height: 0, // Animated previews don't track exact height
+        fileSize: fileStats.size,
+        path: relativePath,
+      },
+      update: {
+        format: "webp",
+        width: THUMBNAIL_DIMENSIONS.ANIMATED,
+        height: 0,
+        fileSize: fileStats.size,
+        path: relativePath,
+        generatedAt: new Date(),
+      },
+    });
+
+    thumbnailLog.debug({ hash: post.hash, fileSize: fileStats.size }, 'Animated preview generated');
+
+    return {
+      success: true,
+      path: outputPath,
+      width: THUMBNAIL_DIMENSIONS.ANIMATED,
+      fileSize: fileStats.size,
+    };
+  } catch (err) {
+    thumbnailLog.error({ hash: post.hash, error: err instanceof Error ? err.message : String(err) }, 'Animated preview generation failed');
+
+    return {
+      success: false,
+      error: String(err),
+    };
+  }
 }
