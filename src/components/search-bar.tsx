@@ -61,6 +61,13 @@ function toggleTagNegation(tag: string): string {
   return isNegatedTag(tag) ? tag.slice(1) : `-${tag}`;
 }
 
+/**
+ * Check if a string is a valid SHA256 hash (64 hexadecimal characters).
+ */
+function isValidSha256Hash(value: string): boolean {
+  return /^[a-fA-F0-9]{64}$/.test(value.trim());
+}
+
 interface SearchBarProps {
   initialTags?: string[];
   initialNotesQuery?: string;
@@ -274,6 +281,15 @@ export function SearchBar({
     }
   }, [selectedTags, router]);
 
+  // Handle paste event to detect SHA256 hashes and navigate directly to post
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pastedText = e.clipboardData.getData("text").trim();
+    if (isValidSha256Hash(pastedText)) {
+      e.preventDefault();
+      router.push(`/post/${pastedText.toLowerCase()}`);
+    }
+  }, [router]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -437,6 +453,7 @@ export function SearchBar({
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={() => {
             if (searchMode === "tags") {
               if (inputValue) {
