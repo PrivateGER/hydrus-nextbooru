@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { prisma } from "@/lib/db";
 import { ThumbnailSize, ThumbnailStatus, PostForThumbnail } from "./types";
-import { generateThumbnail, generateAllThumbnails } from "./generator";
+import { generateThumbnail, generateAllThumbnails, generateAnimatedThumbnail, canGenerateAnimatedPreview } from "./generator";
 import { thumbnailLog } from "@/lib/logger";
 
 // Limit concurrent thumbnail generations to avoid memory issues
@@ -37,6 +37,7 @@ export async function ensureThumbnail(
           extension: true,
           mimeType: true,
           thumbnailStatus: true,
+          duration: true,
           thumbnails: {
             where: { size },
             select: { id: true },
@@ -70,6 +71,17 @@ export async function ensureThumbnail(
         return;
       }
 
+      // Handle animated thumbnails separately
+      if (size === ThumbnailSize.ANIMATED) {
+        const canGenerate = canGenerateAnimatedPreview(post as PostForThumbnail);
+        thumbnailLog.debug({ hash, mimeType: post.mimeType, duration: post.duration, canGenerate }, 'Checking animated preview eligibility');
+        if (canGenerate) {
+          thumbnailLog.info({ hash }, 'Generating animated preview');
+          await generateAnimatedThumbnail(post as PostForThumbnail);
+        }
+        return;
+      }
+
       await generateThumbnail(post as PostForThumbnail, size);
     } catch (err) {
       thumbnailLog.error({ hash, error: err instanceof Error ? err.message : String(err) }, 'Error in ensureThumbnail');
@@ -93,6 +105,7 @@ export function queueThumbnailGeneration(hash: string): void {
   // Fire and forget - errors are logged internally
   ensureThumbnail(hash, ThumbnailSize.GRID).catch(() => {});
   ensureThumbnail(hash, ThumbnailSize.PREVIEW).catch(() => {});
+  ensureThumbnail(hash, ThumbnailSize.ANIMATED).catch(() => {});
 }
 
 /**
@@ -123,6 +136,7 @@ export async function batchGenerateThumbnails(options: {
       extension: true,
       mimeType: true,
       thumbnailStatus: true,
+      duration: true,
     },
     take: limit,
     orderBy: { id: "asc" },

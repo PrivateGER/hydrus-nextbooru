@@ -25,6 +25,35 @@ function sizeParamToEnum(size: SizeParam): ThumbnailSize {
 }
 
 /**
+ * Try to serve an animated preview thumbnail.
+ * Returns null if not available.
+ */
+async function tryServeAnimatedPreview(
+  hash: string,
+  postId: number,
+  request: NextRequest
+): Promise<NextResponse | null> {
+  // Check if animated thumbnail exists
+  const animatedThumbnail = await prisma.thumbnail.findUnique({
+    where: {
+      postId_size: { postId, size: ThumbnailSize.ANIMATED },
+    },
+    select: { path: true },
+  });
+
+  if (!animatedThumbnail) {
+    return null;
+  }
+
+  const animatedPath = join(getThumbnailBasePath(), animatedThumbnail.path);
+  try {
+    return await serveFile(animatedPath, "image/webp", hash, "generated", request);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Serve a file with streaming and cache headers (async).
  *
  * Cache strategy:
@@ -98,6 +127,9 @@ export async function GET(
   }
   const size = sizeParamToEnum(sizeParam as SizeParam);
 
+  // Check if animated preview is requested
+  const wantAnimated = request.nextUrl.searchParams.get("animated") === "true";
+
   // Get post with thumbnail info
   const post = await prisma.post.findUnique({
     where: { hash },
@@ -113,6 +145,15 @@ export async function GET(
 
   if (!post) {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
+
+  // If animated preview requested, try to serve it (falls back to static)
+  if (wantAnimated) {
+    const animatedResponse = await tryServeAnimatedPreview(hash, post.id, request);
+    if (animatedResponse) {
+      return animatedResponse;
+    }
+    // Fall through to static thumbnail if animated not available
   }
 
   // Try generated thumbnail first (async, no existsSync)

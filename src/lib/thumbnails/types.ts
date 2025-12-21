@@ -5,6 +5,21 @@ export { ThumbnailSize, ThumbnailStatus };
 export const THUMBNAIL_DIMENSIONS: Record<ThumbnailSize, number> = {
   GRID: 300,
   PREVIEW: 600,
+  ANIMATED: 300, // Same width as grid thumbnails
+};
+
+/**
+ * Configuration for animated preview generation.
+ */
+export const ANIMATED_PREVIEW_CONFIG = {
+  /** Total duration of the preview in seconds */
+  duration: 5,
+  /** Frames per second for the animated preview */
+  fps: 12,
+  /** WebP quality (0-100) */
+  quality: 60,
+  /** Number of sample points for smart sampling (for videos > 15s) */
+  samplePoints: 3,
 };
 
 export interface ThumbnailResult {
@@ -23,4 +38,6 @@ export interface PostForThumbnail {
   extension: string;
   mimeType: string;
   thumbnailStatus: ThumbnailStatus;
+  /** Duration in milliseconds (for videos/animated images) */
+  duration?: number | null;
 }
