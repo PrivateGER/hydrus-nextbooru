@@ -39,6 +39,16 @@ const CATEGORY_LABELS: Record<TagCategory, string> = {
   [TagCategory.META]: "Meta",
 };
 
+function formatCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return count.toString();
+}
+
 export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
   // Group tags by category
   const grouped = tags.reduce(
@@ -89,8 +99,12 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                       {isActive && "• "}
                       {tag.name.replace(/_/g, " ")}
                     </Link>
-                    <span className="text-xs text-zinc-500 shrink-0">
-                      {tag.postCount}
+                    <span
+                      className="text-xs text-zinc-500 shrink-0"
+                      title={`${tag.postCount.toLocaleString()} posts`}
+                      aria-label={`${tag.postCount.toLocaleString()} posts`}
+                    >
+                      {formatCount(tag.postCount)}
                     </span>
                   </li>
                 );
