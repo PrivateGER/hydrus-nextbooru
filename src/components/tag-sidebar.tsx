@@ -7,6 +7,7 @@ interface Tag {
   id: number;
   name: string;
   category: TagCategory;
+  postCount: number;
 }
 
 interface TagSidebarProps {
@@ -37,6 +38,16 @@ const CATEGORY_LABELS: Record<TagCategory, string> = {
   [TagCategory.GENERAL]: "Tags",
   [TagCategory.META]: "Meta",
 };
+
+function formatCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return count.toString();
+}
 
 export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
   // Group tags by category
@@ -77,10 +88,10 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
               {categoryTags.map((tag) => {
                 const isActive = currentTags.includes(tag.name);
                 return (
-                  <li key={tag.id}>
+                  <li key={tag.id} className="flex items-baseline gap-1">
                     <Link
                       href={buildSearchUrl(tag.name)}
-                      className={`block truncate text-sm ${CATEGORY_COLORS[category]} ${
+                      className={`truncate text-sm ${CATEGORY_COLORS[category]} ${
                         isActive ? "font-bold" : ""
                       }`}
                       title={tag.name}
@@ -88,6 +99,13 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                       {isActive && "• "}
                       {tag.name.replace(/_/g, " ")}
                     </Link>
+                    <span
+                      className="text-xs text-zinc-500 shrink-0"
+                      title={`${tag.postCount.toLocaleString()} posts`}
+                      aria-label={`${tag.postCount.toLocaleString()} posts`}
+                    >
+                      {formatCount(tag.postCount)}
+                    </span>
                   </li>
                 );
               })}
