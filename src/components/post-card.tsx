@@ -21,21 +21,63 @@ const LOAD_TIMEOUT_MS = 15000;
 export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry" }: PostCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
+  const [previewLoaded, setPreviewLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   const hashShort = hash.slice(0, 8);
+
+  const isVideo = mimeType.startsWith("video/");
+  const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
+  const canHavePreview = isVideo || isAnimated;
 
   // Reset state when hash changes (component reuse in virtualized lists)
   useEffect(() => {
     console.log(`[${hashShort}] hash changed, resetting state`);
     setLoaded(false);
     setError(false);
+    setPreviewLoaded(false);
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = undefined;
     }
   }, [hash, hashShort]);
+
+  // Preload animated preview for videos/GIFs when card is visible
+  useEffect(() => {
+    if (!canHavePreview || !loaded) return;
+
+    const img = imgRef.current;
+    if (!img) return;
+
+    // Use IntersectionObserver to only preload when visible
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry.isIntersecting) return;
+
+        // Card is visible - start preloading animated preview
+        const previewImg = new Image();
+        previewImg.src = `/api/thumbnails/${hash}.webp?animated=true`;
+        previewImg.onload = () => {
+          if (mountedRef.current) {
+            setPreviewLoaded(true);
+          }
+        };
+
+        // Disconnect after triggering preload
+        observer.disconnect();
+      },
+      { rootMargin: "50px" }
+    );
+
+    observer.observe(img);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [hash, canHavePreview, loaded]);
 
   // Track mounted state to prevent setState after unmount
   useEffect(() => {
@@ -131,10 +173,8 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     console.log(`[${hashShort}] state: loaded=${loaded}, error=${error}`);
   }, [hashShort, loaded, error]);
 
-  const isVideo = mimeType.startsWith("video/");
-  const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
-
   const isMasonry = layout === "masonry";
+  const showAnimatedPreview = canHavePreview && previewLoaded && isHovering;
 
   return (
     <Link
@@ -142,6 +182,8 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       className={`group relative block overflow-hidden rounded-lg bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 ${
         isMasonry ? "mb-3 break-inside-avoid" : ""
       }`}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
     >
       {/* Placeholder / aspect container */}
       {isMasonry ? (
@@ -195,24 +237,36 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
       {/* Thumbnail image */}
       {!error ? (
-        <img
-          key={hash}
-          ref={imgRef}
-          src={`/api/thumbnails/${hash}.webp`}
-          alt=""
-          className={
-            isMasonry
-              ? `w-full h-auto transition-opacity duration-300 ${
-                  loaded ? "opacity-100" : "absolute inset-0 opacity-0"
-                }`
-              : `absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
-                  loaded ? "opacity-100" : "opacity-0"
-                }`
-          }
-          loading="lazy"
-          onLoad={handleLoad}
-          onError={handleError}
-        />
+        <>
+          <img
+            key={hash}
+            ref={imgRef}
+            src={`/api/thumbnails/${hash}.webp`}
+            alt=""
+            className={
+              isMasonry
+                ? `w-full h-auto transition-opacity duration-300 ${
+                    loaded ? "opacity-100" : "absolute inset-0 opacity-0"
+                  } ${showAnimatedPreview ? "opacity-0" : ""}`
+                : `absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
+                    loaded ? "opacity-100" : "opacity-0"
+                  } ${showAnimatedPreview ? "opacity-0" : ""}`
+            }
+            loading="lazy"
+            onLoad={handleLoad}
+            onError={handleError}
+          />
+          {/* Animated preview on hover */}
+          {canHavePreview && previewLoaded && (
+            <img
+              src={`/api/thumbnails/${hash}.webp?animated=true`}
+              alt=""
+              className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-200 ${
+                showAnimatedPreview ? "opacity-100" : "opacity-0"
+              }`}
+            />
+          )}
+        </>
       ) : (
         <div className={`flex items-center justify-center bg-zinc-700 text-zinc-400 ${
           isMasonry ? "aspect-square" : "absolute inset-0"
