@@ -21,9 +21,9 @@ export const ANIMATED_PREVIEW_CONFIG = {
   /** Number of sample points for smart sampling (for videos > 15s) */
   samplePoints: 3,
   /** Minimum video duration in ms to generate animated preview */
-  minVideoDuration: 2000,
+  minVideoDuration: 1000,
   /** Minimum GIF duration in ms to generate animated preview */
-  minGifDuration: 3000,
+  minGifDuration: 1000,
 };
 
 export interface ThumbnailResult {
