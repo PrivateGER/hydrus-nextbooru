@@ -13,7 +13,6 @@ import { getThumbnailPath, getThumbnailRelativePath } from "./paths";
 import { extractVideoFrame, isFfmpegAvailable, generateAnimatedPreview } from "./video-extractor";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { thumbnailLog } from "@/lib/logger";
-import { ANIMATED_PREVIEW_CONFIG } from "./types";
 
 // Cache ffmpeg availability check
 let ffmpegAvailable: boolean | null = null;
@@ -253,7 +252,7 @@ export async function generateAllThumbnails(
 
 /**
  * Check if a post can have an animated preview generated.
- * Only videos and animated images (GIF, APNG) are eligible.
+ * Only videos and animated images (GIF, APNG) with duration data are eligible.
  */
 export function canGenerateAnimatedPreview(post: PostForThumbnail): boolean {
   const isVideo = post.mimeType.startsWith("video/");
@@ -261,14 +260,8 @@ export function canGenerateAnimatedPreview(post: PostForThumbnail): boolean {
 
   if (!isVideo && !isAnimatedImage) return false;
 
-  // Need duration to determine if long enough
-  if (!post.duration) return false;
-
-  const minDuration = isVideo
-    ? ANIMATED_PREVIEW_CONFIG.minVideoDuration
-    : ANIMATED_PREVIEW_CONFIG.minGifDuration;
-
-  return post.duration >= minDuration;
+  // Need duration for the generator to know how to sample
+  return !!post.duration;
 }
 
 /**
