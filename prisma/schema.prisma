@@ -40,8 +40,9 @@ enum SourceType {
 }
 
 enum ThumbnailSize {
-  GRID    // 300px - for gallery grid
-  PREVIEW // 600px - for hover/detail view
+  GRID     // 300px - for gallery grid
+  PREVIEW  // 600px - for hover/detail view
+  ANIMATED // Animated preview for videos/GIFs
 }
 
 enum ThumbnailStatus {
