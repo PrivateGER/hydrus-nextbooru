@@ -216,7 +216,7 @@ export async function generateThumbnail(
  */
 export async function generateAllThumbnails(
   post: PostForThumbnail
-): Promise<{ grid: ThumbnailResult; preview: ThumbnailResult }> {
+): Promise<{ grid: ThumbnailResult; preview: ThumbnailResult; animated?: ThumbnailResult }> {
   // Mark as processing
   await prisma.post.update({
     where: { id: post.id },
@@ -225,6 +225,13 @@ export async function generateAllThumbnails(
 
   const gridResult = await generateThumbnail(post, ThumbnailSize.GRID);
   const previewResult = await generateThumbnail(post, ThumbnailSize.PREVIEW);
+
+  // Also generate animated preview for eligible posts
+  let animatedResult: ThumbnailResult | undefined;
+  if (canGenerateAnimatedPreview(post)) {
+    thumbnailLog.debug({ hash: post.hash }, 'Post is eligible for animated preview, generating...');
+    animatedResult = await generateAnimatedThumbnail(post);
+  }
 
   // Update final status
   const allSuccessful = gridResult.success && previewResult.success;
@@ -241,7 +248,7 @@ export async function generateAllThumbnails(
     },
   });
 
-  return { grid: gridResult, preview: previewResult };
+  return { grid: gridResult, preview: previewResult, animated: animatedResult };
 }
 
 /**
@@ -270,8 +277,11 @@ export function canGenerateAnimatedPreview(post: PostForThumbnail): boolean {
 export async function generateAnimatedThumbnail(
   post: PostForThumbnail
 ): Promise<ThumbnailResult> {
+  thumbnailLog.debug({ hash: post.hash, mimeType: post.mimeType, duration: post.duration }, 'Starting animated thumbnail generation');
+
   // Verify this post is eligible for animated preview
   if (!canGenerateAnimatedPreview(post)) {
+    thumbnailLog.warn({ hash: post.hash }, 'Post not eligible for animated preview, but still got requested');
     return {
       success: false,
       error: "Post is not eligible for animated preview",
@@ -281,6 +291,7 @@ export async function generateAnimatedThumbnail(
   // Check ffmpeg availability (required for all animated previews)
   const hasFfmpeg = await checkFfmpeg();
   if (!hasFfmpeg) {
+    thumbnailLog.warn({ hash: post.hash }, 'ffmpeg not available for animated preview');
     return {
       success: false,
       error: "ffmpeg not available for animated preview generation",
@@ -292,11 +303,14 @@ export async function generateAnimatedThumbnail(
   const filePath = buildFilePath(post.hash, post.extension);
   const isGif = post.mimeType === "image/gif" || post.mimeType === "image/apng";
 
+  thumbnailLog.debug({ hash: post.hash, inputPath: filePath, outputPath, isGif }, 'Animated preview paths');
+
   try {
     // Ensure output directory exists
     await mkdir(dirname(outputPath), { recursive: true });
 
     // Generate animated preview
+    thumbnailLog.debug({ hash: post.hash, durationMs: post.duration }, 'Calling generateAnimatedPreview');
     await generateAnimatedPreview(filePath, outputPath, {
       durationMs: post.duration!,
       isGif,
@@ -329,7 +343,7 @@ export async function generateAnimatedThumbnail(
       },
     });
 
-    thumbnailLog.debug({ hash: post.hash, fileSize: fileStats.size }, 'Animated preview generated');
+    thumbnailLog.info({ hash: post.hash, fileSize: fileStats.size, outputPath }, 'Animated preview generated successfully');
 
     return {
       success: true,
@@ -338,7 +352,7 @@ export async function generateAnimatedThumbnail(
       fileSize: fileStats.size,
     };
   } catch (err) {
-    thumbnailLog.error({ hash: post.hash, error: err instanceof Error ? err.message : String(err) }, 'Animated preview generation failed');
+    thumbnailLog.error({ hash: post.hash, error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, 'Animated preview generation failed');
 
     return {
       success: false,

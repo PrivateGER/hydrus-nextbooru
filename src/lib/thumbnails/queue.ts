@@ -73,7 +73,10 @@ export async function ensureThumbnail(
 
       // Handle animated thumbnails separately
       if (size === ThumbnailSize.ANIMATED) {
-        if (canGenerateAnimatedPreview(post as PostForThumbnail)) {
+        const canGenerate = canGenerateAnimatedPreview(post as PostForThumbnail);
+        thumbnailLog.debug({ hash, mimeType: post.mimeType, duration: post.duration, canGenerate }, 'Checking animated preview eligibility');
+        if (canGenerate) {
+          thumbnailLog.info({ hash }, 'Generating animated preview');
           await generateAnimatedThumbnail(post as PostForThumbnail);
         }
         return;
@@ -102,6 +105,7 @@ export function queueThumbnailGeneration(hash: string): void {
   // Fire and forget - errors are logged internally
   ensureThumbnail(hash, ThumbnailSize.GRID).catch(() => {});
   ensureThumbnail(hash, ThumbnailSize.PREVIEW).catch(() => {});
+  ensureThumbnail(hash, ThumbnailSize.ANIMATED).catch(() => {});
 }
 
 /**
@@ -132,6 +136,7 @@ export async function batchGenerateThumbnails(options: {
       extension: true,
       mimeType: true,
       thumbnailStatus: true,
+      duration: true,
     },
     take: limit,
     orderBy: { id: "asc" },

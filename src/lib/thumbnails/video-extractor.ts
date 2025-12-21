@@ -116,12 +116,17 @@ async function generateGifPreview(
       .outputOptions([
         "-vf",
         `fps=${config.fps},scale=${width}:-1:flags=lanczos`,
-        "-loop",
+        "-c:v",
+        "libwebp",
+        "-lossless",
         "0",
-        "-quality",
+        "-q:v",
         config.quality.toString(),
         "-compression_level",
         "6",
+        "-loop",
+        "0",
+        "-an",
       ])
       .output(outputPath)
       .on("end", () => resolve())
@@ -153,13 +158,17 @@ async function generateSingleSegmentPreview(
       .outputOptions([
         "-vf",
         `fps=${config.fps},scale=${width}:-1:flags=lanczos`,
-        "-loop",
+        "-c:v",
+        "libwebp",
+        "-lossless",
         "0",
-        "-quality",
+        "-q:v",
         config.quality.toString(),
         "-compression_level",
         "6",
-        "-an", // No audio
+        "-loop",
+        "0",
+        "-an",
       ])
       .output(outputPath)
       .on("end", () => resolve())
@@ -226,12 +235,17 @@ async function generateMultiSegmentPreview(
         .input(concatFilePath)
         .inputOptions(["-f", "concat", "-safe", "0"])
         .outputOptions([
-          "-loop",
+          "-c:v",
+          "libwebp",
+          "-lossless",
           "0",
-          "-quality",
+          "-q:v",
           config.quality.toString(),
           "-compression_level",
           "6",
+          "-loop",
+          "0",
+          "-an",
         ])
         .output(outputPath)
         .on("end", () => resolve())
