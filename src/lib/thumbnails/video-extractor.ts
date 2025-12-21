@@ -1,7 +1,7 @@
 import ffmpeg from "fluent-ffmpeg";
 import { tmpdir } from "os";
 import { join } from "path";
-import { readFile, unlink, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, rm } from "fs/promises";
 import { randomUUID } from "crypto";
 import { ANIMATED_PREVIEW_CONFIG, THUMBNAIL_DIMENSIONS } from "./types";
 
@@ -36,12 +36,7 @@ export async function extractVideoFrame(videoPath: string): Promise<Buffer> {
     const buffer = await readFile(tempPath);
     return buffer;
   } finally {
-    // Clean up temp file
-    try {
-      await unlink(tempPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+    await rm(tempPath, { force: true });
   }
 }
 
@@ -253,23 +248,6 @@ async function generateMultiSegmentPreview(
         .run();
     });
   } finally {
-    // Clean up temp files
-    for (const segmentPath of segmentPaths) {
-      try {
-        await unlink(segmentPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-    try {
-      await unlink(join(tempDir, "concat.txt"));
-    } catch {
-      // Ignore cleanup errors
-    }
-    try {
-      await unlink(tempDir);
-    } catch {
-      // Ignore cleanup errors (directory may not be empty)
-    }
+    await rm(tempDir, { recursive: true, force: true });
   }
 }
