@@ -17,7 +17,7 @@ interface RecommendedPost {
  * Algorithm:
  * - Uses Jaccard similarity: |A ∩ B| / |A ∪ B|
  *   where A = current post tags, B = candidate post tags
- * - **Only considers discriminating tags** (postCount ≤ 1000)
+ * - **Only considers discriminating tags** (postCount ≤ 15000)
  *   - Filters out massive common tags like "1girl", "solo", "highres"
  *   - Improves both performance and recommendation quality
  * - Provides meaningful similarity scores (0.0 to 1.0)
@@ -60,9 +60,9 @@ export async function getRecommendedPosts(
   const MIN_SIMILARITY = 0.15;
 
   // Maximum tag frequency - exclude very common tags that don't discriminate well
-  // Tags appearing on >1000 posts (e.g., "1girl", "solo", "highres") are filtered out
+  // Tags appearing on >15000 posts (e.g., "1girl", "solo", "highres") are filtered out
   // This improves both performance and recommendation quality
-  const MAX_TAG_POST_COUNT = 1000;
+  const MAX_TAG_POST_COUNT = 15000;
 
   // Build the query to find similar posts using Jaccard similarity
   // Jaccard similarity = |A ∩ B| / |A ∪ B|
