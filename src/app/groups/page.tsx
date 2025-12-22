@@ -21,6 +21,17 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
 
 const PAGE_SIZE = 50;
 
+/**
+ * Render the Groups listing page with filters, ordering, thumbnails, and pagination.
+ *
+ * When the selected order is "random" and no `seed` is supplied, redirects to a URL that
+ * includes a generated seed so random ordering remains stable across pagination.
+ *
+ * @param searchParams - A promise resolving to query parameters `{ type?, page?, order?, seed? }`
+ *   where `type` filters by source type, `page` selects the pagination page, `order` selects
+ *   the sort mode (`"random" | "newest" | "oldest" | "largest"`), and `seed` stabilizes random order.
+ * @returns A React element containing the groups listing UI.
+ */
 export default async function GroupsPage({ searchParams }: GroupsPageProps) {
   const params = await searchParams;
   const typeFilter = params.type as SourceType | undefined;
