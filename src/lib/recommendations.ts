@@ -17,7 +17,10 @@ interface RecommendedPost {
  * Algorithm:
  * - Uses Jaccard similarity: |A ∩ B| / |A ∪ B|
  *   where A = current post tags, B = candidate post tags
- * - This provides meaningful similarity scores (0.0 to 1.0)
+ * - **Only considers discriminating tags** (postCount ≤ 1000)
+ *   - Filters out massive common tags like "1girl", "solo", "highres"
+ *   - Improves both performance and recommendation quality
+ * - Provides meaningful similarity scores (0.0 to 1.0)
  * - Filters out posts below minimum similarity threshold (0.15)
  * - Excludes perfect matches (similarity = 1.0) to prevent sets from dominating
  * - Excludes posts in the same groups (already shown in filmstrip)
@@ -30,8 +33,9 @@ interface RecommendedPost {
  * - Standard metric for set similarity
  *
  * Performance optimizations:
+ * - Filters out high-frequency tags to avoid processing 50,000+ candidates
  * - Single SQL query with CTEs, joins and aggregation
- * - Uses existing indexes on PostTag(tagId) and PostTag(postId)
+ * - Uses existing indexes on PostTag(tagId), PostTag(postId), and Tag(postCount)
  * - Limits results to reduce data transfer
  *
  * @param postId - The ID of the current post
@@ -55,24 +59,32 @@ export async function getRecommendedPosts(
   // Minimum similarity threshold (15% tag overlap)
   const MIN_SIMILARITY = 0.15;
 
+  // Maximum tag frequency - exclude very common tags that don't discriminate well
+  // Tags appearing on >1000 posts (e.g., "1girl", "solo", "highres") are filtered out
+  // This improves both performance and recommendation quality
+  const MAX_TAG_POST_COUNT = 1000;
+
   // Build the query to find similar posts using Jaccard similarity
   // Jaccard similarity = |A ∩ B| / |A ∪ B|
   //                    = shared_tags / (tags_A + tags_B - shared_tags)
   //
   // This query:
-  // 1. Finds all posts that share at least one tag with the current post
-  // 2. Calculates Jaccard similarity for each candidate
-  // 3. Filters by minimum similarity threshold
-  // 4. Excludes perfect matches (similarity = 1.0)
-  // 5. Excludes posts in the same groups
-  // 6. Orders by similarity (most similar first)
-  // 7. Limits to 12 results
+  // 1. Filters out very common tags (>1000 posts) for better discrimination
+  // 2. Finds all posts that share at least one discriminating tag
+  // 3. Calculates Jaccard similarity for each candidate
+  // 4. Filters by minimum similarity threshold
+  // 5. Excludes perfect matches (similarity = 1.0)
+  // 6. Excludes posts in the same groups
+  // 7. Orders by similarity (most similar first)
+  // 8. Limits to 12 results
   const query = Prisma.sql`
     WITH current_post_tags AS (
-      -- Get all tag IDs for the current post
-      SELECT tag_id
-      FROM "PostTag"
-      WHERE post_id = ${postId}
+      -- Get discriminating tag IDs (exclude very common tags)
+      SELECT pt.tag_id
+      FROM "PostTag" pt
+      JOIN "Tag" t ON t.id = pt.tag_id
+      WHERE pt.post_id = ${postId}
+        AND t."postCount" <= ${MAX_TAG_POST_COUNT}
     ),
     candidate_posts AS (
       -- Find posts that share at least one tag and calculate metrics

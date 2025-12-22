@@ -444,4 +444,78 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result[0].hash).toBe(candidatePost.hash);
     expect(result[0].similarity).toBeCloseTo(0.667, 2);
   });
+
+  it('should filter out very common tags (>1000 posts) for better discrimination', async () => {
+    const prisma = getTestPrisma();
+
+    // Create a very common tag (e.g., "1girl")
+    const massiveTag = await prisma.tag.create({
+      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 5000 },
+    });
+
+    // Create a discriminating tag
+    const discriminatingTag = await prisma.tag.create({
+      data: { name: 'rare_character', category: TagCategory.CHARACTER, postCount: 10 },
+    });
+
+    // Current post has both massive and discriminating tags
+    const currentPost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: massiveTag.id },
+    });
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: discriminatingTag.id },
+    });
+
+    // Candidate A: Only shares the massive tag (should be filtered out)
+    const candidateA = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: candidateA.id, tagId: massiveTag.id },
+    });
+
+    // Candidate B: Shares the discriminating tag (should be included)
+    const candidateB = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: candidateB.id, tagId: discriminatingTag.id },
+    });
+
+    const result = await getRecommendedPosts(currentPost.id);
+
+    // Should only include candidate B (shares discriminating tag)
+    // Candidate A is filtered out because it only shares massive tag
+    expect(result).toHaveLength(1);
+    expect(result[0].hash).toBe(candidateB.hash);
+  });
+
+  it('should handle posts with only massive tags gracefully', async () => {
+    const prisma = getTestPrisma();
+
+    // Create only massive tags
+    const massiveTag1 = await prisma.tag.create({
+      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 5000 },
+    });
+    const massiveTag2 = await prisma.tag.create({
+      data: { name: 'solo', category: TagCategory.GENERAL, postCount: 3000 },
+    });
+
+    // Current post has only massive tags
+    const currentPost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: massiveTag1.id },
+    });
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: massiveTag2.id },
+    });
+
+    // Candidate with same massive tags
+    const candidate = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: candidate.id, tagId: massiveTag1.id },
+    });
+
+    const result = await getRecommendedPosts(currentPost.id);
+
+    // Should return empty since all tags are filtered out
+    expect(result).toEqual([]);
+  });
 });
