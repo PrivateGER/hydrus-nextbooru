@@ -12,6 +12,8 @@ import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
+import { RecommendedPosts } from "@/components/recommended-posts";
+import { getRecommendedPosts } from "@/lib/recommendations";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -141,6 +143,11 @@ export default async function PostPage({ params }: PostPageProps) {
   ]
     .filter(Boolean)
     .join("_") + `.${post.extension}`;
+
+  // Get recommended posts based on tag similarity
+  // Exclude posts from the same groups to avoid duplicates
+  const groupIds = post.groups.map((pg) => pg.group.id);
+  const recommendedPosts = await getRecommendedPosts(post.id, groupIds);
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
@@ -297,6 +304,9 @@ export default async function PostPage({ params }: PostPageProps) {
             </div>
           );
         })}
+
+        {/* Recommended posts */}
+        <RecommendedPosts posts={recommendedPosts} />
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">
