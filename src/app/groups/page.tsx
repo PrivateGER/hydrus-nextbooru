@@ -32,6 +32,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
     const newSeed = Math.random().toString(36).substring(2, 10);
     const redirectParams = new URLSearchParams();
     if (typeFilter) redirectParams.set("type", typeFilter);
+    redirectParams.set("order", "random");
     if (page > 1) redirectParams.set("page", page.toString());
     redirectParams.set("seed", newSeed);
     redirect(`/groups?${redirectParams.toString()}`);
@@ -62,7 +63,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
     const newSeed = overrides.newSeed ? Math.random().toString(36).substring(2, 10) : seed;
 
     if (newType) params.set("type", newType);
-    if (newOrder !== "random") params.set("order", newOrder);
+    params.set("order", newOrder);
     if (newPage > 1) params.set("page", newPage.toString());
     if (newOrder === "random") params.set("seed", newSeed);
 
