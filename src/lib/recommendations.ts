@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
-import { Prisma } from "@/generated/prisma";
+import { Prisma } from "@/generated/prisma/client";
 
-interface RecommendedPost {
+export interface RecommendedPost {
   id: number;
   hash: string;
   width: number | null;
@@ -69,7 +69,7 @@ export async function getRecommendedPosts(
   //                    = shared_tags / (tags_A + tags_B - shared_tags)
   //
   // This query:
-  // 1. Filters out very common tags (>1000 posts) for better discrimination
+  // 1. Filters out very common tags (>15000 posts) for better discrimination
   // 2. Finds all posts that share at least one discriminating tag
   // 3. Calculates Jaccard similarity for each candidate
   // 4. Filters by minimum similarity threshold

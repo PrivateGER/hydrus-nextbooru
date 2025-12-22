@@ -445,12 +445,12 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result[0].similarity).toBeCloseTo(0.667, 2);
   });
 
-  it('should filter out very common tags (>1000 posts) for better discrimination', async () => {
+  it('should filter out very common tags (>15000 posts) for better discrimination', async () => {
     const prisma = getTestPrisma();
 
     // Create a very common tag (e.g., "1girl")
     const massiveTag = await prisma.tag.create({
-      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 5000 },
+      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 20000 },
     });
 
     // Create a discriminating tag
@@ -492,10 +492,10 @@ describe('getRecommendedPosts (Integration)', () => {
 
     // Create only massive tags
     const massiveTag1 = await prisma.tag.create({
-      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 5000 },
+      data: { name: '1girl', category: TagCategory.GENERAL, postCount: 20000 },
     });
     const massiveTag2 = await prisma.tag.create({
-      data: { name: 'solo', category: TagCategory.GENERAL, postCount: 3000 },
+      data: { name: 'solo', category: TagCategory.GENERAL, postCount: 18000 },
     });
 
     // Current post has only massive tags

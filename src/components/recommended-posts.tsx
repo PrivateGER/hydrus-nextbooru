@@ -1,14 +1,5 @@
 import Link from "next/link";
-
-interface RecommendedPost {
-  id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  mimeType: string;
-  similarity: number;
-  sharedTagCount: number;
-}
+import { RecommendedPost } from "@/lib/recommendations";
 
 interface RecommendedPostsProps {
   posts: RecommendedPost[];
