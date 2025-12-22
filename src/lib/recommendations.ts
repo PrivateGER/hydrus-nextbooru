@@ -80,33 +80,33 @@ export async function getRecommendedPosts(
   const query = Prisma.sql`
     WITH current_post_tags AS (
       -- Get discriminating tag IDs (exclude very common tags)
-      SELECT pt.tag_id
+      SELECT pt."tagId"
       FROM "PostTag" pt
-      JOIN "Tag" t ON t.id = pt.tag_id
-      WHERE pt.post_id = ${postId}
+      JOIN "Tag" t ON t.id = pt."tagId"
+      WHERE pt."postId" = ${postId}
         AND t."postCount" <= ${MAX_TAG_POST_COUNT}
     ),
     candidate_posts AS (
       -- Find posts that share at least one tag and calculate metrics
       SELECT
-        pt.post_id,
-        COUNT(DISTINCT pt.tag_id) as shared_tag_count,
+        pt."postId",
+        COUNT(DISTINCT pt."tagId") as shared_tag_count,
         -- Get total number of tags for each candidate
         (
           SELECT COUNT(*)
           FROM "PostTag" pt2
-          WHERE pt2.post_id = pt.post_id
+          WHERE pt2."postId" = pt."postId"
         ) as candidate_tag_count
       FROM "PostTag" pt
-      WHERE pt.tag_id IN (SELECT tag_id FROM current_post_tags)
-        AND pt.post_id != ${postId}
-      GROUP BY pt.post_id
+      WHERE pt."tagId" IN (SELECT "tagId" FROM current_post_tags)
+        AND pt."postId" != ${postId}
+      GROUP BY pt."postId"
     ),
     scored_candidates AS (
       -- Calculate Jaccard similarity: intersection / union
       -- union = current_tags + candidate_tags - shared_tags
       SELECT
-        cp.post_id,
+        cp."postId",
         cp.shared_tag_count,
         cp.candidate_tag_count,
         -- Jaccard similarity coefficient
@@ -117,7 +117,7 @@ export async function getRecommendedPosts(
     filtered_candidates AS (
       -- Filter by similarity threshold and exclude perfect matches
       SELECT
-        sc.post_id,
+        sc."postId",
         sc.shared_tag_count,
         sc.similarity
       FROM scored_candidates sc
@@ -127,10 +127,10 @@ export async function getRecommendedPosts(
           excludeGroupIds.length > 0
             ? Prisma.sql`
               -- Exclude posts in the same groups
-              AND sc.post_id NOT IN (
-                SELECT post_id
+              AND sc."postId" NOT IN (
+                SELECT "postId"
                 FROM "PostGroup"
-                WHERE group_id IN (${Prisma.join(excludeGroupIds)})
+                WHERE "groupId" IN (${Prisma.join(excludeGroupIds)})
               )
             `
             : Prisma.empty
@@ -146,7 +146,7 @@ export async function getRecommendedPosts(
       fc.similarity,
       fc.shared_tag_count as "sharedTagCount"
     FROM filtered_candidates fc
-    JOIN "Post" p ON p.id = fc.post_id
+    JOIN "Post" p ON p.id = fc."postId"
     ORDER BY fc.similarity DESC, fc.shared_tag_count DESC, p.id DESC
     LIMIT 12
   `;
