@@ -212,7 +212,7 @@ export function MediaViewer({
               ref={canvasRef}
               width={32}
               height={32}
-              className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+              className={`pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
                 showBlurhash && !previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
               }`}
             />
@@ -225,7 +225,7 @@ export function MediaViewer({
             alt=""
             onLoad={() => setPreviewLoaded(true)}
             onError={() => setPreviewLoaded(true)}
-            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
+            className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
               previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
             }`}
           />
