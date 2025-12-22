@@ -6,6 +6,7 @@ interface RecommendedPost {
   width: number | null;
   height: number | null;
   mimeType: string;
+  similarity: number;
   sharedTagCount: number;
 }
 
@@ -14,12 +15,13 @@ interface RecommendedPostsProps {
 }
 
 /**
- * Display a horizontal scrollable grid of recommended posts based on tag similarity.
+ * Display a horizontal scrollable grid of recommended posts based on Jaccard similarity.
  *
  * Shows up to 12 recommended posts with thumbnails in a filmstrip-style layout.
- * Each thumbnail displays a badge indicating how many tags it shares with the current post.
+ * Each thumbnail displays a badge showing the similarity percentage (0-100%).
+ * Higher percentages indicate more similar tag sets.
  *
- * @param posts - Array of recommended posts with similarity scores
+ * @param posts - Array of recommended posts with Jaccard similarity scores (0.0-1.0)
  */
 export function RecommendedPosts({ posts }: RecommendedPostsProps) {
   if (posts.length === 0) {
@@ -52,9 +54,9 @@ export function RecommendedPosts({ posts }: RecommendedPostsProps) {
                 }
                 loading="lazy"
               />
-              {/* Shared tag count badge */}
+              {/* Similarity percentage badge */}
               <span className="absolute top-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                {post.sharedTagCount} tag{post.sharedTagCount !== 1 ? "s" : ""}
+                {Math.round(post.similarity * 100)}%
               </span>
               {/* Video/GIF indicator */}
               {(isVideo || isAnimated) && (

@@ -7,21 +7,30 @@ interface RecommendedPost {
   width: number | null;
   height: number | null;
   mimeType: string;
+  similarity: number;
   sharedTagCount: number;
 }
 
 /**
- * Get recommended posts based on tag similarity.
+ * Get recommended posts based on tag similarity using Jaccard similarity coefficient.
  *
  * Algorithm:
- * - Finds posts that share tags with the current post
- * - Scores by number of shared tags (more shared tags = higher relevance)
- * - Excludes posts with perfect tag overlap (prevents sets from dominating)
+ * - Uses Jaccard similarity: |A ∩ B| / |A ∪ B|
+ *   where A = current post tags, B = candidate post tags
+ * - This provides meaningful similarity scores (0.0 to 1.0)
+ * - Filters out posts below minimum similarity threshold (0.15)
+ * - Excludes perfect matches (similarity = 1.0) to prevent sets from dominating
  * - Excludes posts in the same groups (already shown in filmstrip)
- * - Returns up to 12 most similar posts
+ * - Returns up to 12 most similar posts, ordered by similarity
+ *
+ * Why Jaccard?
+ * - Better than raw tag count: a post with 5/10 matching tags (0.5) ranks
+ *   higher than one with 5/100 matching tags (0.05)
+ * - Handles varying tag counts fairly
+ * - Standard metric for set similarity
  *
  * Performance optimizations:
- * - Single SQL query with joins and aggregation
+ * - Single SQL query with CTEs, joins and aggregation
  * - Uses existing indexes on PostTag(tagId) and PostTag(postId)
  * - Limits results to reduce data transfer
  *
@@ -43,14 +52,20 @@ export async function getRecommendedPosts(
     return [];
   }
 
-  // Build the query to find similar posts
-  // This is a complex query that:
+  // Minimum similarity threshold (15% tag overlap)
+  const MIN_SIMILARITY = 0.15;
+
+  // Build the query to find similar posts using Jaccard similarity
+  // Jaccard similarity = |A ∩ B| / |A ∪ B|
+  //                    = shared_tags / (tags_A + tags_B - shared_tags)
+  //
+  // This query:
   // 1. Finds all posts that share at least one tag with the current post
-  // 2. Counts how many tags they share (sharedTagCount)
-  // 3. Excludes the current post
-  // 4. Excludes posts in the same groups
-  // 5. Excludes posts with perfect tag overlap (same total tags, all matching)
-  // 6. Orders by shared tag count (most similar first)
+  // 2. Calculates Jaccard similarity for each candidate
+  // 3. Filters by minimum similarity threshold
+  // 4. Excludes perfect matches (similarity = 1.0)
+  // 5. Excludes posts in the same groups
+  // 6. Orders by similarity (most similar first)
   // 7. Limits to 12 results
   const query = Prisma.sql`
     WITH current_post_tags AS (
@@ -60,44 +75,54 @@ export async function getRecommendedPosts(
       WHERE post_id = ${postId}
     ),
     candidate_posts AS (
-      -- Find posts that share at least one tag
+      -- Find posts that share at least one tag and calculate metrics
       SELECT
         pt.post_id,
         COUNT(DISTINCT pt.tag_id) as shared_tag_count,
-        -- Also get the total number of tags each candidate has
+        -- Get total number of tags for each candidate
         (
           SELECT COUNT(*)
           FROM "PostTag" pt2
           WHERE pt2.post_id = pt.post_id
-        ) as total_tag_count
+        ) as candidate_tag_count
       FROM "PostTag" pt
       WHERE pt.tag_id IN (SELECT tag_id FROM current_post_tags)
         AND pt.post_id != ${postId}
       GROUP BY pt.post_id
     ),
-    filtered_candidates AS (
-      -- Exclude perfect overlaps: posts where shared_tag_count = total_tag_count = current post tag count
-      -- This prevents sets of images with identical tags from filling all recommendations
+    scored_candidates AS (
+      -- Calculate Jaccard similarity: intersection / union
+      -- union = current_tags + candidate_tags - shared_tags
       SELECT
         cp.post_id,
-        cp.shared_tag_count
+        cp.shared_tag_count,
+        cp.candidate_tag_count,
+        -- Jaccard similarity coefficient
+        CAST(cp.shared_tag_count AS FLOAT) /
+        CAST((${currentPostTagCount} + cp.candidate_tag_count - cp.shared_tag_count) AS FLOAT) as similarity
       FROM candidate_posts cp
-      WHERE NOT (
-        cp.shared_tag_count = ${currentPostTagCount}
-        AND cp.total_tag_count = ${currentPostTagCount}
-      )
-      ${
-        excludeGroupIds.length > 0
-          ? Prisma.sql`
-            -- Exclude posts in the same groups
-            AND cp.post_id NOT IN (
-              SELECT post_id
-              FROM "PostGroup"
-              WHERE group_id IN (${Prisma.join(excludeGroupIds)})
-            )
-          `
-          : Prisma.empty
-      }
+    ),
+    filtered_candidates AS (
+      -- Filter by similarity threshold and exclude perfect matches
+      SELECT
+        sc.post_id,
+        sc.shared_tag_count,
+        sc.similarity
+      FROM scored_candidates sc
+      WHERE sc.similarity >= ${MIN_SIMILARITY}
+        AND sc.similarity < 1.0  -- Exclude perfect matches
+        ${
+          excludeGroupIds.length > 0
+            ? Prisma.sql`
+              -- Exclude posts in the same groups
+              AND sc.post_id NOT IN (
+                SELECT post_id
+                FROM "PostGroup"
+                WHERE group_id IN (${Prisma.join(excludeGroupIds)})
+              )
+            `
+            : Prisma.empty
+        }
     )
     -- Get post details
     SELECT
@@ -106,10 +131,11 @@ export async function getRecommendedPosts(
       p.width,
       p.height,
       p."mimeType",
+      fc.similarity,
       fc.shared_tag_count as "sharedTagCount"
     FROM filtered_candidates fc
     JOIN "Post" p ON p.id = fc.post_id
-    ORDER BY fc.shared_tag_count DESC, p.id DESC
+    ORDER BY fc.similarity DESC, fc.shared_tag_count DESC, p.id DESC
     LIMIT 12
   `;
 

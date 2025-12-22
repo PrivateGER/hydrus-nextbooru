@@ -29,7 +29,7 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result).toEqual([]);
   });
 
-  it('should recommend posts with shared tags', async () => {
+  it('should recommend posts with shared tags and calculate Jaccard similarity', async () => {
     const prisma = getTestPrisma();
 
     // Create tags
@@ -40,7 +40,7 @@ describe('getRecommendedPosts (Integration)', () => {
       data: { name: 'blonde hair', category: TagCategory.GENERAL },
     });
 
-    // Create current post with tags
+    // Create current post with 2 tags: [tag1, tag2]
     const currentPost = await createPost(prisma);
     await prisma.postTag.create({
       data: { postId: currentPost.id, tagId: tag1.id },
@@ -49,7 +49,8 @@ describe('getRecommendedPosts (Integration)', () => {
       data: { postId: currentPost.id, tagId: tag2.id },
     });
 
-    // Create recommended post with shared tag
+    // Create recommended post with 1 shared tag: [tag1]
+    // Jaccard similarity = 1 / (2 + 1 - 1) = 1/2 = 0.5
     const recommendedPost = await createPost(prisma);
     await prisma.postTag.create({
       data: { postId: recommendedPost.id, tagId: tag1.id },
@@ -60,9 +61,10 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result).toHaveLength(1);
     expect(result[0].hash).toBe(recommendedPost.hash);
     expect(result[0].sharedTagCount).toBe(1);
+    expect(result[0].similarity).toBeCloseTo(0.5, 2);
   });
 
-  it('should score posts by number of shared tags', async () => {
+  it('should rank posts by Jaccard similarity', async () => {
     const prisma = getTestPrisma();
 
     // Create tags
@@ -70,39 +72,57 @@ describe('getRecommendedPosts (Integration)', () => {
       prisma.tag.create({ data: { name: 'tag1', category: TagCategory.GENERAL } }),
       prisma.tag.create({ data: { name: 'tag2', category: TagCategory.GENERAL } }),
       prisma.tag.create({ data: { name: 'tag3', category: TagCategory.GENERAL } }),
+      prisma.tag.create({ data: { name: 'tag4', category: TagCategory.GENERAL } }),
     ]);
 
-    // Current post has all 3 tags
+    // Current post has 3 tags: [tag1, tag2, tag3]
     const currentPost = await createPost(prisma);
-    for (const tag of tags) {
+    for (let i = 0; i < 3; i++) {
       await prisma.postTag.create({
-        data: { postId: currentPost.id, tagId: tag.id },
+        data: { postId: currentPost.id, tagId: tags[i].id },
       });
     }
 
-    // Post with 1 shared tag
-    const post1Tag = await createPost(prisma);
+    // Post A: 2 shared tags out of 2 total: [tag1, tag2]
+    // Jaccard = 2 / (3 + 2 - 2) = 2/3 ≈ 0.667
+    const postA = await createPost(prisma);
     await prisma.postTag.create({
-      data: { postId: post1Tag.id, tagId: tags[0].id },
+      data: { postId: postA.id, tagId: tags[0].id },
+    });
+    await prisma.postTag.create({
+      data: { postId: postA.id, tagId: tags[1].id },
     });
 
-    // Post with 2 shared tags (should rank higher)
-    const post2Tags = await createPost(prisma);
+    // Post B: 2 shared tags out of 4 total: [tag1, tag2, tag4, extra]
+    // Jaccard = 2 / (3 + 4 - 2) = 2/5 = 0.4
+    const postB = await createPost(prisma);
     await prisma.postTag.create({
-      data: { postId: post2Tags.id, tagId: tags[0].id },
+      data: { postId: postB.id, tagId: tags[0].id },
     });
     await prisma.postTag.create({
-      data: { postId: post2Tags.id, tagId: tags[1].id },
+      data: { postId: postB.id, tagId: tags[1].id },
+    });
+    await prisma.postTag.create({
+      data: { postId: postB.id, tagId: tags[3].id },
+    });
+    const extraTag = await prisma.tag.create({
+      data: { name: 'extra', category: TagCategory.GENERAL },
+    });
+    await prisma.postTag.create({
+      data: { postId: postB.id, tagId: extraTag.id },
     });
 
     const result = await getRecommendedPosts(currentPost.id);
 
     expect(result).toHaveLength(2);
-    // Post with 2 shared tags should come first
-    expect(result[0].hash).toBe(post2Tags.hash);
+    // Post A should rank higher despite both having 2 shared tags
+    expect(result[0].hash).toBe(postA.hash);
     expect(result[0].sharedTagCount).toBe(2);
-    expect(result[1].hash).toBe(post1Tag.hash);
-    expect(result[1].sharedTagCount).toBe(1);
+    expect(result[0].similarity).toBeCloseTo(0.667, 2);
+
+    expect(result[1].hash).toBe(postB.hash);
+    expect(result[1].sharedTagCount).toBe(2);
+    expect(result[1].similarity).toBeCloseTo(0.4, 2);
   });
 
   it('should exclude posts with perfect tag overlap', async () => {
@@ -247,10 +267,12 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result[0]).toHaveProperty('width');
     expect(result[0]).toHaveProperty('height');
     expect(result[0]).toHaveProperty('mimeType');
+    expect(result[0]).toHaveProperty('similarity');
     expect(result[0]).toHaveProperty('sharedTagCount');
     expect(typeof result[0].id).toBe('number');
     expect(typeof result[0].hash).toBe('string');
     expect(typeof result[0].mimeType).toBe('string');
+    expect(typeof result[0].similarity).toBe('number');
     expect(typeof result[0].sharedTagCount).toBe('number');
   });
 
@@ -268,7 +290,7 @@ describe('getRecommendedPosts (Integration)', () => {
       data: { name: 'character_name', category: TagCategory.CHARACTER },
     });
 
-    // Current post has all three
+    // Current post has all three: [general, artist, character]
     const currentPost = await createPost(prisma);
     await prisma.postTag.create({
       data: { postId: currentPost.id, tagId: generalTag.id },
@@ -280,7 +302,8 @@ describe('getRecommendedPosts (Integration)', () => {
       data: { postId: currentPost.id, tagId: characterTag.id },
     });
 
-    // Recommended post shares artist and character (2 tags)
+    // Recommended post shares artist and character (2 out of 2 tags)
+    // Jaccard = 2 / (3 + 2 - 2) = 2/3 ≈ 0.667
     const recommendedPost = await createPost(prisma);
     await prisma.postTag.create({
       data: { postId: recommendedPost.id, tagId: artistTag.id },
@@ -294,6 +317,7 @@ describe('getRecommendedPosts (Integration)', () => {
     expect(result).toHaveLength(1);
     expect(result[0].hash).toBe(recommendedPost.hash);
     expect(result[0].sharedTagCount).toBe(2);
+    expect(result[0].similarity).toBeCloseTo(0.667, 2);
   });
 
   it('should not recommend the current post itself', async () => {
@@ -314,5 +338,110 @@ describe('getRecommendedPosts (Integration)', () => {
 
     // Should not include the current post itself
     expect(result).toHaveLength(0);
+  });
+
+  it('should filter out posts below minimum similarity threshold (15%)', async () => {
+    const prisma = getTestPrisma();
+
+    // Create many tags
+    const tags = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        prisma.tag.create({
+          data: { name: `tag${i}`, category: TagCategory.GENERAL },
+        })
+      )
+    );
+
+    // Current post has 10 tags
+    const currentPost = await createPost(prisma);
+    for (const tag of tags) {
+      await prisma.postTag.create({
+        data: { postId: currentPost.id, tagId: tag.id },
+      });
+    }
+
+    // Post with low similarity: 1 shared tag out of 10 total
+    // Jaccard = 1 / (10 + 10 - 1) = 1/19 ≈ 0.053 (below 0.15 threshold)
+    const lowSimilarityPost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: lowSimilarityPost.id, tagId: tags[0].id },
+    });
+    for (let i = 0; i < 9; i++) {
+      const extraTag = await prisma.tag.create({
+        data: { name: `extra${i}`, category: TagCategory.GENERAL },
+      });
+      await prisma.postTag.create({
+        data: { postId: lowSimilarityPost.id, tagId: extraTag.id },
+      });
+    }
+
+    // Post with acceptable similarity: 2 shared tags out of 5 total
+    // Jaccard = 2 / (10 + 5 - 2) = 2/13 ≈ 0.154 (above 0.15 threshold)
+    const acceptablePost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: acceptablePost.id, tagId: tags[0].id },
+    });
+    await prisma.postTag.create({
+      data: { postId: acceptablePost.id, tagId: tags[1].id },
+    });
+    for (let i = 0; i < 3; i++) {
+      const extraTag = await prisma.tag.create({
+        data: { name: `ok${i}`, category: TagCategory.GENERAL },
+      });
+      await prisma.postTag.create({
+        data: { postId: acceptablePost.id, tagId: extraTag.id },
+      });
+    }
+
+    const result = await getRecommendedPosts(currentPost.id);
+
+    // Should only include post with similarity >= 0.15
+    expect(result).toHaveLength(1);
+    expect(result[0].hash).toBe(acceptablePost.hash);
+    expect(result[0].similarity).toBeGreaterThanOrEqual(0.15);
+  });
+
+  it('should correctly calculate Jaccard similarity edge cases', async () => {
+    const prisma = getTestPrisma();
+
+    // Create tags
+    const tag1 = await prisma.tag.create({
+      data: { name: 'tag1', category: TagCategory.GENERAL },
+    });
+    const tag2 = await prisma.tag.create({
+      data: { name: 'tag2', category: TagCategory.GENERAL },
+    });
+
+    // Current post: [tag1, tag2]
+    const currentPost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: tag1.id },
+    });
+    await prisma.postTag.create({
+      data: { postId: currentPost.id, tagId: tag2.id },
+    });
+
+    // Test case: 100% shared but different total (should not be perfect match)
+    // Candidate: [tag1, tag2, tag3]
+    // Jaccard = 2 / (2 + 3 - 2) = 2/3 ≈ 0.667
+    const tag3 = await prisma.tag.create({
+      data: { name: 'tag3', category: TagCategory.GENERAL },
+    });
+    const candidatePost = await createPost(prisma);
+    await prisma.postTag.create({
+      data: { postId: candidatePost.id, tagId: tag1.id },
+    });
+    await prisma.postTag.create({
+      data: { postId: candidatePost.id, tagId: tag2.id },
+    });
+    await prisma.postTag.create({
+      data: { postId: candidatePost.id, tagId: tag3.id },
+    });
+
+    const result = await getRecommendedPosts(currentPost.id);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].hash).toBe(candidatePost.hash);
+    expect(result[0].similarity).toBeCloseTo(0.667, 2);
   });
 });
