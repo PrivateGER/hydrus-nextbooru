@@ -512,17 +512,15 @@ export function SearchBar({
           className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-auto rounded-lg border ${isExcludeMode ? "border-red-700" : "border-zinc-700"} bg-zinc-800 shadow-lg`}
         >
           {displaySuggestions.map((suggestion, index) => (
-            <div
+            <button
               key={suggestion.id}
-              className={`group flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-zinc-700 ${
+              type="button"
+              onClick={() => addTag(suggestion.name, isExcludeMode)}
+              className={`flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-zinc-700 cursor-pointer ${
                 index === highlightedIndex ? "bg-zinc-700" : ""
               }`}
             >
-              <button
-                type="button"
-                onClick={() => addTag(suggestion.name, isExcludeMode)}
-                className="flex-1 text-left"
-              >
+              <span className="flex-1">
                 {suggestion.isMeta && (
                   <span className="text-cyan-600 text-xs mr-1.5 font-medium">system:</span>
                 )}
@@ -534,11 +532,11 @@ export function SearchBar({
                     {suggestion.description}
                   </span>
                 )}
-              </button>
+              </span>
               <span className={`text-xs ${isExcludeMode ? "text-red-400" : "text-zinc-500"}`}>
                 {isExcludeMode ? `-${suggestion.count ?? 0}` : (suggestion.count ?? 0)}
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}
