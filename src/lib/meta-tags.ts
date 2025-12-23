@@ -8,7 +8,7 @@
  * @module lib/meta-tags
  */
 
-import { Prisma } from "@/generated/prisma/client";
+import { Prisma, Orientation } from "@/generated/prisma/client";
 
 /**
  * Categories for meta tags to help with organization and display.
@@ -59,10 +59,25 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     }),
   },
 
-  // Orientation tags use raw SQL via getOrientationSqlCondition() - no Prisma condition needed
-  { name: "portrait", description: "Taller than wide", category: "orientation" },
-  { name: "landscape", description: "Wider than tall", category: "orientation" },
-  { name: "square", description: "Equal width and height", category: "orientation" },
+  // Orientation tags use the computed orientation column
+  {
+    name: "portrait",
+    description: "Taller than wide",
+    category: "orientation",
+    getCondition: () => ({ orientation: Orientation.portrait }),
+  },
+  {
+    name: "landscape",
+    description: "Wider than tall",
+    category: "orientation",
+    getCondition: () => ({ orientation: Orientation.landscape }),
+  },
+  {
+    name: "square",
+    description: "Equal width and height",
+    category: "orientation",
+    getCondition: () => ({ orientation: Orientation.square }),
+  },
 
   // Resolution
   {
@@ -144,57 +159,9 @@ export function searchMetaTags(query: string): MetaTagDefinition[] {
   );
 }
 
-/**
- * Orientation meta tags that require raw SQL for field-to-field comparison.
- * Prisma doesn't support comparing two columns directly in WHERE clauses.
- */
-const ORIENTATION_TAGS = new Set(["portrait", "landscape", "square"]);
-
-/**
- * Check if a meta tag requires raw SQL for its condition.
- *
- * @param tagName - Tag name (case-insensitive)
- * @returns true if this meta tag needs raw SQL handling
- */
-export function requiresRawSql(tagName: string): boolean {
-  return ORIENTATION_TAGS.has(tagName.toLowerCase());
-}
-
-/**
- * Get raw SQL condition for orientation meta tags.
- *
- * @param tagName - Tag name (case-insensitive)
- * @param negated - Whether to negate the condition
- * @returns Prisma.Sql fragment for the condition
- */
-export function getOrientationSqlCondition(
-  tagName: string,
-  negated: boolean = false
-): Prisma.Sql {
-  const name = tagName.toLowerCase();
-  const nullCheck = Prisma.sql`"width" IS NOT NULL AND "height" IS NOT NULL`;
-
-  let condition: Prisma.Sql;
-  switch (name) {
-    case "portrait":
-      condition = Prisma.sql`(${nullCheck} AND "height" > "width")`;
-      break;
-    case "landscape":
-      condition = Prisma.sql`(${nullCheck} AND "width" > "height")`;
-      break;
-    case "square":
-      condition = Prisma.sql`(${nullCheck} AND "width" = "height")`;
-      break;
-    default:
-      throw new Error(`Unknown orientation tag: ${tagName}`);
-  }
-
-  return negated ? Prisma.sql`NOT ${condition}` : condition;
-}
 
 /**
  * Get the count of posts matching a meta tag, optionally filtered by tag co-occurrence.
- * Uses raw SQL for orientation tags, Prisma for others.
  *
  * @param tagName - Meta tag name
  * @param prisma - Prisma client instance
@@ -205,30 +172,11 @@ export async function getMetaTagCount(
   tagName: string,
   prisma: {
     post: { count: (args: { where: Prisma.PostWhereInput }) => Promise<number> };
-    $queryRaw: <T>(query: TemplateStringsArray, ...values: unknown[]) => Promise<T>;
   },
   filteredPostIds?: number[]
 ): Promise<number> {
   const def = getMetaTagDefinition(tagName);
-  if (!def) return 0;
-
-  if (requiresRawSql(tagName)) {
-    const condition = getOrientationSqlCondition(tagName, false);
-    if (filteredPostIds && filteredPostIds.length > 0) {
-      const result = await prisma.$queryRaw<[{ count: bigint }]>`
-        SELECT COUNT(*)::bigint as count FROM "Post"
-        WHERE ${condition} AND id = ANY(${filteredPostIds}::int[])
-      `;
-      return Number(result[0]?.count ?? 0);
-    }
-    const result = await prisma.$queryRaw<[{ count: bigint }]>`
-      SELECT COUNT(*)::bigint as count FROM "Post" WHERE ${condition}
-    `;
-    return Number(result[0]?.count ?? 0);
-  }
-
-  // Non-orientation tags should always have getCondition defined
-  if (!def.getCondition) return 0;
+  if (!def?.getCondition) return 0;
 
   const where = filteredPostIds && filteredPostIds.length > 0
     ? { AND: [def.getCondition(), { id: { in: filteredPostIds } }] }
@@ -249,7 +197,6 @@ export async function getMetaTagCounts(
   tagNames: string[],
   prisma: {
     post: { count: (args: { where: Prisma.PostWhereInput }) => Promise<number> };
-    $queryRaw: <T>(query: TemplateStringsArray, ...values: unknown[]) => Promise<T>;
   },
   filteredPostIds?: number[]
 ): Promise<Map<string, number>> {

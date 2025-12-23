@@ -4,8 +4,6 @@ import {
   getMetaTagDefinition,
   getAllMetaTags,
   searchMetaTags,
-  requiresRawSql,
-  getOrientationSqlCondition,
   separateMetaTags,
 } from "./meta-tags";
 
@@ -117,62 +115,6 @@ describe("searchMetaTags", () => {
   });
 });
 
-describe("requiresRawSql", () => {
-  it("should return true for orientation tags", () => {
-    expect(requiresRawSql("portrait")).toBe(true);
-    expect(requiresRawSql("landscape")).toBe(true);
-    expect(requiresRawSql("square")).toBe(true);
-  });
-
-  it("should be case-insensitive", () => {
-    expect(requiresRawSql("PORTRAIT")).toBe(true);
-    expect(requiresRawSql("Landscape")).toBe(true);
-  });
-
-  it("should return false for non-orientation meta tags", () => {
-    expect(requiresRawSql("video")).toBe(false);
-    expect(requiresRawSql("animated")).toBe(false);
-    expect(requiresRawSql("highres")).toBe(false);
-    expect(requiresRawSql("lowres")).toBe(false);
-  });
-
-  it("should return false for non-meta tags", () => {
-    expect(requiresRawSql("blue_eyes")).toBe(false);
-  });
-});
-
-describe("getOrientationSqlCondition", () => {
-  it("should generate portrait condition", () => {
-    const sql = getOrientationSqlCondition("portrait");
-    expect(sql.strings.join("")).toContain("height");
-    expect(sql.strings.join("")).toContain("width");
-    expect(sql.strings.join("")).toContain(">");
-  });
-
-  it("should generate landscape condition", () => {
-    const sql = getOrientationSqlCondition("landscape");
-    expect(sql.strings.join("")).toContain("width");
-    expect(sql.strings.join("")).toContain("height");
-    expect(sql.strings.join("")).toContain(">");
-  });
-
-  it("should generate square condition", () => {
-    const sql = getOrientationSqlCondition("square");
-    expect(sql.strings.join("")).toContain("width");
-    expect(sql.strings.join("")).toContain("height");
-    expect(sql.strings.join("")).toContain("=");
-  });
-
-  it("should generate negated condition", () => {
-    const sql = getOrientationSqlCondition("portrait", true);
-    expect(sql.strings.join("")).toContain("NOT");
-  });
-
-  it("should throw for unknown orientation tag", () => {
-    expect(() => getOrientationSqlCondition("video")).toThrow("Unknown orientation tag");
-  });
-});
-
 describe("separateMetaTags", () => {
   it("should separate meta tags from regular tags", () => {
     const result = separateMetaTags(["video", "blue_eyes", "portrait"]);
@@ -256,13 +198,17 @@ describe("meta tag Prisma conditions", () => {
     expect(condition).toHaveProperty("AND");
   });
 
-  it("orientation tags should not have getCondition (use raw SQL instead)", () => {
+  it("orientation tags should have getCondition using orientation column", () => {
     const portrait = getMetaTagDefinition("portrait");
     const landscape = getMetaTagDefinition("landscape");
     const square = getMetaTagDefinition("square");
-    expect(portrait?.getCondition).toBeUndefined();
-    expect(landscape?.getCondition).toBeUndefined();
-    expect(square?.getCondition).toBeUndefined();
+    expect(portrait?.getCondition).toBeDefined();
+    expect(landscape?.getCondition).toBeDefined();
+    expect(square?.getCondition).toBeDefined();
+    // Verify they use the orientation column
+    expect(portrait!.getCondition!()).toHaveProperty("orientation");
+    expect(landscape!.getCondition!()).toHaveProperty("orientation");
+    expect(square!.getCondition!()).toHaveProperty("orientation");
   });
 });
 
