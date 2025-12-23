@@ -10,6 +10,7 @@
 
 import DOMPurify from "isomorphic-dompurify";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -17,7 +18,13 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition, hasPostHidingPatterns } from "@/lib/tag-blacklist";
+import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
+import {
+  separateMetaTags,
+  getMetaTagDefinition,
+  requiresRawSql,
+  getOrientationSqlCondition,
+} from "@/lib/meta-tags";
 
 /** Number of results per page for paginated searches */
 const POSTS_PER_PAGE = 48;
@@ -265,12 +272,13 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 }
 
 /**
- * Search posts by tags with wildcard and negation support.
+ * Search posts by tags with wildcard, negation, and meta tag support.
  *
  * Supports complex tag queries:
  * - Regular tags: exact match (case-insensitive)
  * - Wildcards: `*` matches any characters (e.g., `artist:*`, `*_hair`)
  * - Negation: prefix with `-` to exclude (e.g., `-solo`, `-artist:*`)
+ * - Meta tags: computed filters based on file properties (e.g., `video`, `portrait`, `highres`)
  *
  * All included tags are ANDed together (posts must have all of them).
  * Excluded tags filter out any posts containing them.
@@ -281,18 +289,30 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
  */
 export async function searchPosts(tags: string[], page: number): Promise<TagSearchResult> {
   const skip = (page - 1) * POSTS_PER_PAGE;
-  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsWithNegation(tags);
+
+  // First, separate meta tags from regular tags
+  const { metaTags, regularTags: separatedRegular } = separateMetaTags(tags);
+
+  // Combine regular tags back into include/exclude format for existing processing
+  const allRegularTags = [
+    ...separatedRegular.include,
+    ...separatedRegular.exclude.map((t) => `-${t}`),
+  ];
+
+  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsWithNegation(allRegularTags);
 
   // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
   // For wildcards, we check if the pattern itself is blacklisted (e.g., "hydl-import-time:*")
   const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
   const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
 
-  if (includeTags.length === 0 && excludeTags.length === 0) {
+  // Check if we have any search criteria (tags or meta tags)
+  const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
+  if (includeTags.length === 0 && excludeTags.length === 0 && !hasMetaTags) {
     return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
   }
 
-  // Categorize tags into regular and wildcard
+  // Categorize regular tags into regular and wildcard
   const regular = { include: [] as string[], exclude: [] as string[] };
   const wildcard = { include: [] as string[], exclude: [] as string[] };
   const errors: string[] = [];
@@ -339,6 +359,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
   // Build Prisma where clause
   const conditions: object[] = [];
 
+  // Add regular tag conditions
   for (const name of regular.include) {
     conditions.push({ tags: { some: { tag: { name: { equals: name, mode: "insensitive" as const } } } } });
   }
@@ -358,10 +379,143 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
     conditions.push({ tags: { none: { tagId: { in: excludeWildcardIds } } } });
   }
 
+  // Add meta tag conditions (non-orientation)
+  for (const metaName of metaTags.include) {
+    if (!requiresRawSql(metaName)) {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        conditions.push(def.getCondition());
+      }
+    }
+  }
+
+  for (const metaName of metaTags.exclude) {
+    if (!requiresRawSql(metaName)) {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        conditions.push({ NOT: def.getCondition() });
+      }
+    }
+  }
+
+  // Check for orientation meta tags that require raw SQL
+  const orientationInclude = metaTags.include.filter(requiresRawSql);
+  const orientationExclude = metaTags.exclude.filter(requiresRawSql);
+  const hasOrientationTags = orientationInclude.length > 0 || orientationExclude.length > 0;
+
+  // Build orientation SQL conditions
+  // For orientation (portrait/landscape/square), we use raw SQL since Prisma
+  // doesn't support field-to-field comparisons. The query uses a simple WHERE clause
+  // with the orientation condition - PostgreSQL will use indexes efficiently.
+  let orientationSqlCondition: Prisma.Sql | null = null;
+  if (hasOrientationTags) {
+    const orientationConditions: Prisma.Sql[] = [];
+
+    for (const metaName of orientationInclude) {
+      orientationConditions.push(getOrientationSqlCondition(metaName, false));
+    }
+
+    for (const metaName of orientationExclude) {
+      orientationConditions.push(getOrientationSqlCondition(metaName, true));
+    }
+
+    orientationSqlCondition = orientationConditions.length > 1
+      ? Prisma.sql`(${Prisma.join(orientationConditions, " AND ")})`
+      : orientationConditions[0];
+  }
+
   const baseWhere = conditions.length > 0 ? { AND: conditions } : {};
   const where = withPostHidingFilter(baseWhere);
 
   const startTime = performance.now();
+
+  // If orientation tags are present, use optimized raw SQL query
+  if (orientationSqlCondition) {
+    // For orientation-only queries (no tag filters), use simple raw SQL
+    const hasTagFilters = regular.include.length > 0 || regular.exclude.length > 0 ||
+                          includeWildcardIds.length > 0 || excludeWildcardIds.length > 0;
+
+    if (!hasTagFilters) {
+      // Simple orientation query - very efficient with proper indexing
+      const postHidingCondition = getPostHidingSqlCondition('p.id');
+
+      const [posts, countResult] = await Promise.all([
+        prisma.$queryRaw<PostResult[]>`
+          SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType"
+          FROM "Post" p
+          WHERE ${orientationSqlCondition}
+            AND ${postHidingCondition}
+          ORDER BY p."importedAt" DESC
+          LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
+        `,
+        prisma.$queryRaw<[{ count: bigint }]>`
+          SELECT COUNT(*)::bigint as count
+          FROM "Post" p
+          WHERE ${orientationSqlCondition}
+            AND ${postHidingCondition}
+        `,
+      ]);
+
+      return {
+        posts,
+        totalPages: Math.ceil(Number(countResult[0]?.count ?? 0) / POSTS_PER_PAGE),
+        totalCount: Number(countResult[0]?.count ?? 0),
+        queryTimeMs: performance.now() - startTime,
+        resolvedWildcards,
+      };
+    }
+
+    // For orientation + tag filters, get IDs of posts matching orientation
+    // Then use Prisma to apply tag filters on that subset
+    const postHidingCondition = getPostHidingSqlCondition('p.id');
+
+    // Limit orientation results to prevent memory issues on large databases
+    // 50,000 is a reasonable limit that balances performance and functionality
+    const MAX_ORIENTATION_IDS = 50000;
+
+    const orientationPosts = await prisma.$queryRaw<{ id: number }[]>`
+      SELECT p.id FROM "Post" p
+      WHERE ${orientationSqlCondition}
+        AND ${postHidingCondition}
+      ORDER BY p."importedAt" DESC
+      LIMIT ${MAX_ORIENTATION_IDS}
+    `;
+
+    if (orientationPosts.length === 0) {
+      return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: performance.now() - startTime, resolvedWildcards };
+    }
+
+    const orientationPostIds = orientationPosts.map(p => p.id);
+
+    // Now use Prisma to filter by tags within the orientation-matching posts
+    const filteredWhere = withPostHidingFilter({
+      AND: [
+        { id: { in: orientationPostIds } },
+        ...conditions,
+      ],
+    });
+
+    const [filteredPosts, filteredCount] = await Promise.all([
+      prisma.post.findMany({
+        where: filteredWhere,
+        orderBy: { importedAt: "desc" },
+        skip,
+        take: POSTS_PER_PAGE,
+        select: { id: true, hash: true, width: true, height: true, blurhash: true, mimeType: true },
+      }),
+      prisma.post.count({ where: filteredWhere }),
+    ]);
+
+    return {
+      posts: filteredPosts,
+      totalPages: Math.ceil(filteredCount / POSTS_PER_PAGE),
+      totalCount: filteredCount,
+      queryTimeMs: performance.now() - startTime,
+      resolvedWildcards,
+    };
+  }
+
+  // Standard Prisma query for non-orientation searches
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
       where,

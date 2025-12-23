@@ -8,7 +8,13 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted, withPostHidingFilter } from "@/lib/tag-blacklist";
+import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
+import {
+  separateMetaTags,
+  getMetaTagDefinition,
+  requiresRawSql,
+  getOrientationSqlCondition,
+} from "@/lib/meta-tags";
 
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
@@ -49,13 +55,24 @@ export async function GET(request: NextRequest) {
   const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(tagsParam);
 
   // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
-  const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
-  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
+  const filteredIncludeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
+  const filteredExcludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
+
+  // Separate meta tags from regular tags
+  const { metaTags, regularTags } = separateMetaTags([
+    ...filteredIncludeTags,
+    ...filteredExcludeTags.map(t => `-${t}`),
+  ]);
+
+  // Recombine regular tags for processing
+  const includeTags = regularTags.include;
+  const excludeTags = regularTags.exclude;
 
   const hasTagFilters = includeTags.length > 0 || excludeTags.length > 0;
+  const hasMetaTagFilters = metaTags.include.length > 0 || metaTags.exclude.length > 0;
   const hasNotesFilter = notesQuery.length >= 2;
 
-  if (!hasTagFilters && !hasNotesFilter) {
+  if (!hasTagFilters && !hasMetaTagFilters && !hasNotesFilter) {
     return NextResponse.json({
       posts: [],
       totalCount: 0,
@@ -257,8 +274,128 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Add meta tag conditions (non-orientation)
+  for (const metaName of metaTags.include) {
+    if (!requiresRawSql(metaName)) {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        andConditions.push(def.getCondition());
+      }
+    }
+  }
+
+  for (const metaName of metaTags.exclude) {
+    if (!requiresRawSql(metaName)) {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        andConditions.push({ NOT: def.getCondition() });
+      }
+    }
+  }
+
+  // Check for orientation meta tags that require raw SQL
+  const orientationInclude = metaTags.include.filter(requiresRawSql);
+  const orientationExclude = metaTags.exclude.filter(requiresRawSql);
+  const hasOrientationTags = orientationInclude.length > 0 || orientationExclude.length > 0;
+
+  // Build orientation SQL conditions
+  let orientationSqlCondition: Prisma.Sql | null = null;
+  if (hasOrientationTags) {
+    const orientationConditions: Prisma.Sql[] = [];
+
+    for (const metaName of orientationInclude) {
+      orientationConditions.push(getOrientationSqlCondition(metaName, false));
+    }
+
+    for (const metaName of orientationExclude) {
+      orientationConditions.push(getOrientationSqlCondition(metaName, true));
+    }
+
+    orientationSqlCondition = orientationConditions.length > 1
+      ? Prisma.sql`(${Prisma.join(orientationConditions, " AND ")})`
+      : orientationConditions[0];
+  }
+
   const baseWhereClause = andConditions.length > 0 ? { AND: andConditions } : {};
   const whereClause = withPostHidingFilter(baseWhereClause);
+
+  // If orientation tags are present, use raw SQL query
+  if (orientationSqlCondition) {
+    const postHidingCondition = getPostHidingSqlCondition('p.id');
+    const hasOtherFilters = andConditions.length > 0;
+
+    if (!hasOtherFilters) {
+      // Simple orientation-only query
+      const [posts, countResult] = await Promise.all([
+        prisma.$queryRaw<{ id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string }[]>`
+          SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType"
+          FROM "Post" p
+          WHERE ${orientationSqlCondition}
+            AND ${postHidingCondition}
+          ORDER BY p."importedAt" DESC
+          LIMIT ${limit} OFFSET ${skip}
+        `,
+        prisma.$queryRaw<[{ count: bigint }]>`
+          SELECT COUNT(*)::bigint as count
+          FROM "Post" p
+          WHERE ${orientationSqlCondition}
+            AND ${postHidingCondition}
+        `,
+      ]);
+
+      return NextResponse.json({
+        posts,
+        totalCount: Number(countResult[0]?.count ?? 0),
+        totalPages: Math.ceil(Number(countResult[0]?.count ?? 0) / limit),
+        ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+      });
+    }
+
+    // Orientation + other filters: get IDs matching orientation, then filter with Prisma
+    const MAX_ORIENTATION_IDS = 50000;
+    const orientationPosts = await prisma.$queryRaw<{ id: number }[]>`
+      SELECT p.id FROM "Post" p
+      WHERE ${orientationSqlCondition}
+        AND ${postHidingCondition}
+      ORDER BY p."importedAt" DESC
+      LIMIT ${MAX_ORIENTATION_IDS}
+    `;
+
+    if (orientationPosts.length === 0) {
+      return NextResponse.json({
+        posts: [],
+        totalCount: 0,
+        totalPages: 0,
+        ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+      });
+    }
+
+    const orientationPostIds = orientationPosts.map(p => p.id);
+    const filteredWhere = withPostHidingFilter({
+      AND: [
+        { id: { in: orientationPostIds } },
+        ...andConditions,
+      ],
+    });
+
+    const [posts, totalCount] = await Promise.all([
+      prisma.post.findMany({
+        where: filteredWhere,
+        orderBy: { importedAt: "desc" },
+        skip,
+        take: limit,
+        select: { id: true, hash: true, width: true, height: true, blurhash: true, mimeType: true },
+      }),
+      prisma.post.count({ where: filteredWhere }),
+    ]);
+
+    return NextResponse.json({
+      posts,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+      ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+    });
+  }
 
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({

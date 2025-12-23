@@ -3,23 +3,27 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { TagCategory } from "@/generated/prisma/enums";
+import { isMetaTag } from "@/lib/meta-tags-shared";
 
 type SearchMode = "tags" | "notes";
 
 interface TagSuggestion {
   id: number;
   name: string;
-  category: TagCategory;
-  count: number;
-  remainingCount: number;
+  category: TagCategory | "META";
+  count: number | null;
+  remainingCount: number | null;
+  isMeta?: boolean;
+  description?: string;
 }
 
-const CATEGORY_COLORS: Record<TagCategory, string> = {
+const CATEGORY_COLORS: Record<TagCategory | "VIRTUAL_META", string> = {
   [TagCategory.ARTIST]: "text-red-400",
   [TagCategory.COPYRIGHT]: "text-purple-400",
   [TagCategory.CHARACTER]: "text-green-400",
   [TagCategory.GENERAL]: "text-blue-400",
   [TagCategory.META]: "text-orange-400",
+  VIRTUAL_META: "text-cyan-400", // Virtual meta tags (video, portrait, etc.)
 };
 
 /**
@@ -124,7 +128,7 @@ export function SearchBar({
 
       // Filter out omnipresent tags when there are selected tags (they don't help narrow down)
       const filtered = selectedTags.length > 0
-        ? data.tags.filter((t: TagSuggestion) => t.remainingCount > 0)
+        ? data.tags.filter((t: TagSuggestion) => t.remainingCount === null || t.remainingCount > 0)
         : data.tags;
 
       setSuggestions(filtered);
@@ -190,11 +194,18 @@ export function SearchBar({
 
   // Sort and filter suggestions based on mode
   // In exclude mode: show count (posts to remove), filter out omnipresent tags, sort by most impactful
+  // Filter out meta tags with 0 count (no matches with current filters)
   const displaySuggestions = isExcludeMode
     ? suggestions
-        .filter((s) => s.remainingCount > 0) // Hide omnipresent tags (would leave 0 posts)
-        .sort((a, b) => b.count - a.count) // Sort by posts to remove (most impactful first)
-    : suggestions;
+        .filter((s) => s.remainingCount === null || s.remainingCount > 0) // Hide omnipresent tags (would leave 0 posts)
+        .filter((s) => !s.isMeta || (s.count ?? 0) > 0) // Hide meta tags with 0 count
+        .sort((a, b) => {
+          // Meta tags last, then sort by count
+          if (a.isMeta && !b.isMeta) return 1;
+          if (!a.isMeta && b.isMeta) return -1;
+          return (b.count ?? 0) - (a.count ?? 0);
+        })
+    : suggestions.filter((s) => !s.isMeta || (s.count ?? 0) > 0);
 
   // Close suggestions on click outside
   useEffect(() => {
@@ -409,11 +420,14 @@ export function SearchBar({
           const negated = isNegatedTag(tag);
           const wildcard = isWildcardTag(tag);
           const displayName = getBaseTagName(tag);
+          const isMeta = isMetaTag(displayName);
 
           // Determine tag chip styling
           let chipClass = "bg-zinc-700";
           if (negated) {
             chipClass = "bg-red-900/50 text-red-300 border border-red-700";
+          } else if (isMeta) {
+            chipClass = "bg-cyan-900/50 text-cyan-300 border border-cyan-700";
           } else if (wildcard) {
             chipClass = "bg-purple-900/50 text-purple-300 border border-purple-700";
           }
@@ -430,6 +444,7 @@ export function SearchBar({
                 title={searchMode === "tags" ? (negated ? "Click to include" : "Click to exclude") : "Tag filter"}
               >
                 {negated && <span className="text-red-400 font-bold">-</span>}
+                {isMeta && !negated && <span className="text-cyan-500 text-xs mr-1">⚙</span>}
                 <span className={negated ? "line-through opacity-80" : ""}>
                   {displayName}
                   {wildcard && <span className="text-purple-400 ml-0.5">✱</span>}
@@ -508,12 +523,20 @@ export function SearchBar({
                 onClick={() => addTag(suggestion.name, isExcludeMode)}
                 className="flex-1 text-left"
               >
-                <span className={CATEGORY_COLORS[suggestion.category]}>
+                {suggestion.isMeta && (
+                  <span className="text-cyan-600 text-xs mr-1.5 font-medium">system:</span>
+                )}
+                <span className={CATEGORY_COLORS[suggestion.isMeta ? "VIRTUAL_META" : suggestion.category]}>
                   {suggestion.name.replace(/_/g, " ")}
                 </span>
+                {suggestion.isMeta && suggestion.description && (
+                  <span className="text-zinc-500 text-xs ml-2">
+                    {suggestion.description}
+                  </span>
+                )}
               </button>
               <span className={`text-xs ${isExcludeMode ? "text-red-400" : "text-zinc-500"}`}>
-                {isExcludeMode ? `-${suggestion.count}` : suggestion.count}
+                {isExcludeMode ? `-${suggestion.count ?? 0}` : (suggestion.count ?? 0)}
               </span>
             </div>
           ))}
