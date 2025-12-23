@@ -26,8 +26,12 @@ import {
   getOrientationSqlCondition,
 } from "@/lib/meta-tags";
 
-/** Number of results per page for paginated searches */
-const POSTS_PER_PAGE = 48;
+/** Default number of results per page */
+const DEFAULT_LIMIT = 48;
+/** Maximum allowed results per page */
+const MAX_LIMIT = 100;
+/** Maximum page number to prevent expensive offset queries */
+const MAX_PAGE = 10000;
 
 /**
  * Minimal post data returned in search results.
@@ -79,6 +83,14 @@ export interface TagSearchResult extends BaseSearchResult {
 /** Result of searching notes by content */
 export interface NoteSearchResult extends BaseSearchResult {
   notes: NoteResult[];
+}
+
+/** Options for post search */
+export interface SearchPostsOptions {
+  /** Results per page (default 48, max 100) */
+  limit?: number;
+  /** Search query for note content (min 2 chars, uses fulltext search) */
+  notesQuery?: string;
 }
 
 /**
@@ -147,7 +159,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
     return { notes: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
   }
 
-  const skip = (page - 1) * POSTS_PER_PAGE;
+  const skip = (page - 1) * DEFAULT_LIMIT;
   const startTime = performance.now();
   const postHidingCondition = getPostHidingSqlCondition('p.id');
 
@@ -232,7 +244,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           SELECT *, COUNT(*) OVER() AS total_count
           FROM deduplicated
           ORDER BY rank DESC, imported_at DESC
-          LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
+          LIMIT ${DEFAULT_LIMIT} OFFSET ${skip}
         )
       SELECT
         id,
@@ -262,7 +274,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         post: n.post as PostResult,
       })),
       totalCount,
-      totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
+      totalPages: Math.ceil(totalCount / DEFAULT_LIMIT),
       queryTimeMs: performance.now() - startTime,
     };
   } catch (err) {
@@ -284,11 +296,27 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
  * Excluded tags filter out any posts containing them.
  *
  * @param tags - Array of tag names, optionally prefixed with `-` for negation
- * @param page - Page number (1-indexed)
+ * @param page - Page number (1-indexed, max 10000)
+ * @param options - Optional search configuration
  * @returns Paginated posts with resolved wildcard information
  */
-export async function searchPosts(tags: string[], page: number): Promise<TagSearchResult> {
-  const skip = (page - 1) * POSTS_PER_PAGE;
+export async function searchPosts(
+  tags: string[],
+  page: number,
+  options?: SearchPostsOptions
+): Promise<TagSearchResult> {
+  // Validate and apply limits
+  const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
+  const validatedPage = Math.min(Math.max(1, page), MAX_PAGE);
+  const skip = (validatedPage - 1) * limit;
+
+  // Early return if page exceeds maximum
+  if (page > MAX_PAGE) {
+    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
+  }
+
+  const notesQuery = options?.notesQuery?.trim() ?? "";
+  const hasNotesFilter = notesQuery.length >= 2;
 
   // First, separate meta tags from regular tags
   const { metaTags, regularTags: separatedRegular } = separateMetaTags(tags);
@@ -306,9 +334,9 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
   const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
   const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
 
-  // Check if we have any search criteria (tags or meta tags)
+  // Check if we have any search criteria (tags, meta tags, or notes)
   const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
-  if (includeTags.length === 0 && excludeTags.length === 0 && !hasMetaTags) {
+  if (includeTags.length === 0 && excludeTags.length === 0 && !hasMetaTags && !hasNotesFilter) {
     return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
   }
 
@@ -398,6 +426,34 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
     }
   }
 
+  // Add notes filter condition (fulltext search)
+  if (hasNotesFilter) {
+    const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
+      SELECT DISTINCT "postId"
+      FROM "Note"
+      WHERE to_tsvector('simple', content) @@ websearch_to_tsquery('simple', ${notesQuery})
+         OR to_tsvector('simple', name) @@ websearch_to_tsquery('simple', ${notesQuery})
+    `;
+    const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
+
+    // If no notes match, return empty results early
+    if (noteMatchingPostIds.length === 0) {
+      return {
+        posts: [],
+        totalCount: 0,
+        totalPages: 0,
+        queryTimeMs: 0,
+        resolvedWildcards,
+      };
+    }
+
+    conditions.push({
+      id: {
+        in: noteMatchingPostIds,
+      },
+    });
+  }
+
   // Check for orientation meta tags that require raw SQL
   const orientationInclude = metaTags.include.filter(requiresRawSql);
   const orientationExclude = metaTags.exclude.filter(requiresRawSql);
@@ -431,11 +487,11 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
 
   // If orientation tags are present, use optimized raw SQL query
   if (orientationSqlCondition) {
-    // For orientation-only queries (no tag filters), use simple raw SQL
-    const hasTagFilters = regular.include.length > 0 || regular.exclude.length > 0 ||
-                          includeWildcardIds.length > 0 || excludeWildcardIds.length > 0;
+    // Check if there are other filters besides orientation (tags, meta tags, notes, etc.)
+    // The conditions array already includes non-orientation meta tags and notes filters
+    const hasOtherFilters = conditions.length > 0;
 
-    if (!hasTagFilters) {
+    if (!hasOtherFilters) {
       // Simple orientation query - very efficient with proper indexing
       const postHidingCondition = getPostHidingSqlCondition('p.id');
 
@@ -446,7 +502,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
           WHERE ${orientationSqlCondition}
             AND ${postHidingCondition}
           ORDER BY p."importedAt" DESC
-          LIMIT ${POSTS_PER_PAGE} OFFSET ${skip}
+          LIMIT ${limit} OFFSET ${skip}
         `,
         prisma.$queryRaw<[{ count: bigint }]>`
           SELECT COUNT(*)::bigint as count
@@ -458,7 +514,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
 
       return {
         posts,
-        totalPages: Math.ceil(Number(countResult[0]?.count ?? 0) / POSTS_PER_PAGE),
+        totalPages: Math.ceil(Number(countResult[0]?.count ?? 0) / limit),
         totalCount: Number(countResult[0]?.count ?? 0),
         queryTimeMs: performance.now() - startTime,
         resolvedWildcards,
@@ -500,7 +556,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
         where: filteredWhere,
         orderBy: { importedAt: "desc" },
         skip,
-        take: POSTS_PER_PAGE,
+        take: limit,
         select: { id: true, hash: true, width: true, height: true, blurhash: true, mimeType: true },
       }),
       prisma.post.count({ where: filteredWhere }),
@@ -508,7 +564,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
 
     return {
       posts: filteredPosts,
-      totalPages: Math.ceil(filteredCount / POSTS_PER_PAGE),
+      totalPages: Math.ceil(filteredCount / limit),
       totalCount: filteredCount,
       queryTimeMs: performance.now() - startTime,
       resolvedWildcards,
@@ -521,7 +577,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
       where,
       orderBy: { importedAt: "desc" },
       skip,
-      take: POSTS_PER_PAGE,
+      take: limit,
       select: { id: true, hash: true, width: true, height: true, blurhash: true, mimeType: true },
     }),
     prisma.post.count({ where }),
@@ -529,7 +585,7 @@ export async function searchPosts(tags: string[], page: number): Promise<TagSear
 
   return {
     posts,
-    totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
+    totalPages: Math.ceil(totalCount / limit),
     totalCount,
     queryTimeMs: performance.now() - startTime,
     resolvedWildcards,
