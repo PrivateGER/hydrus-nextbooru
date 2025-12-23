@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
-import { createMockHydrusServer, createMockHydrusState, addFilesToState, type MockHydrusState } from '@/test/mocks/hydrus-server';
+import { createMockHydrusServer, createMockHydrusState, addFilesToState, removeFilesFromState, type MockHydrusState } from '@/test/mocks/hydrus-server';
 import { createMockFileMetadata, createMockFileWithTags, createMockFileWithUrls } from '@/test/mocks/fixtures/hydrus-metadata';
 import { invalidateAllCaches } from '@/lib/cache';
 import { clearPatternCache } from '@/lib/tag-blacklist';
@@ -344,6 +344,129 @@ describe('syncFromHydrus (Integration)', () => {
 
       expect(sharedTag?.postCount).toBe(3);
       expect(uniqueTag?.postCount).toBe(1);
+    });
+  });
+
+  describe('deletion cleanup', () => {
+    it('should delete posts removed from Hydrus', async () => {
+      const prisma = getTestPrisma();
+
+      // First sync: add 3 files
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
+        createMockFileMetadata({ file_id: 3, hash: 'c'.repeat(64) }),
+      ]);
+      await syncFromHydrus();
+
+      expect(await prisma.post.count()).toBe(3);
+
+      // Remove file 2 from Hydrus state
+      removeFilesFromState(hydrusState, [2]);
+
+      // Re-sync
+      const result = await syncFromHydrus();
+
+      expect(await prisma.post.count()).toBe(2);
+      expect(await prisma.post.findUnique({ where: { hash: 'b'.repeat(64) } })).toBeNull();
+      expect(result.deletedPosts).toBe(1);
+    });
+
+    it('should delete orphaned tags after post deletion', async () => {
+      const prisma = getTestPrisma();
+
+      // Sync: file with unique tag
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['shared_tag'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileWithTags(['shared_tag', 'unique_tag'], { file_id: 2, hash: 'b'.repeat(64) }),
+      ]);
+      await syncFromHydrus();
+
+      expect(await prisma.tag.findFirst({ where: { name: 'unique_tag' } })).not.toBeNull();
+
+      // Remove file 2 (which has unique_tag)
+      removeFilesFromState(hydrusState, [2]);
+
+      // Re-sync
+      const result = await syncFromHydrus();
+
+      // unique_tag should be deleted
+      expect(await prisma.tag.findFirst({ where: { name: 'unique_tag' } })).toBeNull();
+      // shared_tag should remain
+      expect(await prisma.tag.findFirst({ where: { name: 'shared_tag' } })).not.toBeNull();
+      expect(result.deletedTags).toBe(1);
+    });
+
+    it('should delete orphaned groups after post deletion', async () => {
+      const prisma = getTestPrisma();
+
+      // Sync: two files in same pixiv group, one in unique group
+      addFilesToState(hydrusState, [
+        createMockFileWithUrls(['https://www.pixiv.net/en/artworks/111'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileWithUrls(['https://www.pixiv.net/en/artworks/111'], { file_id: 2, hash: 'b'.repeat(64) }),
+        createMockFileWithUrls(['https://www.pixiv.net/en/artworks/222'], { file_id: 3, hash: 'c'.repeat(64) }),
+      ]);
+      await syncFromHydrus();
+
+      expect(await prisma.group.count()).toBe(2);
+
+      // Remove file 3 (only member of group 222)
+      removeFilesFromState(hydrusState, [3]);
+
+      const result = await syncFromHydrus();
+
+      // Group 222 should be deleted, 111 should remain
+      expect(await prisma.group.count()).toBe(1);
+      expect(await prisma.group.findFirst({ where: { sourceId: '222' } })).toBeNull();
+      expect(result.deletedGroups).toBe(1);
+    });
+
+    it('should handle empty Hydrus library (delete all posts)', async () => {
+      const prisma = getTestPrisma();
+
+      // First sync with files
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['tag1'], { file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+      await syncFromHydrus();
+      expect(await prisma.post.count()).toBe(1);
+      expect(await prisma.tag.count()).toBeGreaterThan(0);
+
+      // Clear all files from Hydrus
+      removeFilesFromState(hydrusState, [1]);
+
+      const result = await syncFromHydrus();
+
+      expect(await prisma.post.count()).toBe(0);
+      expect(await prisma.tag.count()).toBe(0);
+      expect(result.deletedPosts).toBe(1);
+    });
+
+    it('should report deletion counts in progress callback', async () => {
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['unique_tag'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
+      ]);
+      await syncFromHydrus();
+
+      // Remove one file
+      removeFilesFromState(hydrusState, [1]);
+
+      let cleanupProgress: { deletedPosts?: number; deletedTags?: number } | null = null;
+      await syncFromHydrus({
+        onProgress: (progress) => {
+          if (progress.phase === 'cleanup' || progress.phase === 'complete') {
+            cleanupProgress = {
+              deletedPosts: progress.deletedPosts,
+              deletedTags: progress.deletedTags,
+            };
+          }
+        },
+      });
+
+      expect(cleanupProgress).not.toBeNull();
+      expect(cleanupProgress!.deletedPosts).toBe(1);
+      expect(cleanupProgress!.deletedTags).toBe(1); // unique_tag was orphaned
     });
   });
 });

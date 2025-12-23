@@ -23,12 +23,15 @@ interface BatchLookups {
 }
 
 export interface SyncProgress {
-  phase: "searching" | "fetching" | "processing" | "complete" | "error";
+  phase: "searching" | "fetching" | "processing" | "cleanup" | "complete" | "error";
   totalFiles: number;
   processedFiles: number;
   currentBatch: number;
   totalBatches: number;
   errors: string[];
+  deletedPosts?: number;
+  deletedTags?: number;
+  deletedGroups?: number;
 }
 
 export interface SyncOptions {
@@ -454,6 +457,83 @@ async function processFileSafe(
 }
 
 // =============================================================================
+// CLEANUP FUNCTIONS
+// =============================================================================
+
+const DELETION_BATCH_SIZE = 1000;
+
+/**
+ * Delete posts that no longer exist in Hydrus.
+ * Compares Hydrus search results with database posts.
+ * Returns the count of deleted posts.
+ */
+async function deleteRemovedPosts(hydrusHashes: Set<string>): Promise<number> {
+  // Get all post hashes from database
+  const dbPosts = await prisma.post.findMany({
+    select: { hash: true },
+  });
+
+  // Find posts that exist in DB but not in Hydrus
+  const hashesToDelete = dbPosts
+    .filter(post => !hydrusHashes.has(post.hash))
+    .map(post => post.hash);
+
+  if (hashesToDelete.length === 0) {
+    return 0;
+  }
+
+  // Delete in batches to avoid query size limits
+  let totalDeleted = 0;
+  for (let i = 0; i < hashesToDelete.length; i += DELETION_BATCH_SIZE) {
+    const batch = hashesToDelete.slice(i, i + DELETION_BATCH_SIZE);
+    const result = await prisma.post.deleteMany({
+      where: { hash: { in: batch } },
+    });
+    totalDeleted += result.count;
+  }
+
+  syncLog.info({ deletedCount: totalDeleted }, 'Deleted posts removed from Hydrus');
+  return totalDeleted;
+}
+
+/**
+ * Delete tags that have no associated posts.
+ * Should be called after post deletion.
+ */
+async function deleteOrphanedTags(): Promise<number> {
+  const result = await prisma.tag.deleteMany({
+    where: {
+      posts: {
+        none: {},
+      },
+    },
+  });
+
+  if (result.count > 0) {
+    syncLog.info({ deletedCount: result.count }, 'Deleted orphaned tags');
+  }
+  return result.count;
+}
+
+/**
+ * Delete groups that have no associated posts.
+ */
+async function deleteOrphanedGroups(): Promise<number> {
+  const result = await prisma.group.deleteMany({
+    where: {
+      posts: {
+        none: {},
+      },
+    },
+  });
+
+  if (result.count > 0) {
+    syncLog.info({ deletedCount: result.count }, 'Deleted orphaned groups');
+  }
+  return result.count;
+}
+
+// =============================================================================
 // MAIN SYNC FUNCTION
 // =============================================================================
 
@@ -497,6 +577,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     });
 
     const fileIds = searchResult.file_ids;
+    const hydrusHashes = new Set(searchResult.hashes || []);
     progress.totalFiles = fileIds.length;
     progress.totalBatches = Math.ceil(fileIds.length / BATCH_SIZE);
     syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
@@ -504,13 +585,6 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     // Update with total count
     await updateSyncState({ status: "running", totalFiles: progress.totalFiles, totalBatches: progress.totalBatches });
-
-    if (fileIds.length === 0) {
-      progress.phase = "complete";
-      await updateSyncState({ status: "completed", count: 0 });
-      onProgress(progress);
-      return progress;
-    }
 
     // Process files in batches with two-phase approach (pre-populate tags/groups, then process)
     progress.phase = "fetching";
@@ -554,6 +628,31 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       }
     }
 
+    // Check for cancellation before cleanup
+    if (await isSyncCancelled()) {
+      progress.phase = "complete";
+      onProgress(progress);
+      return progress;
+    }
+
+    // Cleanup phase: only run for full syncs (system:everything)
+    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
+    if (isFullSync) {
+      progress.phase = "cleanup";
+      onProgress(progress);
+
+      try {
+        progress.deletedPosts = await deleteRemovedPosts(hydrusHashes);
+        progress.deletedTags = await deleteOrphanedTags();
+        progress.deletedGroups = await deleteOrphanedGroups();
+      } catch (err) {
+        const errorMsg = `Cleanup error: ${err instanceof Error ? err.message : String(err)}`;
+        progress.errors.push(errorMsg);
+        syncLog.error({ error: err instanceof Error ? err.message : String(err) }, 'Error during cleanup phase');
+        // Continue with sync completion even if cleanup fails
+      }
+    }
+
     progress.phase = "complete";
 
     await updateTotalPostCount();
@@ -570,7 +669,14 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     });
 
     const durationMs = Date.now() - startTime;
-    syncLog.info({ processedFiles: progress.processedFiles, errors: progress.errors.length, durationMs }, 'Sync completed');
+    syncLog.info({
+      processedFiles: progress.processedFiles,
+      deletedPosts: progress.deletedPosts ?? 0,
+      deletedTags: progress.deletedTags ?? 0,
+      deletedGroups: progress.deletedGroups ?? 0,
+      errors: progress.errors.length,
+      durationMs,
+    }, 'Sync completed');
     onProgress(progress);
 
     return progress;
