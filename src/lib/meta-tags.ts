@@ -32,6 +32,12 @@ export interface MetaTagDefinition {
    * Check requiresRawSql() before calling this.
    */
   getCondition?: () => Prisma.PostWhereInput;
+  /**
+   * Returns raw SQL condition for this meta tag.
+   * All meta tags must implement this for use in raw SQL queries.
+   * @param negated - Whether to negate the condition
+   */
+  getSqlCondition: (negated?: boolean) => Prisma.Sql;
 }
 
 /**
@@ -49,6 +55,9 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     getCondition: () => ({
       mimeType: { startsWith: "video/" },
     }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`("mimeType" IS NULL OR "mimeType" NOT LIKE 'video/%')`
+      : Prisma.sql`"mimeType" LIKE 'video/%'`,
   },
   {
     name: "animated",
@@ -57,6 +66,9 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     getCondition: () => ({
       mimeType: { in: ["image/gif", "image/apng"] },
     }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`("mimeType" IS NULL OR "mimeType" NOT IN ('image/gif', 'image/apng'))`
+      : Prisma.sql`"mimeType" IN ('image/gif', 'image/apng')`,
   },
 
   // Orientation tags use the computed orientation column
@@ -65,18 +77,27 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     description: "Taller than wide",
     category: "orientation",
     getCondition: () => ({ orientation: Orientation.portrait }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`("orientation" IS NULL OR "orientation" != 'portrait')`
+      : Prisma.sql`"orientation" = 'portrait'`,
   },
   {
     name: "landscape",
     description: "Wider than tall",
     category: "orientation",
     getCondition: () => ({ orientation: Orientation.landscape }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`("orientation" IS NULL OR "orientation" != 'landscape')`
+      : Prisma.sql`"orientation" = 'landscape'`,
   },
   {
     name: "square",
     description: "Equal width and height",
     category: "orientation",
     getCondition: () => ({ orientation: Orientation.square }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`("orientation" IS NULL OR "orientation" != 'square')`
+      : Prisma.sql`"orientation" = 'square'`,
   },
 
   // Resolution
@@ -87,6 +108,9 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     getCondition: () => ({
       OR: [{ width: { gte: 1920 } }, { height: { gte: 1920 } }],
     }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`NOT ("width" >= 1920 OR "height" >= 1920)`
+      : Prisma.sql`("width" >= 1920 OR "height" >= 1920)`,
   },
   {
     name: "lowres",
@@ -100,6 +124,9 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
         { height: { lte: 500 } },
       ],
     }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`NOT ("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`
+      : Prisma.sql`("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`,
   },
 ];
 
@@ -130,6 +157,23 @@ export function getMetaTagDefinition(
   tagName: string
 ): MetaTagDefinition | undefined {
   return META_TAGS_BY_NAME.get(tagName.toLowerCase());
+}
+
+/**
+ * Get raw SQL condition for a meta tag.
+ * Convenience function that looks up the tag and calls getSqlCondition().
+ *
+ * @param tagName - Tag name (case-insensitive)
+ * @param negated - Whether to negate the condition (default: false)
+ * @returns Prisma.Sql fragment for the condition, or null if not a meta tag
+ */
+export function getMetaTagSqlCondition(
+  tagName: string,
+  negated: boolean = false
+): Prisma.Sql | null {
+  const def = getMetaTagDefinition(tagName);
+  if (!def) return null;
+  return def.getSqlCondition(negated);
 }
 
 /**

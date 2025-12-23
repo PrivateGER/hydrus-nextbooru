@@ -14,9 +14,7 @@ import {
   getAllMetaTags,
   getMetaTagCounts,
   separateMetaTags,
-  getMetaTagDefinition,
-  requiresRawSql,
-  getOrientationSqlCondition,
+  getMetaTagSqlCondition,
 } from "@/lib/meta-tags";
 
 /**
@@ -186,11 +184,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Check if we only have meta tags selected (no regular tags)
-  const hasRegularTags = regularIncludeTags.length > 0 || wildcardIncludePatterns.length > 0 ||
-                         regularExcludeTags.length > 0 || wildcardExcludePatterns.length > 0;
-  const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
-
   // Step 1: Resolve wildcards to tag IDs (in parallel for performance)
   const [resolvedIncludes, resolvedExcludes] = await Promise.all([
     Promise.all(wildcardIncludePatterns.map(pattern => resolveWildcardPattern(pattern, "tags-api"))),
@@ -286,61 +279,17 @@ export async function GET(request: NextRequest) {
   const hasSearchQuery = query.length > 0;
   const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
 
-  // Build meta tag SQL conditions
+  // Build meta tag SQL conditions using centralized getSqlCondition()
   const metaConditions: Prisma.Sql[] = [];
 
-  // Include meta tags
   for (const metaName of metaTags.include) {
-    if (requiresRawSql(metaName)) {
-      metaConditions.push(getOrientationSqlCondition(metaName, false));
-    } else {
-      const def = getMetaTagDefinition(metaName);
-      if (def?.getCondition) {
-        const condition = def.getCondition();
-        // Convert Prisma condition to SQL - handle common cases
-        if ("mimeType" in condition) {
-          const mimeType = condition.mimeType as { startsWith?: string; in?: string[] };
-          if (mimeType.startsWith) {
-            metaConditions.push(Prisma.sql`"mimeType" LIKE ${mimeType.startsWith + "%"}`);
-          } else if (mimeType.in) {
-            metaConditions.push(Prisma.sql`"mimeType" = ANY(${mimeType.in}::text[])`);
-          }
-        } else if ("OR" in condition) {
-          // highres: OR [{ width: { gte: 1920 } }, { height: { gte: 1920 } }]
-          metaConditions.push(Prisma.sql`("width" >= 1920 OR "height" >= 1920)`);
-        } else if ("AND" in condition) {
-          // lowres: AND [width not null, height not null, width <= 500, height <= 500]
-          metaConditions.push(Prisma.sql`("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`);
-        }
-      }
-    }
+    const condition = getMetaTagSqlCondition(metaName, false);
+    if (condition) metaConditions.push(condition);
   }
 
-  // Exclude meta tags
   for (const metaName of metaTags.exclude) {
-    if (requiresRawSql(metaName)) {
-      metaConditions.push(getOrientationSqlCondition(metaName, true));
-    } else {
-      const def = getMetaTagDefinition(metaName);
-      if (def?.getCondition) {
-        const condition = def.getCondition();
-        // Convert Prisma condition to SQL with negation
-        if ("mimeType" in condition) {
-          const mimeType = condition.mimeType as { startsWith?: string; in?: string[] };
-          if (mimeType.startsWith) {
-            metaConditions.push(Prisma.sql`("mimeType" IS NULL OR "mimeType" NOT LIKE ${mimeType.startsWith + "%"})`);
-          } else if (mimeType.in) {
-            metaConditions.push(Prisma.sql`("mimeType" IS NULL OR "mimeType" != ALL(${mimeType.in}::text[]))`);
-          }
-        } else if ("OR" in condition) {
-          // NOT highres
-          metaConditions.push(Prisma.sql`NOT ("width" >= 1920 OR "height" >= 1920)`);
-        } else if ("AND" in condition) {
-          // NOT lowres
-          metaConditions.push(Prisma.sql`NOT ("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`);
-        }
-      }
-    }
+    const condition = getMetaTagSqlCondition(metaName, true);
+    if (condition) metaConditions.push(condition);
   }
 
   // Build INTERSECT subqueries for each included tag group using Prisma.sql
