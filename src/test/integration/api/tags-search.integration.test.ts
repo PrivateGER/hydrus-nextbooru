@@ -1231,4 +1231,125 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(data.tags.length).toBeGreaterThan(0);
     });
   });
+
+  describe('selected meta tags', () => {
+    it('should filter by meta tag as first/only selected tag', async () => {
+      const prisma = getTestPrisma();
+      // Create video posts with specific tags
+      await createPostWithTags(prisma, ['action', 'anime'], { mimeType: 'video/mp4' });
+      await createPostWithTags(prisma, ['action', 'cartoon'], { mimeType: 'video/webm' });
+      // Create image posts with different tags
+      await createPostWithTags(prisma, ['still', 'anime'], { mimeType: 'image/png' });
+
+      // Select only the "video" meta tag - use query to avoid omnipresent filtering
+      const request = new NextRequest('http://localhost/api/tags/search?q=a&selected=video');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      const regularTags = filterRegularTags(data.tags);
+
+      // Should only find tags from video posts that contain 'a'
+      const tagNames = regularTags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('action'); // appears in 2 video posts
+      expect(tagNames).toContain('anime'); // appears in 1 video post
+      expect(tagNames).toContain('cartoon'); // appears in 1 video post
+      expect(tagNames).not.toContain('still'); // only in image post
+    });
+
+    it('should return correct co-occurrence counts with meta tag selected', async () => {
+      const prisma = getTestPrisma();
+      // Create 2 highres posts with different tags
+      await createPostWithTags(prisma, ['nature', 'mountains'], { width: 1920, height: 1080 });
+      await createPostWithTags(prisma, ['nature', 'ocean'], { width: 2560, height: 1440 });
+      // Create 1 lowres post
+      await createPostWithTags(prisma, ['nature', 'city'], { width: 400, height: 300 });
+
+      // Select the "highres" meta tag with a search query
+      const request = new NextRequest('http://localhost/api/tags/search?q=n&selected=highres');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      const regularTags = filterRegularTags(data.tags);
+
+      // "nature" appears in both highres posts - count should be 2
+      const natureTag = regularTags.find((t: { name: string }) => t.name === 'nature');
+      expect(natureTag).toBeDefined();
+      expect(natureTag.count).toBe(2);
+
+      // "mountains" and "ocean" should each have count 1
+      const mountainsTag = regularTags.find((t: { name: string }) => t.name === 'mountains');
+      const oceanTag = regularTags.find((t: { name: string }) => t.name === 'ocean');
+      expect(mountainsTag?.count).toBe(1);
+      expect(oceanTag?.count).toBe(1);
+
+      // "city" only appears in lowres post, so shouldn't be in results
+      const cityTag = regularTags.find((t: { name: string }) => t.name === 'city');
+      expect(cityTag).toBeUndefined();
+    });
+
+    it('should combine meta tag with regular tag filters', async () => {
+      const prisma = getTestPrisma();
+      // Create posts with various combinations
+      await createPostWithTags(prisma, ['anime', 'action', 'fight'], { mimeType: 'video/mp4' });
+      await createPostWithTags(prisma, ['anime', 'comedy'], { mimeType: 'image/png' });
+      await createPostWithTags(prisma, ['cartoon', 'action'], { mimeType: 'video/mp4' });
+
+      // Select both "video" meta tag and "anime" regular tag with a search query
+      const request = new NextRequest('http://localhost/api/tags/search?q=a&selected=video,anime');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      const regularTags = filterRegularTags(data.tags);
+
+      // Only tags from the video+anime post that contain 'a' should appear
+      const tagNames = regularTags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('action'); // appears in anime+video post
+      expect(tagNames).not.toContain('comedy'); // anime but not video
+      expect(tagNames).not.toContain('cartoon'); // video but not anime
+    });
+
+    it('should handle negated meta tags', async () => {
+      const prisma = getTestPrisma();
+      // Create video and image posts
+      await createPostWithTags(prisma, ['video_only_tag'], { mimeType: 'video/mp4' });
+      await createPostWithTags(prisma, ['image_only_tag'], { mimeType: 'image/png' });
+      await createPostWithTags(prisma, ['shared_tag'], { mimeType: 'video/mp4' });
+      await createPostWithTags(prisma, ['shared_tag'], { mimeType: 'image/jpeg' });
+
+      // Select -video to exclude video posts
+      const request = new NextRequest('http://localhost/api/tags/search?q=&selected=-video');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      const regularTags = filterRegularTags(data.tags);
+
+      // Should only find tags from non-video posts
+      const tagNames = regularTags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('image_only_tag');
+      expect(tagNames).not.toContain('video_only_tag');
+    });
+
+    it('should filter by orientation meta tag (portrait)', async () => {
+      const prisma = getTestPrisma();
+      // Create portrait (height > width) and landscape posts
+      await createPostWithTags(prisma, ['portrait_art', 'art'], { width: 800, height: 1200 });
+      await createPostWithTags(prisma, ['landscape_art', 'art'], { width: 1200, height: 800 });
+
+      // Select "portrait" meta tag with search query
+      const request = new NextRequest('http://localhost/api/tags/search?q=art&selected=portrait');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      const regularTags = filterRegularTags(data.tags);
+
+      const tagNames = regularTags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('portrait_art');
+      expect(tagNames).not.toContain('landscape_art');
+    });
+  });
 });

@@ -9,7 +9,15 @@ import {
   parseTagsParamWithNegation,
   resolveWildcardPattern,
 } from "@/lib/wildcard";
-import { searchMetaTags, getAllMetaTags, getMetaTagCounts } from "@/lib/meta-tags";
+import {
+  searchMetaTags,
+  getAllMetaTags,
+  getMetaTagCounts,
+  separateMetaTags,
+  getMetaTagDefinition,
+  requiresRawSql,
+  getOrientationSqlCondition,
+} from "@/lib/meta-tags";
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -141,13 +149,20 @@ export async function GET(request: NextRequest) {
 
   // Progressive filtering: find tags that co-occur with all selected tags (and not excluded tags)
 
-  // Separate wildcards from regular tags
+  // Separate meta tags from regular tags first
+  const allSelectedWithNegation = [
+    ...selectedTags,
+    ...excludeTags.map(t => `-${t}`),
+  ];
+  const { metaTags, regularTags } = separateMetaTags(allSelectedWithNegation);
+
+  // Separate wildcards from regular tags (only for non-meta tags)
   const regularIncludeTags: string[] = [];
   const wildcardIncludePatterns: string[] = [];
   const regularExcludeTags: string[] = [];
   const wildcardExcludePatterns: string[] = [];
 
-  for (const tag of selectedTags) {
+  for (const tag of regularTags.include) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(tag);
       if (!validation.valid) {
@@ -159,7 +174,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  for (const tag of excludeTags) {
+  for (const tag of regularTags.exclude) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(`-${tag}`);
       if (!validation.valid) {
@@ -170,6 +185,11 @@ export async function GET(request: NextRequest) {
       regularExcludeTags.push(tag);
     }
   }
+
+  // Check if we only have meta tags selected (no regular tags)
+  const hasRegularTags = regularIncludeTags.length > 0 || wildcardIncludePatterns.length > 0 ||
+                         regularExcludeTags.length > 0 || wildcardExcludePatterns.length > 0;
+  const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
 
   // Step 1: Resolve wildcards to tag IDs (in parallel for performance)
   const [resolvedIncludes, resolvedExcludes] = await Promise.all([
@@ -266,6 +286,63 @@ export async function GET(request: NextRequest) {
   const hasSearchQuery = query.length > 0;
   const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
 
+  // Build meta tag SQL conditions
+  const metaConditions: Prisma.Sql[] = [];
+
+  // Include meta tags
+  for (const metaName of metaTags.include) {
+    if (requiresRawSql(metaName)) {
+      metaConditions.push(getOrientationSqlCondition(metaName, false));
+    } else {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        const condition = def.getCondition();
+        // Convert Prisma condition to SQL - handle common cases
+        if ("mimeType" in condition) {
+          const mimeType = condition.mimeType as { startsWith?: string; in?: string[] };
+          if (mimeType.startsWith) {
+            metaConditions.push(Prisma.sql`"mimeType" LIKE ${mimeType.startsWith + "%"}`);
+          } else if (mimeType.in) {
+            metaConditions.push(Prisma.sql`"mimeType" = ANY(${mimeType.in}::text[])`);
+          }
+        } else if ("OR" in condition) {
+          // highres: OR [{ width: { gte: 1920 } }, { height: { gte: 1920 } }]
+          metaConditions.push(Prisma.sql`("width" >= 1920 OR "height" >= 1920)`);
+        } else if ("AND" in condition) {
+          // lowres: AND [width not null, height not null, width <= 500, height <= 500]
+          metaConditions.push(Prisma.sql`("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`);
+        }
+      }
+    }
+  }
+
+  // Exclude meta tags
+  for (const metaName of metaTags.exclude) {
+    if (requiresRawSql(metaName)) {
+      metaConditions.push(getOrientationSqlCondition(metaName, true));
+    } else {
+      const def = getMetaTagDefinition(metaName);
+      if (def?.getCondition) {
+        const condition = def.getCondition();
+        // Convert Prisma condition to SQL with negation
+        if ("mimeType" in condition) {
+          const mimeType = condition.mimeType as { startsWith?: string; in?: string[] };
+          if (mimeType.startsWith) {
+            metaConditions.push(Prisma.sql`("mimeType" IS NULL OR "mimeType" NOT LIKE ${mimeType.startsWith + "%"})`);
+          } else if (mimeType.in) {
+            metaConditions.push(Prisma.sql`("mimeType" IS NULL OR "mimeType" != ALL(${mimeType.in}::text[]))`);
+          }
+        } else if ("OR" in condition) {
+          // NOT highres
+          metaConditions.push(Prisma.sql`NOT ("width" >= 1920 OR "height" >= 1920)`);
+        } else if ("AND" in condition) {
+          // NOT lowres
+          metaConditions.push(Prisma.sql`NOT ("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`);
+        }
+      }
+    }
+  }
+
   // Build INTERSECT subqueries for each included tag group using Prisma.sql
   const intersectParts = tagGroups.map(
     (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
@@ -276,16 +353,37 @@ export async function GET(request: NextRequest) {
     ? [Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${allExcludeTagIds}::int[])`]
     : [];
 
+  // Build meta tag filter subquery (if we have meta tags)
+  const metaTagFilter = metaConditions.length > 0
+    ? Prisma.sql`SELECT id AS "postId" FROM "Post" WHERE ${Prisma.join(metaConditions, " AND ")}`
+    : null;
+
   // Build the full post subquery
   let postSubquery: Prisma.Sql;
   if (intersectParts.length > 0 && exceptParts.length > 0) {
     const intersectQuery = Prisma.join(intersectParts, " INTERSECT ");
-    postSubquery = Prisma.sql`(${intersectQuery}) EXCEPT (${exceptParts[0]})`;
+    let combined = Prisma.sql`(${intersectQuery}) EXCEPT (${exceptParts[0]})`;
+    // If we have meta tags, intersect with meta-filtered posts
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
   } else if (intersectParts.length > 0) {
-    postSubquery = Prisma.join(intersectParts, " INTERSECT ");
+    let combined = Prisma.join(intersectParts, " INTERSECT ");
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
   } else if (exceptParts.length > 0) {
     // Only exclude tags - get all posts except those with excluded tags
-    postSubquery = Prisma.sql`SELECT DISTINCT "postId" FROM "PostTag" EXCEPT (${exceptParts[0]})`;
+    let combined = Prisma.sql`SELECT DISTINCT "postId" FROM "PostTag" EXCEPT (${exceptParts[0]})`;
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
+  } else if (metaTagFilter) {
+    // Only meta tags selected - use meta filter directly
+    postSubquery = metaTagFilter;
   } else {
     // Should not reach here due to earlier check, but handle gracefully
     return NextResponse.json({ tags: [] });
