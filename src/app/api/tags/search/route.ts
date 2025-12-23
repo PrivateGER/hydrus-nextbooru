@@ -9,6 +9,7 @@ import {
   parseTagsParamWithNegation,
   resolveWildcardPattern,
 } from "@/lib/wildcard";
+import { searchMetaTags, getAllMetaTags, getMetaTagCounts } from "@/lib/meta-tags";
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -55,21 +56,41 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
+    // Add all meta tags to initial suggestions with counts
+    const allMetaTags = getAllMetaTags();
+    const metaTagCounts = await getMetaTagCounts(
+      allMetaTags.map((def) => def.name),
+      prisma
+    );
+
+    const metaTags = allMetaTags.map((def, index) => ({
+      id: -(index + 1), // Negative IDs to distinguish from real tags
+      name: def.name,
+      category: "META" as const,
+      count: metaTagCounts.get(def.name) ?? 0,
+      remainingCount: Math.max(0, totalPosts - (metaTagCounts.get(def.name) ?? 0)),
+      isMeta: true,
+      description: def.description,
+    }));
+
     return NextResponse.json({
-      tags: tags.map((tag) => ({
-        id: tag.id,
-        name: tag.name,
-        category: tag.category,
-        count: tag.postCount,
-        remainingCount: Math.max(0, totalPosts - tag.postCount),
-      })),
+      tags: [
+        ...tags.map((tag) => ({
+          id: tag.id,
+          name: tag.name,
+          category: tag.category,
+          count: tag.postCount,
+          remainingCount: Math.max(0, totalPosts - tag.postCount),
+        })),
+        ...metaTags,
+      ],
     });
   }
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount
   if (selectedTags.length === 0 && excludeTags.length === 0) {
     // Get precomputed total from Settings for remainingCount calculation
-    let totalPosts = await getTotalPostCount();
+    const totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
       where: withBlacklistFilter({
@@ -88,14 +109,33 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
+    // Search for matching meta tags with counts
+    const matchingMetas = searchMetaTags(query);
+    const metaTagCounts = matchingMetas.length > 0
+      ? await getMetaTagCounts(matchingMetas.map((def) => def.name), prisma)
+      : new Map<string, number>();
+
+    const matchingMetaTags = matchingMetas.map((def, index) => ({
+      id: -(index + 1),
+      name: def.name,
+      category: "META" as const,
+      count: metaTagCounts.get(def.name) ?? 0,
+      remainingCount: Math.max(0, totalPosts - (metaTagCounts.get(def.name) ?? 0)),
+      isMeta: true,
+      description: def.description,
+    }));
+
     return NextResponse.json({
-      tags: tags.map((tag) => ({
-        id: tag.id,
-        name: tag.name,
-        category: tag.category,
-        count: tag.postCount,
-        remainingCount: Math.max(0, totalPosts - tag.postCount),
-      })),
+      tags: [
+        ...tags.map((tag) => ({
+          id: tag.id,
+          name: tag.name,
+          category: tag.category,
+          count: tag.postCount,
+          remainingCount: Math.max(0, totalPosts - tag.postCount),
+        })),
+        ...matchingMetaTags,
+      ],
     });
   }
 
@@ -288,7 +328,7 @@ export async function GET(request: NextRequest) {
     GROUP BY t.id, t.name, t.category
     ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${limit * 4}
+    LIMIT ${limit * 4}  -- Fetch 4x limit to account for blacklist filtering and count > 0 filtering done in-memory
   `;
 
   // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
@@ -304,5 +344,37 @@ export async function GET(request: NextRequest) {
     .filter((tag) => tag.count > 0)
     .slice(0, limit);
 
-  return NextResponse.json({ tags: filteredTags });
+  // Add matching meta tags (excluding already selected ones) with co-occurrence counts
+  const allSelectedLower = new Set([
+    ...selectedTags.map((t) => t.toLowerCase()),
+    ...excludeTags.map((t) => t.toLowerCase()),
+  ]);
+  const matchingMetas = searchMetaTags(query)
+    .filter((def) => !allSelectedLower.has(def.name.toLowerCase()));
+
+  // Get the filtered post IDs for co-occurrence counting
+  const filteredPostIdsResult = await prisma.$queryRaw<{ postId: number }[]>`
+    ${postSubquery}
+  `;
+  const filteredPostIds = filteredPostIdsResult.map((r) => r.postId);
+  const filteredTotal = filteredPostIds.length;
+
+  // Get meta tag counts within the filtered posts (respects co-occurrence)
+  const metaTagCounts = matchingMetas.length > 0 && filteredPostIds.length > 0
+    ? await getMetaTagCounts(matchingMetas.map((def) => def.name), prisma, filteredPostIds)
+    : new Map<string, number>();
+
+  const matchingMetaTags = matchingMetas.map((def, index) => ({
+    id: -(index + 1),
+    name: def.name,
+    category: "META" as const,
+    count: metaTagCounts.get(def.name) ?? 0,
+    remainingCount: Math.max(0, filteredTotal - (metaTagCounts.get(def.name) ?? 0)),
+    isMeta: true,
+    description: def.description,
+  }));
+
+  return NextResponse.json({
+    tags: [...filteredTags, ...matchingMetaTags],
+  });
 }

@@ -607,4 +607,236 @@ describe('GET /api/posts/search (Integration)', () => {
       expect(data.totalCount).toBe(2);
     });
   });
+
+  describe('meta tag search', () => {
+    describe('media type meta tags', () => {
+      it('should find video posts with "video" meta tag', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'video/mp4' });
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'video/webm' });
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'image/png' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=video');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should find animated images with "animated" meta tag', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'image/gif' });
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'image/apng' });
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'image/png' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=animated');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+    });
+
+    describe('orientation meta tags', () => {
+      it('should find portrait images (height > width)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 600, height: 800 }); // portrait
+        await createPostWithTags(prisma, ['tag1'], { width: 400, height: 900 }); // portrait
+        await createPostWithTags(prisma, ['tag1'], { width: 800, height: 600 }); // landscape
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=portrait');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should find landscape images (width > height)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 800, height: 600 }); // landscape
+        await createPostWithTags(prisma, ['tag1'], { width: 1920, height: 1080 }); // landscape
+        await createPostWithTags(prisma, ['tag1'], { width: 600, height: 800 }); // portrait
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=landscape');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should find square images (width = height)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 500, height: 500 }); // square
+        await createPostWithTags(prisma, ['tag1'], { width: 1000, height: 1000 }); // square
+        await createPostWithTags(prisma, ['tag1'], { width: 800, height: 600 }); // landscape
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=square');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+    });
+
+    describe('resolution meta tags', () => {
+      it('should find high-res images (1920px+)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 1920, height: 1080 }); // highres (width)
+        await createPostWithTags(prisma, ['tag1'], { width: 1080, height: 1920 }); // highres (height)
+        await createPostWithTags(prisma, ['tag1'], { width: 800, height: 600 }); // not highres
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=highres');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should find low-res images (both dimensions <= 500px)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 400, height: 300 }); // lowres
+        await createPostWithTags(prisma, ['tag1'], { width: 500, height: 500 }); // lowres (edge case)
+        await createPostWithTags(prisma, ['tag1'], { width: 600, height: 400 }); // not lowres (width > 500)
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=lowres');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+    });
+
+    describe('negated meta tags', () => {
+      it('should exclude videos with -video', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['common'], { mimeType: 'video/mp4' });
+        await createPostWithTags(prisma, ['common'], { mimeType: 'image/png' });
+        await createPostWithTags(prisma, ['common'], { mimeType: 'image/jpeg' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=common,-video');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should exclude portrait images with -portrait', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['common'], { width: 600, height: 800 }); // portrait
+        await createPostWithTags(prisma, ['common'], { width: 800, height: 600 }); // landscape
+        await createPostWithTags(prisma, ['common'], { width: 500, height: 500 }); // square
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=common,-portrait');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(2);
+        expect(data.totalCount).toBe(2);
+      });
+
+      it('should exclude high-res images with -highres', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['common'], { width: 1920, height: 1080 }); // highres
+        await createPostWithTags(prisma, ['common'], { width: 800, height: 600 }); // not highres
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=common,-highres');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(1);
+        expect(data.totalCount).toBe(1);
+      });
+    });
+
+    describe('meta tags combined with regular tags', () => {
+      it('should combine meta tag with regular tag (AND logic)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['blue_eyes'], { mimeType: 'video/mp4' }); // video + blue_eyes
+        await createPostWithTags(prisma, ['blue_eyes'], { mimeType: 'image/png' }); // image + blue_eyes
+        await createPostWithTags(prisma, ['red_eyes'], { mimeType: 'video/mp4' }); // video + red_eyes
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=blue_eyes,video');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(1);
+        expect(data.totalCount).toBe(1);
+      });
+
+      it('should combine multiple meta tags (AND logic)', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { width: 1920, height: 1080 }); // landscape + highres
+        await createPostWithTags(prisma, ['tag1'], { width: 1080, height: 1920 }); // portrait + highres
+        await createPostWithTags(prisma, ['tag1'], { width: 800, height: 600 }); // landscape + not highres
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=landscape,highres');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(1);
+        expect(data.totalCount).toBe(1);
+      });
+
+      it('should combine meta tag with negated regular tag', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['blue_eyes'], { mimeType: 'video/mp4' });
+        await createPostWithTags(prisma, ['blue_eyes', 'nsfw'], { mimeType: 'video/mp4' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=video,-nsfw');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(1);
+        expect(data.totalCount).toBe(1);
+      });
+    });
+
+    describe('meta tag edge cases', () => {
+      it('should be case insensitive for meta tags', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'video/mp4' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=VIDEO');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toHaveLength(1);
+      });
+
+      it('should return empty when no posts match meta tag', async () => {
+        const prisma = getTestPrisma();
+        await createPostWithTags(prisma, ['tag1'], { mimeType: 'image/png' });
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=video');
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(data.posts).toEqual([]);
+        expect(data.totalCount).toBe(0);
+      });
+
+      it('should handle posts with null dimensions for orientation tags', async () => {
+        const prisma = getTestPrisma();
+        // Create post without dimensions (null width/height)
+        await createPost(prisma, { width: undefined, height: undefined });
+        await createPostWithTags(prisma, ['tag1'], { width: 600, height: 800 }); // portrait
+
+        const request = new NextRequest('http://localhost/api/posts/search?tags=portrait');
+        const response = await GET(request);
+        const data = await response.json();
+
+        // Only the portrait post should match, not the one with null dimensions
+        expect(data.posts).toHaveLength(1);
+        expect(data.totalCount).toBe(1);
+      });
+    });
+  });
 });
