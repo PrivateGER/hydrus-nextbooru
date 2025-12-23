@@ -9,7 +9,13 @@ import {
   parseTagsParamWithNegation,
   resolveWildcardPattern,
 } from "@/lib/wildcard";
-import { searchMetaTags, getAllMetaTags, getMetaTagCounts } from "@/lib/meta-tags";
+import {
+  searchMetaTags,
+  getAllMetaTags,
+  getMetaTagCounts,
+  separateMetaTags,
+  getMetaTagSqlCondition,
+} from "@/lib/meta-tags";
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -141,13 +147,20 @@ export async function GET(request: NextRequest) {
 
   // Progressive filtering: find tags that co-occur with all selected tags (and not excluded tags)
 
-  // Separate wildcards from regular tags
+  // Separate meta tags from regular tags first
+  const allSelectedWithNegation = [
+    ...selectedTags,
+    ...excludeTags.map(t => `-${t}`),
+  ];
+  const { metaTags, regularTags } = separateMetaTags(allSelectedWithNegation);
+
+  // Separate wildcards from regular tags (only for non-meta tags)
   const regularIncludeTags: string[] = [];
   const wildcardIncludePatterns: string[] = [];
   const regularExcludeTags: string[] = [];
   const wildcardExcludePatterns: string[] = [];
 
-  for (const tag of selectedTags) {
+  for (const tag of regularTags.include) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(tag);
       if (!validation.valid) {
@@ -159,7 +172,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  for (const tag of excludeTags) {
+  for (const tag of regularTags.exclude) {
     if (isWildcardPattern(tag)) {
       const validation = validateWildcardPattern(`-${tag}`);
       if (!validation.valid) {
@@ -266,6 +279,19 @@ export async function GET(request: NextRequest) {
   const hasSearchQuery = query.length > 0;
   const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
 
+  // Build meta tag SQL conditions using centralized getSqlCondition()
+  const metaConditions: Prisma.Sql[] = [];
+
+  for (const metaName of metaTags.include) {
+    const condition = getMetaTagSqlCondition(metaName, false);
+    if (condition) metaConditions.push(condition);
+  }
+
+  for (const metaName of metaTags.exclude) {
+    const condition = getMetaTagSqlCondition(metaName, true);
+    if (condition) metaConditions.push(condition);
+  }
+
   // Build INTERSECT subqueries for each included tag group using Prisma.sql
   const intersectParts = tagGroups.map(
     (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
@@ -276,16 +302,37 @@ export async function GET(request: NextRequest) {
     ? [Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${allExcludeTagIds}::int[])`]
     : [];
 
+  // Build meta tag filter subquery (if we have meta tags)
+  const metaTagFilter = metaConditions.length > 0
+    ? Prisma.sql`SELECT id AS "postId" FROM "Post" WHERE ${Prisma.join(metaConditions, " AND ")}`
+    : null;
+
   // Build the full post subquery
   let postSubquery: Prisma.Sql;
   if (intersectParts.length > 0 && exceptParts.length > 0) {
     const intersectQuery = Prisma.join(intersectParts, " INTERSECT ");
-    postSubquery = Prisma.sql`(${intersectQuery}) EXCEPT (${exceptParts[0]})`;
+    let combined = Prisma.sql`(${intersectQuery}) EXCEPT (${exceptParts[0]})`;
+    // If we have meta tags, intersect with meta-filtered posts
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
   } else if (intersectParts.length > 0) {
-    postSubquery = Prisma.join(intersectParts, " INTERSECT ");
+    let combined = Prisma.join(intersectParts, " INTERSECT ");
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
   } else if (exceptParts.length > 0) {
     // Only exclude tags - get all posts except those with excluded tags
-    postSubquery = Prisma.sql`SELECT DISTINCT "postId" FROM "PostTag" EXCEPT (${exceptParts[0]})`;
+    let combined = Prisma.sql`SELECT DISTINCT "postId" FROM "PostTag" EXCEPT (${exceptParts[0]})`;
+    if (metaTagFilter) {
+      combined = Prisma.sql`(${combined}) INTERSECT (${metaTagFilter})`;
+    }
+    postSubquery = combined;
+  } else if (metaTagFilter) {
+    // Only meta tags selected - use meta filter directly
+    postSubquery = metaTagFilter;
   } else {
     // Should not reach here due to earlier check, but handle gracefully
     return NextResponse.json({ tags: [] });

@@ -4,6 +4,7 @@ import {
   getMetaTagDefinition,
   getAllMetaTags,
   searchMetaTags,
+  getMetaTagSqlCondition,
   separateMetaTags,
 } from "./meta-tags";
 
@@ -112,6 +113,30 @@ describe("searchMetaTags", () => {
   it("should return empty array for non-matching query", () => {
     const results = searchMetaTags("nonexistent_xyz");
     expect(results).toEqual([]);
+  });
+});
+
+describe("getMetaTagSqlCondition", () => {
+  it("should return null for non-meta tags", () => {
+    expect(getMetaTagSqlCondition("blue_eyes")).toBeNull();
+    expect(getMetaTagSqlCondition("not_a_meta_tag")).toBeNull();
+  });
+
+  it("should return SQL for all meta tags (include and exclude)", () => {
+    const allTags = getAllMetaTags();
+    for (const def of allTags) {
+      const sql = getMetaTagSqlCondition(def.name);
+      expect(sql, `${def.name} should return SQL`).not.toBeNull();
+
+      const negatedSql = getMetaTagSqlCondition(def.name, true);
+      expect(negatedSql, `${def.name} negated should return SQL`).not.toBeNull();
+    }
+  });
+
+  it("should be case-insensitive", () => {
+    expect(getMetaTagSqlCondition("VIDEO")).not.toBeNull();
+    expect(getMetaTagSqlCondition("Portrait")).not.toBeNull();
+    expect(getMetaTagSqlCondition("HIGHRES")).not.toBeNull();
   });
 });
 
