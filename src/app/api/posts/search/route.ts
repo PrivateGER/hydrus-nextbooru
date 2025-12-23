@@ -1,18 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, escapeSqlLike } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
-import {
-  isWildcardPattern,
-  validateWildcardPattern,
-  parseTagsParamWithNegation,
-  resolveWildcardPattern,
-  ResolvedWildcard,
-} from "@/lib/wildcard";
-import { isTagBlacklisted, withPostHidingFilter } from "@/lib/tag-blacklist";
+import { searchPosts } from "@/lib/search";
 
-const DEFAULT_LIMIT = 48;
-const MAX_LIMIT = 100;
-const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
+const MAX_PAGE = 10000;
 
 /**
  * Search posts by included and excluded tags with pagination and support for wildcard patterns.
@@ -21,8 +10,7 @@ const MAX_PAGE = 10000; // Prevent expensive queries with excessive offsets
  * Query parameters:
  * - `tags`: comma-separated tag names; prefix with `-` to exclude
  * - `notes`: search query for note content (full-text search)
- * - `notesMode`: "fulltext" (default) or "partial" for ILIKE matching
- * - `page`: page number (default 1)
+ * - `page`: page number (default 1, max 10000)
  * - `limit`: results per page (default 48, max 100)
  *
  * @returns An object containing:
@@ -35,253 +23,25 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
   const notesQuery = searchParams.get("notes")?.trim() || "";
-  const notesMode = searchParams.get("notesMode") || "fulltext";
-  const page = Math.min(
-    MAX_PAGE,
-    Math.max(1, parseInt(searchParams.get("page") || "1", 10))
-  );
-  const limit = Math.min(
-    parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10),
-    MAX_LIMIT
-  );
+  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(searchParams.get("page") || "1", 10)));
+  const limit = parseInt(searchParams.get("limit") || "48", 10);
 
-  // Parse tags with negation support
-  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(tagsParam);
+  // Split tags and pass directly - searchPosts handles parsing negation
+  const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
 
-  // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
-  const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
-  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
+  const result = await searchPosts(tags, page, {
+    limit,
+    notesQuery: notesQuery || undefined,
+  });
 
-  const hasTagFilters = includeTags.length > 0 || excludeTags.length > 0;
-  const hasNotesFilter = notesQuery.length >= 2;
-
-  if (!hasTagFilters && !hasNotesFilter) {
-    return NextResponse.json({
-      posts: [],
-      totalCount: 0,
-      totalPages: 0,
-    });
+  if (result.error) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
   }
-
-  // Separate wildcards from regular tags
-  const regularIncludeTags: string[] = [];
-  const wildcardIncludePatterns: string[] = [];
-  const regularExcludeTags: string[] = [];
-  const wildcardExcludePatterns: string[] = [];
-
-  for (const tag of includeTags) {
-    if (isWildcardPattern(tag)) {
-      const validation = validateWildcardPattern(tag);
-      if (!validation.valid) {
-        return NextResponse.json(
-          { error: validation.error },
-          { status: 400 }
-        );
-      }
-      wildcardIncludePatterns.push(tag);
-    } else {
-      regularIncludeTags.push(tag);
-    }
-  }
-
-  for (const tag of excludeTags) {
-    if (isWildcardPattern(tag)) {
-      const validation = validateWildcardPattern(`-${tag}`);
-      if (!validation.valid) {
-        return NextResponse.json(
-          { error: validation.error },
-          { status: 400 }
-        );
-      }
-      wildcardExcludePatterns.push(tag);
-    } else {
-      regularExcludeTags.push(tag);
-    }
-  }
-
-  // Resolve wildcards to tag IDs
-  const resolvedWildcards: ResolvedWildcard[] = [];
-
-  // Resolve include wildcards
-  const includeWildcardTagIds: number[][] = [];
-  for (const pattern of wildcardIncludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "posts-api");
-    includeWildcardTagIds.push(resolved.tagIds);
-    resolvedWildcards.push({
-      pattern,
-      negated: false,
-      tagIds: resolved.tagIds,
-      tagNames: resolved.tagNames,
-      tagCategories: resolved.tagCategories,
-      truncated: resolved.truncated,
-    });
-  }
-
-  // Resolve exclude wildcards
-  const excludeWildcardTagIds: number[] = [];
-  for (const pattern of wildcardExcludePatterns) {
-    const resolved = await resolveWildcardPattern(pattern, "posts-api");
-    excludeWildcardTagIds.push(...resolved.tagIds);
-    resolvedWildcards.push({
-      pattern: `-${pattern}`,
-      negated: true,
-      tagIds: resolved.tagIds,
-      tagNames: resolved.tagNames,
-      tagCategories: resolved.tagCategories,
-      truncated: resolved.truncated,
-    });
-  }
-
-  const skip = (page - 1) * limit;
-
-  // Build where clause with AND for included tags and NONE for excluded tags
-  const andConditions: object[] = [];
-
-  // Regular include tags: posts must have ALL specified tags (exact match)
-  for (const tagName of regularIncludeTags) {
-    andConditions.push({
-      tags: {
-        some: {
-          tag: {
-            name: {
-              equals: tagName,
-              mode: "insensitive" as const,
-            },
-          },
-        },
-      },
-    });
-  }
-
-  // Wildcard include tags: posts must have at least one tag from each wildcard pattern
-  for (const tagIds of includeWildcardTagIds) {
-    if (tagIds.length === 0) {
-      // Wildcard matched no tags, so no posts can match
-      return NextResponse.json({
-        posts: [],
-        totalCount: 0,
-        totalPages: 0,
-        resolvedWildcards,
-      });
-    }
-    andConditions.push({
-      tags: {
-        some: {
-          tagId: {
-            in: tagIds,
-          },
-        },
-      },
-    });
-  }
-
-  // Regular exclude tags: posts must NOT have ANY of the excluded tags (exact match)
-  for (const tagName of regularExcludeTags) {
-    andConditions.push({
-      tags: {
-        none: {
-          tag: {
-            name: {
-              equals: tagName,
-              mode: "insensitive" as const,
-            },
-          },
-        },
-      },
-    });
-  }
-
-  // Wildcard exclude tags: posts must NOT have ANY of the matched tags
-  if (excludeWildcardTagIds.length > 0) {
-    andConditions.push({
-      tags: {
-        none: {
-          tagId: {
-            in: excludeWildcardTagIds,
-          },
-        },
-      },
-    });
-  }
-
-  // Notes filter: use Prisma's relational queries to avoid loading all post IDs into memory
-  if (hasNotesFilter) {
-    if (notesMode === "partial") {
-      // Partial matching using ILIKE with trigram index
-      const searchPattern = `%${escapeSqlLike(notesQuery)}%`;
-      andConditions.push({
-        notes: {
-          some: {
-            OR: [
-              {
-                content: {
-                  contains: notesQuery,
-                  mode: "insensitive" as const,
-                },
-              },
-              {
-                name: {
-                  contains: notesQuery,
-                  mode: "insensitive" as const,
-                },
-              },
-            ],
-          },
-        },
-      });
-    } else {
-      // Full-text search using tsvector - search both content AND name for consistency
-      const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
-        SELECT DISTINCT "postId"
-        FROM "Note"
-        WHERE to_tsvector('simple', content) @@ websearch_to_tsquery('simple', ${notesQuery})
-           OR to_tsvector('simple', name) @@ websearch_to_tsquery('simple', ${notesQuery})
-      `;
-      const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
-
-      // If no notes match, return empty results early
-      if (noteMatchingPostIds.length === 0) {
-        return NextResponse.json({
-          posts: [],
-          totalCount: 0,
-          totalPages: 0,
-          ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
-        });
-      }
-
-      andConditions.push({
-        id: {
-          in: noteMatchingPostIds,
-        },
-      });
-    }
-  }
-
-  const baseWhereClause = andConditions.length > 0 ? { AND: andConditions } : {};
-  const whereClause = withPostHidingFilter(baseWhereClause);
-
-  const [posts, totalCount] = await Promise.all([
-    prisma.post.findMany({
-      where: whereClause,
-      orderBy: { importedAt: "desc" },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        hash: true,
-        width: true,
-        height: true,
-        blurhash: true,
-        mimeType: true,
-      },
-    }),
-    prisma.post.count({ where: whereClause }),
-  ]);
 
   return NextResponse.json({
-    posts,
-    totalCount,
-    totalPages: Math.ceil(totalCount / limit),
-    ...(resolvedWildcards.length > 0 && { resolvedWildcards }),
+    posts: result.posts,
+    totalCount: result.totalCount,
+    totalPages: result.totalPages,
+    ...(result.resolvedWildcards.length > 0 && { resolvedWildcards: result.resolvedWildcards }),
   });
 }

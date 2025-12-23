@@ -2,6 +2,7 @@ import pino from "pino";
 import pretty from "pino-pretty";
 
 const isDev = process.env.NODE_ENV === "development";
+const isTest = process.env.NODE_ENV === "test";
 
 /**
  * Application logger using pino.
@@ -26,7 +27,7 @@ const stream = pretty({
 
 export const logger = pino(
   {
-    level: process.env.LOG_LEVEL || (isDev ? "debug" : "info"),
+    level: process.env.LOG_LEVEL || (isTest ? "silent" : isDev ? "debug" : "info"),
   },
   stream
 );

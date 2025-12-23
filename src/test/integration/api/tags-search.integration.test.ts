@@ -7,6 +7,14 @@ import { clearPatternCache } from '@/lib/tag-blacklist';
 import { createPostWithTags, createPostsWithTag } from '../factories';
 import { TagCategory } from '@/generated/prisma/client';
 
+/**
+ * Filter out meta tags from response to test regular tag behavior.
+ * Meta tags have isMeta: true and negative IDs.
+ */
+function filterRegularTags<T extends { isMeta?: boolean }>(tags: T[]): T[] {
+  return tags.filter(t => !t.isMeta);
+}
+
 // Dynamic import to ensure prisma injection works
 let GET: typeof import('@/app/api/tags/search/route').GET;
 
@@ -32,21 +40,25 @@ describe('GET /api/tags/search (Integration)', () => {
   });
 
   describe('empty query handling', () => {
-    it('should return empty array when query is empty', async () => {
+    it('should return only meta tags when query is empty and no posts exist', async () => {
       const request = new NextRequest('http://localhost/api/tags/search?q=');
       const response = await GET(request);
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.tags).toEqual([]);
+      // No regular tags without posts, but meta tags are always included
+      expect(filterRegularTags(data.tags)).toEqual([]);
+      // Meta tags should be present
+      expect(data.tags.some((t: { isMeta?: boolean }) => t.isMeta)).toBe(true);
     });
 
-    it('should return empty array when query parameter is missing', async () => {
+    it('should return only meta tags when query parameter is missing', async () => {
       const request = new NextRequest('http://localhost/api/tags/search');
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.tags).toEqual([]);
+      // No regular tags without posts, but meta tags are always included
+      expect(filterRegularTags(data.tags)).toEqual([]);
     });
   });
 
@@ -184,7 +196,7 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(names).not.toContain('blue eyes');
     });
 
-    it('should return empty when selected tag does not exist', async () => {
+    it('should return empty regular tags when selected tag does not exist', async () => {
       const prisma = getTestPrisma();
       await createPostWithTags(prisma, ['blue eyes']);
 
@@ -192,10 +204,11 @@ describe('GET /api/tags/search (Integration)', () => {
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.tags).toEqual([]);
+      // Meta tags may still be returned, but regular tags should be empty
+      expect(filterRegularTags(data.tags)).toEqual([]);
     });
 
-    it('should return empty when no posts have all selected tags', async () => {
+    it('should return empty regular tags when no posts have all selected tags', async () => {
       const prisma = getTestPrisma();
 
       // No post has both tags
@@ -206,7 +219,8 @@ describe('GET /api/tags/search (Integration)', () => {
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.tags).toEqual([]);
+      // Meta tags may still be returned, but regular tags should be empty
+      expect(filterRegularTags(data.tags)).toEqual([]);
     });
   });
 
@@ -256,7 +270,9 @@ describe('GET /api/tags/search (Integration)', () => {
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.tags).toHaveLength(3);
+      // Filter out meta tags to check regular tags
+      const regularTags = filterRegularTags(data.tags);
+      expect(regularTags).toHaveLength(3);
     });
 
     it('should handle special characters in query', async () => {
@@ -267,8 +283,10 @@ describe('GET /api/tags/search (Integration)', () => {
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.tags).toHaveLength(1);
-      expect(data.tags[0].name).toBe('c++');
+      // Filter out meta tags to check regular tags
+      const regularTags = filterRegularTags(data.tags);
+      expect(regularTags).toHaveLength(1);
+      expect(regularTags[0].name).toBe('c++');
     });
 
     it('should return correct response structure', async () => {
