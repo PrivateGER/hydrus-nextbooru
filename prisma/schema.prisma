@@ -53,6 +53,12 @@ enum ThumbnailStatus {
   UNSUPPORTED // Non-media file, cannot generate thumbnails
 }
 
+enum Orientation {
+  landscape
+  portrait
+  square
+}
+
 // ============================================
 // MODELS
 // ============================================
@@ -68,6 +74,7 @@ model Post {
   fileSize      Int
   width         Int?
   height        Int?
+  orientation   Orientation? // Computed column: GENERATED ALWAYS AS (CASE width/height)
   duration      Int? // milliseconds for video/audio
   hasAudio      Boolean  @default(false)
   blurhash      String?
@@ -100,7 +107,7 @@ model Post {
   @@index([rating])
   @@index([importedAt])
   @@index([mimeType])
-  @@index([width, height]) // For orientation meta tag queries (portrait/landscape/square)
+  @@index([orientation])
 }
 
 model Tag {
