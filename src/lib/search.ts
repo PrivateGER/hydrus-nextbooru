@@ -14,7 +14,6 @@ import { Prisma } from "@/generated/prisma/client";
 import {
   isWildcardPattern,
   validateWildcardPattern,
-  parseTagsWithNegation,
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
@@ -318,21 +317,13 @@ export async function searchPosts(
   const notesQuery = options?.notesQuery?.trim() ?? "";
   const hasNotesFilter = notesQuery.length >= 2;
 
-  // First, separate meta tags from regular tags
-  const { metaTags, regularTags: separatedRegular } = separateMetaTags(tags);
-
-  // Combine regular tags back into include/exclude format for existing processing
-  const allRegularTags = [
-    ...separatedRegular.include,
-    ...separatedRegular.exclude.map((t) => `-${t}`),
-  ];
-
-  const { includeTags: rawIncludeTags, excludeTags: rawExcludeTags } = parseTagsWithNegation(allRegularTags);
+  // Separate meta tags from regular tags (also handles negation parsing)
+  const { metaTags, regularTags } = separateMetaTags(tags);
 
   // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
   // For wildcards, we check if the pattern itself is blacklisted (e.g., "hydl-import-time:*")
-  const includeTags = rawIncludeTags.filter(tag => !isTagBlacklisted(tag));
-  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
+  const includeTags = regularTags.include.filter(tag => !isTagBlacklisted(tag));
+  const excludeTags = regularTags.exclude.filter(tag => !isTagBlacklisted(tag));
 
   // Check if we have any search criteria (tags, meta tags, or notes)
   const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchPosts } from "@/lib/search";
-import { parseTagsParamWithNegation } from "@/lib/wildcard";
+
+const MAX_PAGE = 10000;
 
 /**
  * Search posts by included and excluded tags with pagination and support for wildcard patterns.
@@ -9,7 +10,7 @@ import { parseTagsParamWithNegation } from "@/lib/wildcard";
  * Query parameters:
  * - `tags`: comma-separated tag names; prefix with `-` to exclude
  * - `notes`: search query for note content (full-text search)
- * - `page`: page number (default 1)
+ * - `page`: page number (default 1, max 10000)
  * - `limit`: results per page (default 48, max 100)
  *
  * @returns An object containing:
@@ -22,14 +23,11 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
   const notesQuery = searchParams.get("notes")?.trim() || "";
-  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(searchParams.get("page") || "1", 10)));
   const limit = parseInt(searchParams.get("limit") || "48", 10);
 
-  const { includeTags, excludeTags } = parseTagsParamWithNegation(tagsParam);
-  const tags = [
-    ...includeTags,
-    ...excludeTags.map(t => `-${t}`),
-  ];
+  // Split tags and pass directly - searchPosts handles parsing negation
+  const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);
 
   const result = await searchPosts(tags, page, {
     limit,
