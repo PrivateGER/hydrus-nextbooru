@@ -53,7 +53,12 @@ export function createHydrusHandlers(state: MockHydrusState) {
           { status: 500 }
         );
       }
-      return HttpResponse.json(createMockSearchResponse(state.fileIds));
+      // Get hashes from metadata to match actual file hashes
+      const hashes = state.fileIds.map(id => state.metadata.get(id)?.hash ?? '');
+      return HttpResponse.json({
+        ...createMockSearchResponse(state.fileIds),
+        hashes,
+      });
     }),
 
     // get_files/file_metadata
@@ -106,4 +111,15 @@ export function addFilesToState(
     }
     state.metadata.set(f.file_id, f);
   });
+}
+
+/**
+ * Helper to remove files from mock state (simulates deletion in Hydrus).
+ */
+export function removeFilesFromState(
+  state: MockHydrusState,
+  fileIds: number[]
+): void {
+  state.fileIds = state.fileIds.filter(id => !fileIds.includes(id));
+  fileIds.forEach(id => state.metadata.delete(id));
 }

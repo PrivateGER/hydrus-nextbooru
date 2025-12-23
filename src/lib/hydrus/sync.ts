@@ -23,12 +23,16 @@ interface BatchLookups {
 }
 
 export interface SyncProgress {
-  phase: "searching" | "fetching" | "processing" | "complete" | "error";
+  phase: "searching" | "fetching" | "processing" | "cleanup" | "complete" | "error";
   totalFiles: number;
   processedFiles: number;
   currentBatch: number;
   totalBatches: number;
   errors: string[];
+  deletedPosts?: number;
+  deletedTags?: number;
+  deletedGroups?: number;
+  failedBatches?: number; // Track failed batch fetches to skip cleanup
 }
 
 export interface SyncOptions {
@@ -454,6 +458,83 @@ async function processFileSafe(
 }
 
 // =============================================================================
+// CLEANUP FUNCTIONS
+// =============================================================================
+
+const DELETION_BATCH_SIZE = 1000;
+
+/**
+ * Delete posts that no longer exist in Hydrus.
+ * Compares Hydrus search results with database posts.
+ * Returns the count of deleted posts.
+ */
+async function deleteRemovedPosts(hydrusHashes: Set<string>): Promise<number> {
+  // Get all post hashes from database
+  const dbPosts = await prisma.post.findMany({
+    select: { hash: true },
+  });
+
+  // Find posts that exist in DB but not in Hydrus
+  const hashesToDelete = dbPosts
+    .filter(post => !hydrusHashes.has(post.hash))
+    .map(post => post.hash);
+
+  if (hashesToDelete.length === 0) {
+    return 0;
+  }
+
+  // Delete in batches to avoid query size limits
+  let totalDeleted = 0;
+  for (let i = 0; i < hashesToDelete.length; i += DELETION_BATCH_SIZE) {
+    const batch = hashesToDelete.slice(i, i + DELETION_BATCH_SIZE);
+    const result = await prisma.post.deleteMany({
+      where: { hash: { in: batch } },
+    });
+    totalDeleted += result.count;
+  }
+
+  syncLog.info({ deletedCount: totalDeleted }, 'Deleted posts removed from Hydrus');
+  return totalDeleted;
+}
+
+/**
+ * Delete tags that have no associated posts.
+ * Should be called after post deletion.
+ */
+async function deleteOrphanedTags(): Promise<number> {
+  const result = await prisma.tag.deleteMany({
+    where: {
+      posts: {
+        none: {},
+      },
+    },
+  });
+
+  if (result.count > 0) {
+    syncLog.info({ deletedCount: result.count }, 'Deleted orphaned tags');
+  }
+  return result.count;
+}
+
+/**
+ * Delete groups that have no associated posts.
+ */
+async function deleteOrphanedGroups(): Promise<number> {
+  const result = await prisma.group.deleteMany({
+    where: {
+      posts: {
+        none: {},
+      },
+    },
+  });
+
+  if (result.count > 0) {
+    syncLog.info({ deletedCount: result.count }, 'Deleted orphaned groups');
+  }
+  return result.count;
+}
+
+// =============================================================================
 // MAIN SYNC FUNCTION
 // =============================================================================
 
@@ -497,6 +578,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     });
 
     const fileIds = searchResult.file_ids;
+    const hydrusHashes = new Set(searchResult.hashes || []);
     progress.totalFiles = fileIds.length;
     progress.totalBatches = Math.ceil(fileIds.length / BATCH_SIZE);
     syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
@@ -505,52 +587,129 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     // Update with total count
     await updateSyncState({ status: "running", totalFiles: progress.totalFiles, totalBatches: progress.totalBatches });
 
-    if (fileIds.length === 0) {
+    // Process files in batches with pipelined fetching:
+    // Fetch batch N+1 while processing batch N to overlap network I/O with processing
+    progress.phase = "fetching";
+
+    if (fileIds.length > 0) {
+      // Start fetching first batch
+      // Attach .catch() to prevent unhandled rejection if it fails before we await it
+      const firstBatchIds = fileIds.slice(0, BATCH_SIZE);
+      const firstFetchPromise = client.getFileMetadata({
+        fileIds: firstBatchIds,
+        includeBlurhash: true,
+        includeNotes: true,
+      });
+      firstFetchPromise.catch(() => {});
+      let currentFetchPromise: Promise<{ metadata: HydrusFileMetadata[] }> = firstFetchPromise;
+
+      for (let i = 0; i < fileIds.length; i += BATCH_SIZE) {
+        // Check for cancellation at start of each batch
+        if (await isSyncCancelled()) {
+          progress.phase = "complete";
+          onProgress(progress);
+          return progress;
+        }
+
+        progress.currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+        onProgress(progress);
+
+        const batchSize = Math.min(BATCH_SIZE, fileIds.length - i);
+        syncLog.debug({ batch: progress.currentBatch, batchSize }, 'Processing batch');
+
+        try {
+          // Wait for current batch metadata (was started in previous iteration or before loop)
+          const metadataResult = await currentFetchPromise;
+
+          // Start fetching next batch while we process current (pipelining)
+          // Attach .catch() to prevent unhandled rejection if processing fails
+          const nextBatchStart = i + BATCH_SIZE;
+          if (nextBatchStart < fileIds.length) {
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const fetchPromise = client.getFileMetadata({
+              fileIds: nextBatchIds,
+              includeBlurhash: true,
+              includeNotes: true,
+            });
+            fetchPromise.catch(() => {});
+            currentFetchPromise = fetchPromise;
+          }
+
+          // Process current batch (next batch is fetching in parallel)
+          await processBatchWithPrepopulation(
+            metadataResult.metadata,
+            progress,
+            onProgress
+          );
+
+          progress.phase = "fetching";
+        } catch (err) {
+          const errorMsg = `Error processing batch ${progress.currentBatch}: ${err instanceof Error ? err.message : String(err)}`;
+          progress.errors.push(errorMsg);
+          progress.failedBatches = (progress.failedBatches ?? 0) + 1;
+          syncLog.error({ batch: progress.currentBatch, error: err instanceof Error ? err.message : String(err) }, 'Error processing batch');
+
+          // If fetch failed, start fetching the next batch anyway
+          // Attach no-op .catch() to prevent unhandled rejection if loop ends before we await it
+          const nextBatchStart = i + BATCH_SIZE;
+          if (nextBatchStart < fileIds.length) {
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const fetchPromise = client.getFileMetadata({
+              fileIds: nextBatchIds,
+              includeBlurhash: true,
+              includeNotes: true,
+            });
+            // Absorb rejection if never awaited; error will be caught when awaited in next iteration
+            fetchPromise.catch(() => {});
+            currentFetchPromise = fetchPromise;
+          }
+        }
+      }
+
+      // Ensure any pending fetch promise is awaited to prevent unhandled rejections
+      // This can happen if the last iteration started a prefetch that we never awaited
+      try {
+        await currentFetchPromise;
+      } catch {
+        // Absorb error - already handled via failedBatches counter
+      }
+    }
+
+    // Check for cancellation before cleanup
+    if (await isSyncCancelled()) {
       progress.phase = "complete";
-      await updateSyncState({ status: "completed", count: 0 });
       onProgress(progress);
       return progress;
     }
 
-    // Process files in batches with two-phase approach (pre-populate tags/groups, then process)
-    progress.phase = "fetching";
+    // Cleanup phase: only run for full syncs with no batch failures
+    // If any batches failed to fetch, we can't safely determine what was deleted from Hydrus
+    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
+    const hasFailedBatches = (progress.failedBatches ?? 0) > 0;
 
-    for (let i = 0; i < fileIds.length; i += BATCH_SIZE) {
-      // Check for cancellation at start of each batch
-      if (await isSyncCancelled()) {
-        progress.phase = "complete";
-        onProgress(progress);
-        return progress;
-      }
+    if (isFullSync && hasFailedBatches) {
+      syncLog.warn({ failedBatches: progress.failedBatches }, 'Skipping cleanup due to failed batch fetches');
+    }
 
-      progress.currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+    if (isFullSync && !hasFailedBatches) {
+      progress.phase = "cleanup";
       onProgress(progress);
 
-      const batchIds = fileIds.slice(i, i + BATCH_SIZE);
-      syncLog.debug({ batch: progress.currentBatch, batchSize: batchIds.length }, 'Processing batch');
-
       try {
-        // Fetch metadata for this batch
-        const metadataResult = await client.getFileMetadata({
-          fileIds: batchIds,
-          includeBlurhash: true,
-          includeNotes: true,
-        });
-
-        // Process batch with two-phase approach:
-        // 1. Pre-populate all tags/groups (eliminates race conditions)
-        // 2. Process files in parallel using pre-populated lookups
-        await processBatchWithPrepopulation(
-          metadataResult.metadata,
-          progress,
-          onProgress
-        );
-
-        progress.phase = "fetching";
+        if (!(await isSyncCancelled())) {
+          progress.deletedPosts = await deleteRemovedPosts(hydrusHashes);
+        }
+        if (!(await isSyncCancelled())) {
+          progress.deletedTags = await deleteOrphanedTags();
+        }
+        if (!(await isSyncCancelled())) {
+          progress.deletedGroups = await deleteOrphanedGroups();
+        }
       } catch (err) {
-        const errorMsg = `Error processing batch ${progress.currentBatch}: ${err instanceof Error ? err.message : String(err)}`;
+        const errorMsg = `Cleanup error: ${err instanceof Error ? err.message : String(err)}`;
         progress.errors.push(errorMsg);
-        syncLog.error({ batch: progress.currentBatch, error: err instanceof Error ? err.message : String(err) }, 'Error processing batch');
+        syncLog.error({ error: err instanceof Error ? err.message : String(err) }, 'Error during cleanup phase');
+        // Continue with sync completion even if cleanup fails
       }
     }
 
@@ -570,7 +729,14 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     });
 
     const durationMs = Date.now() - startTime;
-    syncLog.info({ processedFiles: progress.processedFiles, errors: progress.errors.length, durationMs }, 'Sync completed');
+    syncLog.info({
+      processedFiles: progress.processedFiles,
+      deletedPosts: progress.deletedPosts ?? 0,
+      deletedTags: progress.deletedTags ?? 0,
+      deletedGroups: progress.deletedGroups ?? 0,
+      errors: progress.errors.length,
+      durationMs,
+    }, 'Sync completed');
     onProgress(progress);
 
     return progress;

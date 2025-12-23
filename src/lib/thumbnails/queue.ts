@@ -1,11 +1,13 @@
 import pLimit from "p-limit";
+import { availableParallelism } from "os";
 import { prisma } from "@/lib/db";
 import { ThumbnailSize, ThumbnailStatus, PostForThumbnail } from "./types";
 import { generateThumbnail, generateAllThumbnails, generateAnimatedThumbnail, canGenerateAnimatedPreview } from "./generator";
 import { thumbnailLog } from "@/lib/logger";
 
 // Limit concurrent thumbnail generations to avoid memory issues
-const generationLimit = pLimit(4);
+// Use half of available CPUs, minimum 2
+const generationLimit = pLimit(Math.max(2, Math.floor(availableParallelism() / 2)));
 
 // Track in-flight generations to prevent duplicates
 const pendingGenerations = new Map<string, Promise<void>>();
