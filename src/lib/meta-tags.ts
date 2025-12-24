@@ -251,6 +251,101 @@ export async function getMetaTagCounts(
 }
 
 /**
+ * Prisma client type for raw queries.
+ */
+type PrismaClientRaw = {
+  $queryRaw<T = unknown>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<T>;
+};
+
+/**
+ * Result of batched meta tag counting.
+ */
+export interface MetaTagCountsResult {
+  /** Map of meta tag name to count */
+  counts: Map<string, number>;
+  /** Total number of posts in the filtered set */
+  total: number;
+}
+
+/**
+ * Get counts for multiple meta tags in a single optimized SQL query.
+ * Uses COUNT(*) FILTER (WHERE ...) for efficient batched counting.
+ *
+ * This is much faster than getMetaTagCounts when counting within a filtered post set,
+ * as it uses a subquery instead of loading all post IDs into memory.
+ *
+ * @param tagNames - Array of meta tag names to count
+ * @param prisma - Prisma client instance with raw query support
+ * @param postSubquery - SQL subquery that returns {postId} rows to filter by (optional)
+ * @returns Object with counts map and total count
+ */
+export async function getMetaTagCountsBatched(
+  tagNames: string[],
+  prisma: PrismaClientRaw,
+  postSubquery?: Prisma.Sql
+): Promise<MetaTagCountsResult> {
+  // Build COUNT FILTER expressions for each requested meta tag with explicit column names
+  const countExpressions: Prisma.Sql[] = [];
+  // Track tag name -> column name mapping for result parsing
+  const tagToColumn = new Map<string, string>();
+
+  for (const tagName of tagNames) {
+    const def = getMetaTagDefinition(tagName);
+    if (!def) continue;
+
+    const condition = def.getSqlCondition(false);
+    // Use explicit column alias to ensure reliable result parsing
+    const colName = `meta_${tagName}`;
+    countExpressions.push(
+      Prisma.sql`COUNT(*) FILTER (WHERE ${condition})::bigint AS ${Prisma.raw(`"${colName}"`)}`
+    );
+    tagToColumn.set(tagName, colName);
+  }
+
+  // Always include total count with explicit alias
+  countExpressions.push(Prisma.sql`COUNT(*)::bigint AS "total_count"`);
+
+  // Build the query with optional filtering
+  const selectClause = Prisma.join(countExpressions, ", ");
+
+  let query: Prisma.Sql;
+  if (postSubquery) {
+    query = Prisma.sql`
+      SELECT ${selectClause}
+      FROM "Post"
+      WHERE id IN (SELECT "postId" FROM (${postSubquery}) AS filtered)
+    `;
+  } else {
+    query = Prisma.sql`
+      SELECT ${selectClause}
+      FROM "Post"
+    `;
+  }
+
+  // Execute and parse results
+  const result = await prisma.$queryRaw<Record<string, bigint>[]>(query);
+
+  if (!result || result.length === 0) {
+    return { counts: new Map(), total: 0 };
+  }
+
+  // Parse results using explicit column names (not Object.values order)
+  const row = result[0];
+  const counts = new Map<string, number>();
+
+  for (const [tagName, colName] of tagToColumn) {
+    if (colName in row) {
+      counts.set(tagName, Number(row[colName]));
+    }
+  }
+
+  // Extract total using explicit column name
+  const total = "total_count" in row ? Number(row["total_count"]) : 0;
+
+  return { counts, total };
+}
+
+/**
  * Separate meta tags from regular tags in a list.
  *
  * @param tags - Array of tag names (may include negated tags with "-" prefix)
