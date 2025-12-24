@@ -12,7 +12,7 @@ import {
 import {
   searchMetaTags,
   getAllMetaTags,
-  getMetaTagCounts,
+  getMetaTagCountsBatched,
   separateMetaTags,
   getMetaTagSqlCondition,
 } from "@/lib/meta-tags";
@@ -62,9 +62,9 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
-    // Add all meta tags to initial suggestions with counts
+    // Add all meta tags to initial suggestions with counts (single batched query)
     const allMetaTags = getAllMetaTags();
-    const metaTagCounts = await getMetaTagCounts(
+    const { counts: metaTagCounts } = await getMetaTagCountsBatched(
       allMetaTags.map((def) => def.name),
       prisma
     );
@@ -115,11 +115,11 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
-    // Search for matching meta tags with counts
+    // Search for matching meta tags with counts (single batched query)
     const matchingMetas = searchMetaTags(query);
-    const metaTagCounts = matchingMetas.length > 0
-      ? await getMetaTagCounts(matchingMetas.map((def) => def.name), prisma)
-      : new Map<string, number>();
+    const { counts: metaTagCounts } = matchingMetas.length > 0
+      ? await getMetaTagCountsBatched(matchingMetas.map((def) => def.name), prisma)
+      : { counts: new Map<string, number>() };
 
     const matchingMetaTags = matchingMetas.map((def, index) => ({
       id: -(index + 1),
@@ -399,17 +399,15 @@ export async function GET(request: NextRequest) {
   const matchingMetas = searchMetaTags(query)
     .filter((def) => !allSelectedLower.has(def.name.toLowerCase()));
 
-  // Get the filtered post IDs for co-occurrence counting
-  const filteredPostIdsResult = await prisma.$queryRaw<{ postId: number }[]>`
-    ${postSubquery}
-  `;
-  const filteredPostIds = filteredPostIdsResult.map((r) => r.postId);
-  const filteredTotal = filteredPostIds.length;
-
-  // Get meta tag counts within the filtered posts (respects co-occurrence)
-  const metaTagCounts = matchingMetas.length > 0 && filteredPostIds.length > 0
-    ? await getMetaTagCounts(matchingMetas.map((def) => def.name), prisma, filteredPostIds)
-    : new Map<string, number>();
+  // Get meta tag counts within the filtered posts using optimized batched query
+  // This uses a single SQL query with COUNT FILTER instead of N separate queries
+  const { counts: metaTagCounts, total: filteredTotal } = matchingMetas.length > 0
+    ? await getMetaTagCountsBatched(
+        matchingMetas.map((def) => def.name),
+        prisma,
+        postSubquery
+      )
+    : { counts: new Map<string, number>(), total: 0 };
 
   const matchingMetaTags = matchingMetas.map((def, index) => ({
     id: -(index + 1),
