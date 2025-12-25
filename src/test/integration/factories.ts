@@ -97,7 +97,8 @@ export async function createPostWithTags(
 }
 
 /**
- * Create multiple posts with the same tags (for testing tag counts)
+ * Create multiple posts with the same tag (for testing tag counts).
+ * Uses bulk operations for speed.
  */
 export async function createPostsWithTag(
   prisma: PrismaClient,
@@ -105,24 +106,148 @@ export async function createPostsWithTag(
   count: number,
   category: TagCategory = TagCategory.GENERAL
 ) {
-  const posts = [];
-
-  // Create tag once
+  // Create tag
   const tag = await prisma.tag.upsert({
     where: { name_category: { name: tagName, category } },
     create: { name: tagName, category, postCount: count },
     update: { postCount: { increment: count } },
   });
 
-  for (let i = 0; i < count; i++) {
-    const post = await createPost(prisma);
-    await prisma.postTag.create({
-      data: { postId: post.id, tagId: tag.id },
-    });
-    posts.push(post);
-  }
+  // Bulk create posts and link to tag
+  const postIds = await createPostsBulk(prisma, count);
+  const links = postIds.map(postId => ({ postId, tagId: tag.id }));
+  await linkPostsToTagsBulk(prisma, links);
 
-  return { posts, tag };
+  return { postIds, tag };
+}
+
+/**
+ * Bulk create posts - much faster than individual creates.
+ * Returns the created post IDs.
+ */
+export async function createPostsBulk(
+  prisma: PrismaClient,
+  count: number,
+  overrides: Partial<{
+    mimeType: string;
+    extension: string;
+    rating: Rating;
+    width: number;
+    height: number;
+    fileSize: number;
+  }> = {}
+): Promise<number[]> {
+  const baseHydrusId = randomInt(1000000);
+
+  // Use raw SQL with RETURNING for single round-trip
+  const posts = await prisma.$queryRawUnsafe<{ id: number }[]>(`
+    INSERT INTO "Post" (hash, "hydrusFileId", "mimeType", extension, "fileSize", width, height, rating, "importedAt", "thumbnailStatus", "updatedAt")
+    SELECT
+      encode(sha256(random()::text::bytea), 'hex'),
+      $1 + generate_series,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7::"Rating",
+      NOW(),
+      'PENDING'::"ThumbnailStatus",
+      NOW()
+    FROM generate_series(0, $8 - 1)
+    RETURNING id
+  `,
+    baseHydrusId,
+    overrides.mimeType ?? 'image/png',
+    overrides.extension ?? '.png',
+    overrides.fileSize ?? 1024,
+    overrides.width ?? 800,
+    overrides.height ?? 600,
+    overrides.rating ?? Rating.UNRATED,
+    count
+  );
+
+  return posts.map(p => p.id);
+}
+
+/**
+ * Bulk create tags - much faster than individual creates.
+ * Returns the created tag IDs.
+ */
+export async function createTagsBulk(
+  prisma: PrismaClient,
+  names: string[],
+  category: TagCategory = TagCategory.GENERAL
+): Promise<number[]> {
+  if (names.length === 0) return [];
+
+  // Build VALUES clause
+  const values = names.map((_, i) => `($${i + 1}, $${names.length + 1}::"TagCategory", 0)`).join(', ');
+
+  const tags = await prisma.$queryRawUnsafe<{ id: number }[]>(`
+    INSERT INTO "Tag" (name, category, "postCount")
+    VALUES ${values}
+    ON CONFLICT (name, category) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id
+  `, ...names, category);
+
+  return tags.map(t => t.id);
+}
+
+/**
+ * Bulk link posts to tags - much faster than individual creates.
+ * Automatically batches to stay within PostgreSQL's parameter limit.
+ */
+export async function linkPostsToTagsBulk(
+  prisma: PrismaClient,
+  links: Array<{ postId: number; tagId: number }>
+): Promise<void> {
+  if (links.length === 0) return;
+
+  // PostgreSQL has ~32K parameter limit; each link uses 2 params
+  // Use 10K links per batch (20K params) to stay safe
+  const BATCH_SIZE = 10000;
+
+  for (let i = 0; i < links.length; i += BATCH_SIZE) {
+    const batch = links.slice(i, i + BATCH_SIZE);
+
+    // Build VALUES clause
+    const values = batch.map((_, j) => `($${j * 2 + 1}, $${j * 2 + 2})`).join(', ');
+    const params = batch.flatMap(l => [l.postId, l.tagId]);
+
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "PostTag" ("postId", "tagId")
+      VALUES ${values}
+      ON CONFLICT DO NOTHING
+    `, ...params);
+  }
+}
+
+/**
+ * Bulk create posts with a shared tag - optimized version.
+ * Much faster than createPostsWithTag for large counts.
+ */
+export async function createPostsWithTagBulk(
+  prisma: PrismaClient,
+  tagName: string,
+  count: number,
+  category: TagCategory = TagCategory.GENERAL
+) {
+  // Create tag
+  const tag = await prisma.tag.upsert({
+    where: { name_category: { name: tagName, category } },
+    create: { name: tagName, category, postCount: count },
+    update: { postCount: { increment: count } },
+  });
+
+  // Bulk create posts
+  const postIds = await createPostsBulk(prisma, count);
+
+  // Bulk link posts to tag
+  const links = postIds.map(postId => ({ postId, tagId: tag.id }));
+  await linkPostsToTagsBulk(prisma, links);
+
+  return { postIds, tag };
 }
 
 /**
