@@ -108,6 +108,65 @@ describe('syncFromHydrus (Integration)', () => {
       expect(postTags).toHaveLength(2);
     });
 
+    it('should skip unchanged relations on re-sync', async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      // First sync with tags and URL (for groups)
+      addFilesToState(hydrusState, [
+        {
+          ...createMockFileWithTags(['tag1', 'artist:alice'], { file_id: 1, hash }),
+          known_urls: ['https://www.pixiv.net/en/artworks/12345'],
+          notes: { 'note1': 'Test note content' },
+        },
+      ]);
+      await syncFromHydrus();
+
+      const post = await prisma.post.findUnique({ where: { hash } });
+      expect(post).not.toBeNull();
+
+      // Get original relation records
+      const originalPostTags = await prisma.postTag.findMany({
+        where: { postId: post!.id },
+        orderBy: { tagId: 'asc' },
+      });
+      const originalPostGroups = await prisma.postGroup.findMany({
+        where: { postId: post!.id },
+        orderBy: { groupId: 'asc' },
+      });
+      const originalNotes = await prisma.note.findMany({
+        where: { postId: post!.id },
+        orderBy: { name: 'asc' },
+      });
+
+      expect(originalPostTags.length).toBeGreaterThan(0);
+      expect(originalPostGroups.length).toBeGreaterThan(0);
+      expect(originalNotes.length).toBeGreaterThan(0);
+
+      // Re-sync with SAME data (no changes to tags/groups/notes)
+      await syncFromHydrus();
+
+      // Get relation records after re-sync
+      const afterPostTags = await prisma.postTag.findMany({
+        where: { postId: post!.id },
+        orderBy: { tagId: 'asc' },
+      });
+      const afterPostGroups = await prisma.postGroup.findMany({
+        where: { postId: post!.id },
+        orderBy: { groupId: 'asc' },
+      });
+      const afterNotes = await prisma.note.findMany({
+        where: { postId: post!.id },
+        orderBy: { name: 'asc' },
+      });
+
+      // Relations should be identical (not recreated)
+      expect(afterPostTags).toEqual(originalPostTags);
+      expect(afterPostGroups).toEqual(originalPostGroups);
+      expect(afterNotes.map(n => ({ name: n.name, content: n.content })))
+        .toEqual(originalNotes.map(n => ({ name: n.name, content: n.content })));
+    });
+
     it('should handle empty Hydrus library', async () => {
       // No files added to state
       const result = await syncFromHydrus();

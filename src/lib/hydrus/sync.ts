@@ -10,7 +10,7 @@ import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { syncLog } from "@/lib/logger";
 
-const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
+const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
 const MAX_RETRIES = 3; // Max retries for transient failures
 
@@ -416,40 +416,79 @@ async function processFileSafe(
       },
     });
 
-    // Clear and re-add tags
-    await tx.postTag.deleteMany({ where: { postId: post.id } });
-    if (tagIds.length > 0) {
-      await tx.postTag.createMany({
-        data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
-        skipDuplicates: true,
-      });
+    // Update tags only if changed
+    const existingTagIds = (await tx.postTag.findMany({
+      where: { postId: post.id },
+      select: { tagId: true },
+    })).map(t => t.tagId);
+
+    const sortedExistingTagIds = [...existingTagIds].sort((a, b) => a - b);
+    const sortedNewTagIds = [...tagIds].sort((a, b) => a - b);
+    const tagsChanged = sortedExistingTagIds.length !== sortedNewTagIds.length ||
+      sortedExistingTagIds.some((id, i) => id !== sortedNewTagIds[i]);
+
+    if (tagsChanged) {
+      await tx.postTag.deleteMany({ where: { postId: post.id } });
+      if (tagIds.length > 0) {
+        await tx.postTag.createMany({
+          data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
+          skipDuplicates: true,
+        });
+      }
     }
 
-    // Clear and re-add groups
-    await tx.postGroup.deleteMany({ where: { postId: post.id } });
-    if (groupData.length > 0) {
-      await tx.postGroup.createMany({
-        data: groupData.map((g) => ({
-          postId: post.id,
-          groupId: g.groupId,
-          position: g.position,
-        })),
-        skipDuplicates: true,
-      });
+    // Update groups only if changed
+    const existingGroups = await tx.postGroup.findMany({
+      where: { postId: post.id },
+      select: { groupId: true, position: true },
+    });
+
+    const groupKey = (g: { groupId: number; position: number }) => `${g.groupId}:${g.position}`;
+    const existingGroupKeys = new Set(existingGroups.map(groupKey));
+    const newGroupKeys = new Set(groupData.map(groupKey));
+    const groupsChanged = existingGroupKeys.size !== newGroupKeys.size ||
+      [...existingGroupKeys].some(k => !newGroupKeys.has(k));
+
+    if (groupsChanged) {
+      await tx.postGroup.deleteMany({ where: { postId: post.id } });
+      if (groupData.length > 0) {
+        await tx.postGroup.createMany({
+          data: groupData.map((g) => ({
+            postId: post.id,
+            groupId: g.groupId,
+            position: g.position,
+          })),
+          skipDuplicates: true,
+        });
+      }
     }
 
-    // Sync notes
-    await tx.note.deleteMany({ where: { postId: post.id } });
+    // Update notes only if changed
+    const existingNotes = await tx.note.findMany({
+      where: { postId: post.id },
+      select: { name: true, content: true },
+    });
+
     const notes = metadata.notes || {};
     const noteEntries = Object.entries(notes);
-    if (noteEntries.length > 0) {
-      await tx.note.createMany({
-        data: noteEntries.map(([name, content]) => ({
-          postId: post.id,
-          name,
-          content,
-        })),
-      });
+
+    const noteKey = (n: { name: string; content: string }) => `${n.name}:${n.content}`;
+    const existingNoteKeys = new Set(existingNotes.map(noteKey));
+    const newNoteKeys = new Set(noteEntries.map(([name, content]) => noteKey({ name, content })));
+    const notesChanged = existingNoteKeys.size !== newNoteKeys.size ||
+      [...existingNoteKeys].some(k => !newNoteKeys.has(k));
+
+    if (notesChanged) {
+      await tx.note.deleteMany({ where: { postId: post.id } });
+      if (noteEntries.length > 0) {
+        await tx.note.createMany({
+          data: noteEntries.map(([name, content]) => ({
+            postId: post.id,
+            name,
+            content,
+          })),
+        });
+      }
     }
   }, {
     timeout: 60000, // 60s for files with many tags/groups
