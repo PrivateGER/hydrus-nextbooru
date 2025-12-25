@@ -10,7 +10,7 @@ import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { syncLog } from "@/lib/logger";
 
-const BATCH_SIZE = 512;
+export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
 const MAX_RETRIES = 3; // Max retries for transient failures
 

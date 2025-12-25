@@ -9,6 +9,7 @@ import type { SetupServer } from 'msw/node';
 
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
 let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
+let BATCH_SIZE: number;
 
 describe('syncFromHydrus (Integration)', () => {
   let server: SetupServer;
@@ -22,6 +23,7 @@ describe('syncFromHydrus (Integration)', () => {
     const syncModule = await import('@/lib/hydrus/sync');
     syncFromHydrus = syncModule.syncFromHydrus;
     getSyncState = syncModule.getSyncState;
+    BATCH_SIZE = syncModule.BATCH_SIZE;
   });
 
   afterAll(async () => {
@@ -289,8 +291,9 @@ describe('syncFromHydrus (Integration)', () => {
     it('should stop processing when cancelled', async () => {
       const prisma = getTestPrisma();
 
-      // Setup many files to ensure multiple batches
-      const files = Array.from({ length: 300 }, (_, i) =>
+      // Setup enough files to ensure multiple batches (BATCH_SIZE + some extra)
+      const fileCount = BATCH_SIZE + Math.ceil(BATCH_SIZE / 2);
+      const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
@@ -312,7 +315,7 @@ describe('syncFromHydrus (Integration)', () => {
 
       expect(result.phase).toBe('complete');
       // Should have processed less than total (cancelled mid-way)
-      expect(result.processedFiles).toBeLessThan(300);
+      expect(result.processedFiles).toBeLessThan(fileCount);
     });
   });
 
@@ -334,8 +337,9 @@ describe('syncFromHydrus (Integration)', () => {
     });
 
     it('should track batch progress', async () => {
-      // Create enough files for multiple batches (batch size is 256)
-      const files = Array.from({ length: 300 }, (_, i) =>
+      // Create enough files for multiple batches (BATCH_SIZE + some extra to get 2 batches)
+      const fileCount = BATCH_SIZE + Math.ceil(BATCH_SIZE / 2);
+      const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
