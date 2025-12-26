@@ -9,7 +9,9 @@ import type { SetupServer } from 'msw/node';
 
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
 let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
-let BATCH_SIZE: number;
+
+// Use a small batch size for faster tests
+const TEST_BATCH_SIZE = 10;
 
 describe('syncFromHydrus (Integration)', () => {
   let server: SetupServer;
@@ -23,7 +25,6 @@ describe('syncFromHydrus (Integration)', () => {
     const syncModule = await import('@/lib/hydrus/sync');
     syncFromHydrus = syncModule.syncFromHydrus;
     getSyncState = syncModule.getSyncState;
-    BATCH_SIZE = syncModule.BATCH_SIZE;
   });
 
   afterAll(async () => {
@@ -291,21 +292,21 @@ describe('syncFromHydrus (Integration)', () => {
     it('should stop processing when cancelled', async () => {
       const prisma = getTestPrisma();
 
-      // Setup enough files to ensure multiple batches (BATCH_SIZE + some extra)
-      const fileCount = BATCH_SIZE + Math.ceil(BATCH_SIZE / 2);
+      // Setup enough files to ensure multiple batches (just over TEST_BATCH_SIZE)
+      const fileCount = TEST_BATCH_SIZE + 5;
       const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
 
       // Add delay to metadata fetch so we have time to cancel
-      hydrusState.metadataDelayMs = 100;
+      hydrusState.metadataDelayMs = 20;
 
-      // Start sync
-      const syncPromise = syncFromHydrus();
+      // Start sync with small batch size
+      const syncPromise = syncFromHydrus({ batchSize: TEST_BATCH_SIZE });
 
       // Cancel after short delay
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 10));
       await prisma.syncState.updateMany({
         where: { status: 'running' },
         data: { status: 'cancelled' },
@@ -337,8 +338,8 @@ describe('syncFromHydrus (Integration)', () => {
     });
 
     it('should track batch progress', async () => {
-      // Create enough files for multiple batches (BATCH_SIZE + some extra to get 2 batches)
-      const fileCount = BATCH_SIZE + Math.ceil(BATCH_SIZE / 2);
+      // Create enough files for 2 batches (just over TEST_BATCH_SIZE)
+      const fileCount = TEST_BATCH_SIZE + 5;
       const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
@@ -347,6 +348,7 @@ describe('syncFromHydrus (Integration)', () => {
       const progressUpdates: { currentBatch: number; totalBatches: number }[] = [];
 
       await syncFromHydrus({
+        batchSize: TEST_BATCH_SIZE,
         onProgress: (progress) => {
           if (progress.currentBatch > 0) {
             progressUpdates.push({

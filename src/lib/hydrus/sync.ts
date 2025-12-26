@@ -38,6 +38,7 @@ export interface SyncProgress {
 export interface SyncOptions {
   tags?: string[]; // Filter by specific tags, defaults to system:everything
   onProgress?: (progress: SyncProgress) => void;
+  batchSize?: number; // Override batch size (for testing)
 }
 
 // =============================================================================
@@ -594,6 +595,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
   const onProgress = options.onProgress || (() => {});
   const searchTags = options.tags || ["system:everything"];
+  const batchSize = options.batchSize ?? BATCH_SIZE;
 
   syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
 
@@ -619,7 +621,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const fileIds = searchResult.file_ids;
     const hydrusHashes = new Set(searchResult.hashes || []);
     progress.totalFiles = fileIds.length;
-    progress.totalBatches = Math.ceil(fileIds.length / BATCH_SIZE);
+    progress.totalBatches = Math.ceil(fileIds.length / batchSize);
     syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
     onProgress(progress);
 
@@ -633,7 +635,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     if (fileIds.length > 0) {
       // Start fetching first batch
       // Attach .catch() to prevent unhandled rejection if it fails before we await it
-      const firstBatchIds = fileIds.slice(0, BATCH_SIZE);
+      const firstBatchIds = fileIds.slice(0, batchSize);
       const firstFetchPromise = client.getFileMetadata({
         fileIds: firstBatchIds,
         includeBlurhash: true,
@@ -642,7 +644,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       firstFetchPromise.catch(() => {});
       let currentFetchPromise: Promise<{ metadata: HydrusFileMetadata[] }> = firstFetchPromise;
 
-      for (let i = 0; i < fileIds.length; i += BATCH_SIZE) {
+      for (let i = 0; i < fileIds.length; i += batchSize) {
         // Check for cancellation at start of each batch
         if (await isSyncCancelled()) {
           progress.phase = "complete";
@@ -650,11 +652,11 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
           return progress;
         }
 
-        progress.currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+        progress.currentBatch = Math.floor(i / batchSize) + 1;
         onProgress(progress);
 
-        const batchSize = Math.min(BATCH_SIZE, fileIds.length - i);
-        syncLog.debug({ batch: progress.currentBatch, batchSize }, 'Processing batch');
+        const currentBatchSize = Math.min(batchSize, fileIds.length - i);
+        syncLog.debug({ batch: progress.currentBatch, batchSize: currentBatchSize }, 'Processing batch');
 
         try {
           // Wait for current batch metadata (was started in previous iteration or before loop)
@@ -662,9 +664,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
           // Start fetching next batch while we process current (pipelining)
           // Attach .catch() to prevent unhandled rejection if processing fails
-          const nextBatchStart = i + BATCH_SIZE;
+          const nextBatchStart = i + batchSize;
           if (nextBatchStart < fileIds.length) {
-            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + batchSize);
             const fetchPromise = client.getFileMetadata({
               fileIds: nextBatchIds,
               includeBlurhash: true,
@@ -690,9 +692,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
           // If fetch failed, start fetching the next batch anyway
           // Attach no-op .catch() to prevent unhandled rejection if loop ends before we await it
-          const nextBatchStart = i + BATCH_SIZE;
+          const nextBatchStart = i + batchSize;
           if (nextBatchStart < fileIds.length) {
-            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + batchSize);
             const fetchPromise = client.getFileMetadata({
               fileIds: nextBatchIds,
               includeBlurhash: true,
