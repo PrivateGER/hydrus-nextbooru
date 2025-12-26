@@ -10,6 +10,9 @@ import type { SetupServer } from 'msw/node';
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
 let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
 
+// Use a small batch size for faster tests
+const TEST_BATCH_SIZE = 10;
+
 describe('syncFromHydrus (Integration)', () => {
   let server: SetupServer;
   let hydrusState: MockHydrusState;
@@ -106,6 +109,65 @@ describe('syncFromHydrus (Integration)', () => {
         include: { tag: true },
       });
       expect(postTags).toHaveLength(2);
+    });
+
+    it('should skip unchanged relations on re-sync', async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      // First sync with tags and URL (for groups)
+      addFilesToState(hydrusState, [
+        {
+          ...createMockFileWithTags(['tag1', 'artist:alice'], { file_id: 1, hash }),
+          known_urls: ['https://www.pixiv.net/en/artworks/12345'],
+          notes: { 'note1': 'Test note content' },
+        },
+      ]);
+      await syncFromHydrus();
+
+      const post = await prisma.post.findUnique({ where: { hash } });
+      expect(post).not.toBeNull();
+
+      // Get original relation records
+      const originalPostTags = await prisma.postTag.findMany({
+        where: { postId: post!.id },
+        orderBy: { tagId: 'asc' },
+      });
+      const originalPostGroups = await prisma.postGroup.findMany({
+        where: { postId: post!.id },
+        orderBy: { groupId: 'asc' },
+      });
+      const originalNotes = await prisma.note.findMany({
+        where: { postId: post!.id },
+        orderBy: { name: 'asc' },
+      });
+
+      expect(originalPostTags.length).toBeGreaterThan(0);
+      expect(originalPostGroups.length).toBeGreaterThan(0);
+      expect(originalNotes.length).toBeGreaterThan(0);
+
+      // Re-sync with SAME data (no changes to tags/groups/notes)
+      await syncFromHydrus();
+
+      // Get relation records after re-sync
+      const afterPostTags = await prisma.postTag.findMany({
+        where: { postId: post!.id },
+        orderBy: { tagId: 'asc' },
+      });
+      const afterPostGroups = await prisma.postGroup.findMany({
+        where: { postId: post!.id },
+        orderBy: { groupId: 'asc' },
+      });
+      const afterNotes = await prisma.note.findMany({
+        where: { postId: post!.id },
+        orderBy: { name: 'asc' },
+      });
+
+      // Relations should be identical (not recreated)
+      expect(afterPostTags).toEqual(originalPostTags);
+      expect(afterPostGroups).toEqual(originalPostGroups);
+      expect(afterNotes.map(n => ({ name: n.name, content: n.content })))
+        .toEqual(originalNotes.map(n => ({ name: n.name, content: n.content })));
     });
 
     it('should handle empty Hydrus library', async () => {
@@ -230,20 +292,21 @@ describe('syncFromHydrus (Integration)', () => {
     it('should stop processing when cancelled', async () => {
       const prisma = getTestPrisma();
 
-      // Setup many files to ensure multiple batches
-      const files = Array.from({ length: 300 }, (_, i) =>
+      // Setup enough files to ensure multiple batches (just over TEST_BATCH_SIZE)
+      const fileCount = TEST_BATCH_SIZE + 5;
+      const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
 
       // Add delay to metadata fetch so we have time to cancel
-      hydrusState.metadataDelayMs = 100;
+      hydrusState.metadataDelayMs = 20;
 
-      // Start sync
-      const syncPromise = syncFromHydrus();
+      // Start sync with small batch size
+      const syncPromise = syncFromHydrus({ batchSize: TEST_BATCH_SIZE });
 
       // Cancel after short delay
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 10));
       await prisma.syncState.updateMany({
         where: { status: 'running' },
         data: { status: 'cancelled' },
@@ -253,7 +316,7 @@ describe('syncFromHydrus (Integration)', () => {
 
       expect(result.phase).toBe('complete');
       // Should have processed less than total (cancelled mid-way)
-      expect(result.processedFiles).toBeLessThan(300);
+      expect(result.processedFiles).toBeLessThan(fileCount);
     });
   });
 
@@ -275,8 +338,9 @@ describe('syncFromHydrus (Integration)', () => {
     });
 
     it('should track batch progress', async () => {
-      // Create enough files for multiple batches (batch size is 256)
-      const files = Array.from({ length: 300 }, (_, i) =>
+      // Create enough files for 2 batches (just over TEST_BATCH_SIZE)
+      const fileCount = TEST_BATCH_SIZE + 5;
+      const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
@@ -284,6 +348,7 @@ describe('syncFromHydrus (Integration)', () => {
       const progressUpdates: { currentBatch: number; totalBatches: number }[] = [];
 
       await syncFromHydrus({
+        batchSize: TEST_BATCH_SIZE,
         onProgress: (progress) => {
           if (progress.currentBatch > 0) {
             progressUpdates.push({

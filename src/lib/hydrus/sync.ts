@@ -10,7 +10,7 @@ import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { syncLog } from "@/lib/logger";
 
-const BATCH_SIZE = 256; // Hydrus recommends batches of 256 for metadata
+export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
 const MAX_RETRIES = 3; // Max retries for transient failures
 
@@ -38,6 +38,7 @@ export interface SyncProgress {
 export interface SyncOptions {
   tags?: string[]; // Filter by specific tags, defaults to system:everything
   onProgress?: (progress: SyncProgress) => void;
+  batchSize?: number; // Override batch size (for testing)
 }
 
 // =============================================================================
@@ -416,40 +417,79 @@ async function processFileSafe(
       },
     });
 
-    // Clear and re-add tags
-    await tx.postTag.deleteMany({ where: { postId: post.id } });
-    if (tagIds.length > 0) {
-      await tx.postTag.createMany({
-        data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
-        skipDuplicates: true,
-      });
+    // Update tags only if changed
+    const existingTagIds = (await tx.postTag.findMany({
+      where: { postId: post.id },
+      select: { tagId: true },
+    })).map(t => t.tagId);
+
+    const sortedExistingTagIds = [...existingTagIds].sort((a, b) => a - b);
+    const sortedNewTagIds = [...tagIds].sort((a, b) => a - b);
+    const tagsChanged = sortedExistingTagIds.length !== sortedNewTagIds.length ||
+      sortedExistingTagIds.some((id, i) => id !== sortedNewTagIds[i]);
+
+    if (tagsChanged) {
+      await tx.postTag.deleteMany({ where: { postId: post.id } });
+      if (tagIds.length > 0) {
+        await tx.postTag.createMany({
+          data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
+          skipDuplicates: true,
+        });
+      }
     }
 
-    // Clear and re-add groups
-    await tx.postGroup.deleteMany({ where: { postId: post.id } });
-    if (groupData.length > 0) {
-      await tx.postGroup.createMany({
-        data: groupData.map((g) => ({
-          postId: post.id,
-          groupId: g.groupId,
-          position: g.position,
-        })),
-        skipDuplicates: true,
-      });
+    // Update groups only if changed
+    const existingGroups = await tx.postGroup.findMany({
+      where: { postId: post.id },
+      select: { groupId: true, position: true },
+    });
+
+    const groupKey = (g: { groupId: number; position: number }) => `${g.groupId}:${g.position}`;
+    const existingGroupKeys = new Set(existingGroups.map(groupKey));
+    const newGroupKeys = new Set(groupData.map(groupKey));
+    const groupsChanged = existingGroupKeys.size !== newGroupKeys.size ||
+      [...existingGroupKeys].some(k => !newGroupKeys.has(k));
+
+    if (groupsChanged) {
+      await tx.postGroup.deleteMany({ where: { postId: post.id } });
+      if (groupData.length > 0) {
+        await tx.postGroup.createMany({
+          data: groupData.map((g) => ({
+            postId: post.id,
+            groupId: g.groupId,
+            position: g.position,
+          })),
+          skipDuplicates: true,
+        });
+      }
     }
 
-    // Sync notes
-    await tx.note.deleteMany({ where: { postId: post.id } });
+    // Update notes only if changed
+    const existingNotes = await tx.note.findMany({
+      where: { postId: post.id },
+      select: { name: true, content: true },
+    });
+
     const notes = metadata.notes || {};
     const noteEntries = Object.entries(notes);
-    if (noteEntries.length > 0) {
-      await tx.note.createMany({
-        data: noteEntries.map(([name, content]) => ({
-          postId: post.id,
-          name,
-          content,
-        })),
-      });
+
+    const noteKey = (n: { name: string; content: string }) => `${n.name}:${n.content}`;
+    const existingNoteKeys = new Set(existingNotes.map(noteKey));
+    const newNoteKeys = new Set(noteEntries.map(([name, content]) => noteKey({ name, content })));
+    const notesChanged = existingNoteKeys.size !== newNoteKeys.size ||
+      [...existingNoteKeys].some(k => !newNoteKeys.has(k));
+
+    if (notesChanged) {
+      await tx.note.deleteMany({ where: { postId: post.id } });
+      if (noteEntries.length > 0) {
+        await tx.note.createMany({
+          data: noteEntries.map(([name, content]) => ({
+            postId: post.id,
+            name,
+            content,
+          })),
+        });
+      }
     }
   }, {
     timeout: 60000, // 60s for files with many tags/groups
@@ -555,6 +595,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
   const onProgress = options.onProgress || (() => {});
   const searchTags = options.tags || ["system:everything"];
+  const batchSize = options.batchSize ?? BATCH_SIZE;
 
   syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
 
@@ -580,7 +621,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const fileIds = searchResult.file_ids;
     const hydrusHashes = new Set(searchResult.hashes || []);
     progress.totalFiles = fileIds.length;
-    progress.totalBatches = Math.ceil(fileIds.length / BATCH_SIZE);
+    progress.totalBatches = Math.ceil(fileIds.length / batchSize);
     syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
     onProgress(progress);
 
@@ -594,7 +635,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     if (fileIds.length > 0) {
       // Start fetching first batch
       // Attach .catch() to prevent unhandled rejection if it fails before we await it
-      const firstBatchIds = fileIds.slice(0, BATCH_SIZE);
+      const firstBatchIds = fileIds.slice(0, batchSize);
       const firstFetchPromise = client.getFileMetadata({
         fileIds: firstBatchIds,
         includeBlurhash: true,
@@ -603,7 +644,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       firstFetchPromise.catch(() => {});
       let currentFetchPromise: Promise<{ metadata: HydrusFileMetadata[] }> = firstFetchPromise;
 
-      for (let i = 0; i < fileIds.length; i += BATCH_SIZE) {
+      for (let i = 0; i < fileIds.length; i += batchSize) {
         // Check for cancellation at start of each batch
         if (await isSyncCancelled()) {
           progress.phase = "complete";
@@ -611,11 +652,11 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
           return progress;
         }
 
-        progress.currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+        progress.currentBatch = Math.floor(i / batchSize) + 1;
         onProgress(progress);
 
-        const batchSize = Math.min(BATCH_SIZE, fileIds.length - i);
-        syncLog.debug({ batch: progress.currentBatch, batchSize }, 'Processing batch');
+        const currentBatchSize = Math.min(batchSize, fileIds.length - i);
+        syncLog.debug({ batch: progress.currentBatch, batchSize: currentBatchSize }, 'Processing batch');
 
         try {
           // Wait for current batch metadata (was started in previous iteration or before loop)
@@ -623,9 +664,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
           // Start fetching next batch while we process current (pipelining)
           // Attach .catch() to prevent unhandled rejection if processing fails
-          const nextBatchStart = i + BATCH_SIZE;
+          const nextBatchStart = i + batchSize;
           if (nextBatchStart < fileIds.length) {
-            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + batchSize);
             const fetchPromise = client.getFileMetadata({
               fileIds: nextBatchIds,
               includeBlurhash: true,
@@ -651,9 +692,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
           // If fetch failed, start fetching the next batch anyway
           // Attach no-op .catch() to prevent unhandled rejection if loop ends before we await it
-          const nextBatchStart = i + BATCH_SIZE;
+          const nextBatchStart = i + batchSize;
           if (nextBatchStart < fileIds.length) {
-            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + BATCH_SIZE);
+            const nextBatchIds = fileIds.slice(nextBatchStart, nextBatchStart + batchSize);
             const fetchPromise = client.getFileMetadata({
               fileIds: nextBatchIds,
               includeBlurhash: true,
