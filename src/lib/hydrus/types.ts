@@ -25,7 +25,7 @@ export interface HydrusFileMetadata {
   thumbnail_height?: number;
   duration: number | null; // milliseconds
   time_modified: number | null;
-  has_audio: boolean;
+  has_audio: boolean | null;
   blurhash: string | null;
   pixel_hash: string | null;
   num_frames: number | null;
