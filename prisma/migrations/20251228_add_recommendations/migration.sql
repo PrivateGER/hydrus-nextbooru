@@ -1,4 +1,3 @@
--- CreateTable
 CREATE TABLE "PostRecommendation" (
     "id" SERIAL NOT NULL,
     "postId" INTEGER NOT NULL,
@@ -8,23 +7,21 @@ CREATE TABLE "PostRecommendation" (
     CONSTRAINT "PostRecommendation_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
 CREATE INDEX "PostRecommendation_postId_idx" ON "PostRecommendation"("postId");
 
--- CreateIndex
 CREATE UNIQUE INDEX "PostRecommendation_postId_recommendedId_key" ON "PostRecommendation"("postId", "recommendedId");
 
--- AddForeignKey
 ALTER TABLE "PostRecommendation" ADD CONSTRAINT "PostRecommendation_postId_fkey" FOREIGN KEY ("postId") REFERENCES "Post"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "PostRecommendation" ADD CONSTRAINT "PostRecommendation_recommendedId_fkey" FOREIGN KEY ("recommendedId") REFERENCES "Post"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- Create PL/pgSQL function to compute recommendations for a single post
+-- PL/pgSQL function to compute recommendations for a single post
 -- Uses IDF-weighted tag similarity, excludes posts in same groups
+-- p_total_posts: Optional - pass total post count to avoid redundant COUNT(*) in batch processing
 CREATE OR REPLACE FUNCTION compute_post_recommendations(
   p_post_id INTEGER,
-  p_limit INTEGER DEFAULT 10
+  p_limit INTEGER DEFAULT 10,
+  p_total_posts INTEGER DEFAULT NULL
 ) RETURNS TABLE (
   recommended_id INTEGER,
   score DOUBLE PRECISION
@@ -32,18 +29,24 @@ CREATE OR REPLACE FUNCTION compute_post_recommendations(
 DECLARE
   v_total_posts INTEGER;
 BEGIN
-  -- Get total post count for IDF calculation
-  SELECT COUNT(*) INTO v_total_posts FROM "Post";
+  -- Use provided total or calculate it
+  v_total_posts := COALESCE(p_total_posts, (SELECT COUNT(*) FROM "Post"));
+
+  -- Early exit if no posts exist
+  IF v_total_posts = 0 THEN
+    RETURN;
+  END IF;
 
   RETURN QUERY
   WITH post_tags AS (
     SELECT "tagId" FROM "PostTag" WHERE "postId" = p_post_id
   ),
   tag_weights AS (
-    SELECT t.id, LN(v_total_posts::FLOAT / NULLIF(t."postCount", 0)) AS weight
+    -- Use GREATEST to prevent negative weights from stale postCount data
+    SELECT t.id, GREATEST(0, LN(v_total_posts::FLOAT / t."postCount")) AS weight
     FROM "Tag" t
-    WHERE t.id IN (SELECT "tagId" FROM post_tags)
-      AND t."postCount" > 0
+    JOIN post_tags pt ON t.id = pt."tagId"
+    WHERE t."postCount" > 0
   ),
   same_group_posts AS (
     SELECT DISTINCT pg2."postId"
@@ -56,60 +59,45 @@ BEGIN
     FROM "PostTag" pt
     JOIN tag_weights tw ON pt."tagId" = tw.id
     WHERE pt."postId" != p_post_id
-      AND pt."postId" NOT IN (SELECT "postId" FROM same_group_posts)
+      AND NOT EXISTS (
+        SELECT 1 FROM same_group_posts sgp WHERE sgp."postId" = pt."postId"
+      )
     GROUP BY pt."postId"
     ORDER BY SUM(tw.weight) DESC
     LIMIT p_limit
   )
   SELECT c."postId", c.score FROM candidates c;
 END;
-$$ LANGUAGE plpgsql PARALLEL SAFE;
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
--- Create PL/pgSQL function to pregenerate recommendations for all posts
--- Processes in batches and returns progress
+-- PL/pgSQL function to pregenerate recommendations for all posts
+-- Uses set-based LATERAL join for parallelizable execution
 CREATE OR REPLACE FUNCTION pregen_all_recommendations(
-  p_limit INTEGER DEFAULT 10,
-  p_batch_size INTEGER DEFAULT 100
+  p_limit INTEGER DEFAULT 10
 ) RETURNS TABLE (
-  processed INTEGER,
-  total INTEGER
+  processed BIGINT,
+  total BIGINT
 ) AS $$
 DECLARE
   v_total INTEGER;
-  v_processed INTEGER := 0;
-  v_post_id INTEGER;
-  v_cursor CURSOR FOR SELECT id FROM "Post" ORDER BY id;
+  v_inserted BIGINT;
 BEGIN
-  SELECT COUNT(*) INTO v_total FROM "Post";
+  SELECT COUNT(*)::INTEGER INTO v_total FROM "Post";
 
-  -- Clear existing recommendations
   DELETE FROM "PostRecommendation";
 
-  -- Process posts one by one
-  OPEN v_cursor;
-  LOOP
-    FETCH v_cursor INTO v_post_id;
-    EXIT WHEN NOT FOUND;
+  -- Insert all recommendations in one set-based operation using LATERAL
+  -- Pass v_total to avoid redundant COUNT(*) per post
+  INSERT INTO "PostRecommendation" ("postId", "recommendedId", score)
+  SELECT p.id, rec.recommended_id, rec.score
+  FROM "Post" p
+  CROSS JOIN LATERAL compute_post_recommendations(p.id, p_limit, v_total) rec;
 
-    -- Insert recommendations for this post
-    INSERT INTO "PostRecommendation" ("postId", "recommendedId", score)
-    SELECT v_post_id, recommended_id, cpr.score
-    FROM compute_post_recommendations(v_post_id, p_limit) cpr;
+  GET DIAGNOSTICS v_inserted = ROW_COUNT;
 
-    v_processed := v_processed + 1;
-
-    -- Yield progress periodically
-    IF v_processed % p_batch_size = 0 THEN
-      processed := v_processed;
-      total := v_total;
-      RETURN NEXT;
-    END IF;
-  END LOOP;
-  CLOSE v_cursor;
-
-  -- Final result
-  processed := v_processed;
+  -- Return stats
+  processed := v_total;
   total := v_total;
   RETURN NEXT;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql VOLATILE;

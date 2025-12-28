@@ -321,6 +321,7 @@ export default function AdminPage() {
   // Maintenance state
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isRegeneratingRecs, setIsRegeneratingRecs] = useState(false);
+  const recsWasRunningRef = useRef(false);
 
   // Translation settings state
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
@@ -366,10 +367,10 @@ export default function AdminPage() {
   }, []);
 
   // Show success animation helper
-  const triggerSuccessAnimation = () => {
+  const triggerSuccessAnimation = useCallback(() => {
     setShowSuccessAnimation(true);
     setTimeout(() => setShowSuccessAnimation(false), 1500);
-  };
+  }, []);
 
   // Handlers
   const handleLogout = async () => {
@@ -431,22 +432,61 @@ export default function AdminPage() {
     }
   }, []);
 
+  const fetchRecsStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/recommendations");
+      const data = await response.json();
+      const isRunning = data.status === "running";
+
+      // Detect transition from running to completed (for page refresh case)
+      if (recsWasRunningRef.current && !isRunning) {
+        if (data.status === "completed") {
+          triggerSuccessAnimation();
+          setMessage({
+            type: "success",
+            text: `Recommendations generated for ${data.postsWithRecommendations.toLocaleString()} posts!`,
+          });
+        } else if (data.status === "error") {
+          setMessage({
+            type: "error",
+            text: "Recommendation generation failed. Check logs for details.",
+          });
+        }
+      }
+
+      recsWasRunningRef.current = isRunning;
+      setIsRegeneratingRecs(isRunning);
+    } catch (error) {
+      console.error("Error fetching recommendations status:", error);
+    }
+  }, [triggerSuccessAnimation]);
+
+  // Initial fetch on mount
   useEffect(() => {
     fetchStatus();
     fetchThumbStats();
     fetchTranslationSettings();
+    fetchRecsStatus();
+  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, fetchRecsStatus]);
 
+  // Polling when operations are running - use refs to avoid recreating interval
+  const isSyncingRef = useRef(isSyncing);
+  const isGeneratingThumbsRef = useRef(isGeneratingThumbs);
+  const isRegeneratingRecsRef = useRef(isRegeneratingRecs);
+
+  useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
+  useEffect(() => { isGeneratingThumbsRef.current = isGeneratingThumbs; }, [isGeneratingThumbs]);
+  useEffect(() => { isRegeneratingRecsRef.current = isRegeneratingRecs; }, [isRegeneratingRecs]);
+
+  useEffect(() => {
     const interval = setInterval(() => {
-      if (isSyncing) {
-        fetchStatus();
-      }
-      if (isGeneratingThumbs) {
-        fetchThumbStats();
-      }
+      if (isSyncingRef.current) fetchStatus();
+      if (isGeneratingThumbsRef.current) fetchThumbStats();
+      if (isRegeneratingRecsRef.current) fetchRecsStatus();
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, isSyncing, isGeneratingThumbs]);
+  }, [fetchStatus, fetchThumbStats, fetchRecsStatus]);
 
   const startSync = async (tags?: string[]) => {
     setIsSyncing(true);
@@ -662,6 +702,7 @@ export default function AdminPage() {
 
   const handleRegenerateRecommendations = async () => {
     setIsRegeneratingRecs(true);
+    recsWasRunningRef.current = true;
     setMessage(null);
 
     try {
@@ -672,28 +713,11 @@ export default function AdminPage() {
         throw new Error(data.error || "Failed to start recommendation generation");
       }
 
-      setMessage({ type: "success", text: "Generating recommendations in background..." });
-
-      // Poll for completion
-      const pollInterval = setInterval(async () => {
-        const statusResponse = await fetch("/api/admin/recommendations");
-        const statusData = await statusResponse.json();
-
-        if (statusData.status !== "running") {
-          clearInterval(pollInterval);
-          setIsRegeneratingRecs(false);
-
-          if (statusData.lastResult) {
-            triggerSuccessAnimation();
-            setMessage({
-              type: "success",
-              text: `Recommendations generated for ${statusData.lastResult.processed.toLocaleString()} posts!`,
-            });
-          }
-        }
-      }, 2000);
+      setMessage({ type: "success", text: "Generating recommendations..." });
+      // Polling is handled by useEffect via fetchRecsStatus
     } catch (error) {
       setIsRegeneratingRecs(false);
+      recsWasRunningRef.current = false;
       setMessage({
         type: "error",
         text: error instanceof Error ? error.message : "Failed to generate recommendations",
@@ -1164,7 +1188,7 @@ export default function AdminPage() {
           Regenerate
         </Button>
 
-        <InfoBox variant="tip" className={"mt-2"}>Run this if similar posts aren&apos;t showing or seem outdated.</InfoBox>
+        <InfoBox variant="tip" className={"mt-2"}>Run this if similar posts aren&apos;t showing or seem outdated. This may take a long time.</InfoBox>
       </Card>
     </div>
   );

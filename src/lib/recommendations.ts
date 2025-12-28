@@ -4,6 +4,25 @@ import { syncLog } from "@/lib/logger";
 export interface RecommendationProgress {
   processed: number;
   total: number;
+  status: "idle" | "running" | "completed" | "error";
+  error?: string;
+}
+
+/**
+ * Get the current pregen status from the Settings table.
+ */
+export async function getPregenProgress(): Promise<RecommendationProgress> {
+  const setting = await prisma.settings.findUnique({
+    where: { key: "recommendations.status" },
+  });
+
+  const status = (setting?.value as RecommendationProgress["status"]) || "idle";
+
+  return {
+    processed: 0,
+    total: 0,
+    status,
+  };
 }
 
 export interface RecommendedPost {
@@ -18,40 +37,81 @@ export interface RecommendedPost {
 
 /**
  * Pregenerate recommendations for all posts using the PL/pgSQL function.
- * This clears existing recommendations and computes new ones based on
- * IDF-weighted tag similarity.
+ * Uses LATERAL join for fast set-based processing.
  *
  * @param limit - Max recommendations per post (default: 10)
- * @param batchSize - Progress reporting interval (default: 100)
  * @returns Final progress with total processed count
  */
 export async function pregenRecommendations(
-  limit = 10,
-  batchSize = 100
+  limit = 10
 ): Promise<RecommendationProgress> {
-  syncLog.info({ limit, batchSize }, "Starting recommendation pregeneration");
+  // Check if already running
+  const currentStatus = await getPregenProgress();
+  syncLog.info({ currentStatus }, "Current pregen status before starting");
+  if (currentStatus.status === "running") {
+    syncLog.warn({}, "Recommendation pregen already running");
+    return currentStatus;
+  }
 
+  syncLog.info({ limit }, "Starting recommendation pregeneration");
   const startTime = Date.now();
 
-  // Call the PL/pgSQL function - it returns progress rows periodically
-  const results = await prisma.$queryRaw<RecommendationProgress[]>`
-    SELECT * FROM pregen_all_recommendations(${limit}, ${batchSize})
-  `;
+  try {
+    // Mark as running in Settings table
+    await prisma.settings.upsert({
+      where: { key: "recommendations.status" },
+      create: { key: "recommendations.status", value: "running" },
+      update: { value: "running" },
+    });
 
-  // Return the final result (last row)
-  const finalResult = results[results.length - 1] || { processed: 0, total: 0 };
+    // Call the PL/pgSQL function - uses LATERAL join for fast set-based processing
+    syncLog.info({}, "Calling pregen_all_recommendations...");
+    const results = await prisma.$queryRaw<{ processed: bigint; total: bigint }[]>`
+      SELECT * FROM pregen_all_recommendations(${limit})
+    `;
+    syncLog.info({ results }, "pregen_all_recommendations returned");
 
-  const durationMs = Date.now() - startTime;
-  syncLog.info(
-    {
-      processed: finalResult.processed,
-      total: finalResult.total,
-      durationMs,
-    },
-    "Recommendation pregeneration completed"
-  );
+    const finalResult = results[results.length - 1] || { processed: BigInt(0), total: BigInt(0) };
+    // Convert BigInt to number (safe for reasonable post counts)
+    const processed = Number(finalResult.processed);
+    const total = Number(finalResult.total);
 
-  return finalResult;
+    const durationMs = Date.now() - startTime;
+    syncLog.info(
+      {
+        processed,
+        total,
+        durationMs,
+      },
+      "Recommendation pregeneration completed"
+    );
+
+    // Mark as completed in Settings table
+    await prisma.settings.upsert({
+      where: { key: "recommendations.status" },
+      create: { key: "recommendations.status", value: "completed" },
+      update: { value: "completed" },
+    });
+
+    return {
+      processed,
+      total,
+      status: "completed",
+    };
+  } catch (error) {
+    // Mark as error in Settings
+    await prisma.settings.upsert({
+      where: { key: "recommendations.status" },
+      create: { key: "recommendations.status", value: "error" },
+      update: { value: "error" },
+    });
+
+    syncLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Recommendation pregeneration failed"
+    );
+    throw error;
+  }
 }
 
 /**

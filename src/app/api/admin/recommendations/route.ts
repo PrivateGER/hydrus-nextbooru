@@ -5,31 +5,30 @@ import {
   pregenRecommendations,
   getRecommendationStats,
   hasRecommendations,
+  getPregenProgress,
 } from "@/lib/recommendations";
 
-// Track if pregeneration is running
-let isPregenRunning = false;
-let lastPregenResult: { processed: number; total: number; completedAt: string } | null = null;
-
 /**
- * GET - Get recommendation pregeneration status
+ * GET - Get recommendation pregeneration status and progress
  */
 export async function GET() {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
   try {
-    const [stats, hasRecs] = await Promise.all([
+    const [stats, hasRecs, progress] = await Promise.all([
       getRecommendationStats(),
       hasRecommendations(),
+      getPregenProgress(),
     ]);
 
     return NextResponse.json({
-      status: isPregenRunning ? "running" : "idle",
+      status: progress.status,
+      processed: progress.processed,
+      total: progress.total,
       hasRecommendations: hasRecs,
       totalRecommendations: stats.totalRecommendations,
       postsWithRecommendations: stats.postsWithRecommendations,
-      lastResult: lastPregenResult,
     });
   } catch (error) {
     apiLog.error(
@@ -50,45 +49,30 @@ export async function POST() {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  if (isPregenRunning) {
-    return NextResponse.json(
-      { error: "Recommendation pregeneration is already running" },
-      { status: 409 }
-    );
-  }
-
   try {
-    isPregenRunning = true;
+    // Check if already running
+    const progress = await getPregenProgress();
+    if (progress.status === "running") {
+      return NextResponse.json(
+        { error: "Recommendation pregeneration is already running" },
+        { status: 409 }
+      );
+    }
+
     syncLog.info({}, "Recommendation pregeneration started via API");
 
-    // Run in background
-    pregenRecommendations()
-      .then((result) => {
-        lastPregenResult = {
-          processed: result.processed,
-          total: result.total,
-          completedAt: new Date().toISOString(),
-        };
-        syncLog.info(
-          { processed: result.processed, total: result.total },
-          "Recommendation pregeneration completed"
-        );
-      })
-      .catch((error) => {
-        syncLog.error(
-          { error: error instanceof Error ? error.message : String(error) },
-          "Recommendation pregeneration failed"
-        );
-      })
-      .finally(() => {
-        isPregenRunning = false;
-      });
+    // Run in background - the function updates Settings table with progress
+    pregenRecommendations().catch((error) => {
+      syncLog.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Recommendation pregeneration failed"
+      );
+    });
 
     return NextResponse.json({
       message: "Recommendation pregeneration started",
     });
   } catch (error) {
-    isPregenRunning = false;
     apiLog.error(
       { error: error instanceof Error ? error.message : String(error) },
       "Failed to start recommendation pregeneration"
