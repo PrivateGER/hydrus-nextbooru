@@ -99,10 +99,12 @@ model Post {
   imageTranslatedAt   DateTime?
 
   // Relations
-  tags       PostTag[]
-  groups     PostGroup[]
-  thumbnails Thumbnail[]
-  notes      Note[]
+  tags            PostTag[]
+  groups          PostGroup[]
+  thumbnails      Thumbnail[]
+  notes           Note[]
+  recommendations PostRecommendation[] @relation("PostRecommendations")
+  recommendedBy   PostRecommendation[] @relation("RecommendedTo")
 
   @@index([rating])
   @@index([importedAt])
@@ -239,4 +241,21 @@ model Settings {
   value String
 
   updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// RECOMMENDATIONS (cached similarity scores)
+// ============================================
+
+model PostRecommendation {
+  id            Int   @id @default(autoincrement())
+  postId        Int
+  recommendedId Int
+  score         Float // IDF-weighted tag similarity score
+
+  post        Post @relation("PostRecommendations", fields: [postId], references: [id], onDelete: Cascade)
+  recommended Post @relation("RecommendedTo", fields: [recommendedId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, recommendedId])
+  @@index([postId])
 }
