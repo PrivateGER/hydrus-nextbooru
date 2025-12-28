@@ -12,6 +12,7 @@ import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
+import { RelatedPosts } from "@/components/post/related-posts";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -297,6 +298,9 @@ export default async function PostPage({ params }: PostPageProps) {
             </div>
           );
         })}
+
+        {/* Similar posts based on tag similarity */}
+        <RelatedPosts hash={post.hash} />
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">

@@ -320,6 +320,7 @@ export default function AdminPage() {
 
   // Maintenance state
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const [isRegeneratingRecs, setIsRegeneratingRecs] = useState(false);
 
   // Translation settings state
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
@@ -656,6 +657,47 @@ export default function AdminPage() {
       });
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  const handleRegenerateRecommendations = async () => {
+    setIsRegeneratingRecs(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/recommendations", { method: "POST" });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start recommendation generation");
+      }
+
+      setMessage({ type: "success", text: "Generating recommendations in background..." });
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        const statusResponse = await fetch("/api/admin/recommendations");
+        const statusData = await statusResponse.json();
+
+        if (statusData.status !== "running") {
+          clearInterval(pollInterval);
+          setIsRegeneratingRecs(false);
+
+          if (statusData.lastResult) {
+            triggerSuccessAnimation();
+            setMessage({
+              type: "success",
+              text: `Recommendations generated for ${statusData.lastResult.processed.toLocaleString()} posts!`,
+            });
+          }
+        }
+      }, 2000);
+    } catch (error) {
+      setIsRegeneratingRecs(false);
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to generate recommendations",
+      });
     }
   };
 
@@ -1111,7 +1153,20 @@ export default function AdminPage() {
 
         <InfoBox variant="tip" className={"mt-2"}>Run this if tag counts or homepage stats look incorrect.</InfoBox>
       </Card>
-	</div>
+
+      <Card>
+        <h3 className="mb-1 font-medium text-zinc-200">Regenerate Recommendations</h3>
+        <p className="mb-4 text-sm text-zinc-400">
+          Rebuild &quot;Similar Posts&quot; suggestions based on tag similarity. Runs automatically after sync.
+        </p>
+        <Button onClick={handleRegenerateRecommendations} disabled={isRegeneratingRecs || isSyncing} loading={isRegeneratingRecs} variant="secondary">
+          <ArrowPathIcon className="h-4 w-4" />
+          Regenerate
+        </Button>
+
+        <InfoBox variant="tip" className={"mt-2"}>Run this if similar posts aren&apos;t showing or seem outdated.</InfoBox>
+      </Card>
+    </div>
   );
 
   const HelpSection = () => (
