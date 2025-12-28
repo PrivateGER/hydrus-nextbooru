@@ -22,7 +22,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const searchParams = request.nextUrl.searchParams;
-  const limit = Math.min(20, Math.max(1, parseInt(searchParams.get("limit") || "10", 10)));
+  const parsedLimit = parseInt(searchParams.get("limit") || "10", 10);
+  const limit = Number.isNaN(parsedLimit) ? 10 : Math.min(20, Math.max(1, parsedLimit));
 
   const recommendations = await getRecommendationsByHash(hash.toLowerCase(), limit);
 
