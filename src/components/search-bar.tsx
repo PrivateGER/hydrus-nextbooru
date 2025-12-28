@@ -111,9 +111,10 @@ export function SearchBar({
   const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
 
   // Fetch popular/narrowing tags on focus (only in tags mode)
-  const fetchPopularTags = useCallback(async () => {
+  // forceRefresh bypasses the early return checks, used when selectedTags changes
+  const fetchPopularTags = useCallback(async (forceRefresh = false) => {
     if (searchMode === "notes") return;
-    if (searchQuery.length > 0 || suggestions.length > 0) return;
+    if (!forceRefresh && (searchQuery.length > 0 || suggestions.length > 0)) return;
 
     setIsLoading(true);
     try {
@@ -139,6 +140,22 @@ export function SearchBar({
       setIsLoading(false);
     }
   }, [searchQuery, selectedTags, suggestions.length, searchMode]);
+
+  // Refresh narrowing tags when selectedTags changes (fixes mobile where focus may not re-trigger)
+  // This runs after state updates are committed, ensuring fresh data
+  const prevSelectedTagsRef = useRef<string[]>(initialTags);
+  useEffect(() => {
+    // Only refresh if tags actually changed and input is empty (not typing a search)
+    if (
+      searchMode === "tags" &&
+      inputValue === "" &&
+      selectedTags.length > 0 &&
+      JSON.stringify(selectedTags) !== JSON.stringify(prevSelectedTagsRef.current)
+    ) {
+      fetchPopularTags(true);
+    }
+    prevSelectedTagsRef.current = selectedTags;
+  }, [selectedTags, searchMode, inputValue, fetchPopularTags]);
 
   // Debounced tag search (only in tags mode)
   useEffect(() => {
