@@ -26,6 +26,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const imgRef = useRef<HTMLImageElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
+  const loadedRef = useRef(false); // Track loaded state for timeout callback
   const hashShort = hash.slice(0, 8);
 
   const isVideo = mimeType.startsWith("video/");
@@ -38,6 +39,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     setLoaded(false);
     setError(false);
     setPreviewLoaded(false);
+    loadedRef.current = false;
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = undefined;
@@ -89,12 +91,24 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     };
   }, [hashShort]);
 
+  // Sync loadedRef with loaded state for timeout callback
+  useEffect(() => {
+    loadedRef.current = loaded;
+  }, [loaded]);
+
   // Use IntersectionObserver to detect when image enters viewport
   // Only then check for cached images and start timeout
   useEffect(() => {
     const img = imgRef.current;
     if (!img) {
       console.log(`[${hashShort}] no img ref`);
+      return;
+    }
+
+    // Check immediately if image is already cached (important for browser back/forward cache)
+    if (img.complete && img.naturalWidth > 0) {
+      console.log(`[${hashShort}] image already complete on effect setup, setting loaded=true`);
+      if (mountedRef.current) setLoaded(true);
       return;
     }
 
@@ -120,8 +134,9 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         if (!timeoutRef.current) {
           console.log(`[${hashShort}] starting ${LOAD_TIMEOUT_MS}ms timeout`);
           timeoutRef.current = setTimeout(() => {
-            console.log(`[${hashShort}] timeout fired, mounted=${mountedRef.current}, loaded=${loaded}`);
-            if (mountedRef.current && !loaded) {
+            // Use ref to get current loaded state, avoiding stale closure
+            console.log(`[${hashShort}] timeout fired, mounted=${mountedRef.current}, loaded=${loadedRef.current}`);
+            if (mountedRef.current && !loadedRef.current) {
               console.log(`[${hashShort}] setting error=true due to timeout`);
               setError(true);
             }
@@ -141,15 +156,17 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       if (timeoutRef.current) {
         console.log(`[${hashShort}] cleanup: clearing timeout`);
         clearTimeout(timeoutRef.current);
+        timeoutRef.current = undefined;
       }
     };
-  }, [hash, hashShort, loaded]);
+  }, [hash, hashShort]);
 
   // Handle successful load
   const handleLoad = () => {
     const img = imgRef.current;
     console.log(`[${hashShort}] onLoad fired, mounted=${mountedRef.current}, img.complete=${img?.complete}, img.naturalWidth=${img?.naturalWidth}`);
     if (!mountedRef.current) return;
+    loadedRef.current = true; // Update ref immediately to prevent race with timeout
     setLoaded(true);
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
