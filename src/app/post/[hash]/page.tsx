@@ -13,7 +13,7 @@ import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts } from "@/components/post/related-posts";
-import { ThumbnailCard } from "@/components/thumbnail-card";
+import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -271,34 +271,7 @@ export default async function PostPage({ params }: PostPageProps) {
                   {group.posts.length} images
                 </Link>
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
-                {group.posts.map((pg) => (
-                  <Link
-                    key={pg.post.hash}
-                    href={`/post/${pg.post.hash}`}
-                    className={`shrink-0 rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] ${
-                      pg.post.hash === post.hash
-                        ? "ring-2 ring-blue-500"
-                        : "hover:ring-2 hover:ring-blue-500"
-                    }`}
-                  >
-                    <ThumbnailCard
-                      hash={pg.post.hash}
-                      width={pg.post.width}
-                      height={pg.post.height}
-                      blurhash={pg.post.blurhash}
-                      mimeType={pg.post.mimeType}
-                      heightClass="h-24"
-                      showMediaBadge={false}
-                      className="rounded-lg"
-                    >
-                      <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                        {pg.position || "?"}
-                      </span>
-                    </ThumbnailCard>
-                  </Link>
-                ))}
-              </div>
+              <GroupFilmstrip posts={group.posts} currentHash={post.hash} />
             </div>
           );
         })}

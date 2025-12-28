@@ -207,7 +207,7 @@ describe('Recommendations Module (Integration)', () => {
         )
       `;
 
-      const result = await pregenRecommendations(10, 100);
+      const result = await pregenRecommendations(10);
 
       // processed = recommendations inserted (3 posts × 2 recommendations each = 6)
       // total = posts processed (3)
@@ -234,13 +234,13 @@ describe('Recommendations Module (Integration)', () => {
       `;
 
       // Run pregen
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const count1 = await prisma.postRecommendation.count();
       expect(count1).toBeGreaterThan(0);
 
       // Run pregen again
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const count2 = await prisma.postRecommendation.count();
 
@@ -264,7 +264,7 @@ describe('Recommendations Module (Integration)', () => {
           SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
         )
       `;
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const recommendations = await getRecommendations(post1.id, 10);
 
@@ -297,7 +297,7 @@ describe('Recommendations Module (Integration)', () => {
           SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
         )
       `;
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const recommendations = await getRecommendationsByHash(post1.hash, 10);
 
@@ -329,7 +329,7 @@ describe('Recommendations Module (Integration)', () => {
           SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
         )
       `;
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const result = await hasRecommendations();
       expect(result).toBe(true);
@@ -350,7 +350,7 @@ describe('Recommendations Module (Integration)', () => {
           SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
         )
       `;
-      await pregenRecommendations(10, 100);
+      await pregenRecommendations(10);
 
       const stats = await getRecommendationStats();
 
