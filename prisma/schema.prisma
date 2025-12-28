@@ -258,4 +258,5 @@ model PostRecommendation {
 
   @@unique([postId, recommendedId])
   @@index([postId])
+  @@index([recommendedId])
 }

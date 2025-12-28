@@ -209,7 +209,9 @@ describe('Recommendations Module (Integration)', () => {
 
       const result = await pregenRecommendations(10, 100);
 
-      expect(result.processed).toBe(3);
+      // processed = recommendations inserted (3 posts × 2 recommendations each = 6)
+      // total = posts processed (3)
+      expect(result.processed).toBe(6);
       expect(result.total).toBe(3);
 
       // Check that recommendations were stored

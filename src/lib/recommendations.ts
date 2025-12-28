@@ -13,16 +13,24 @@ export interface RecommendationProgress {
  */
 export async function getPregenProgress(): Promise<RecommendationProgress> {
   const setting = await prisma.settings.findUnique({
-    where: { key: "recommendations.status" },
+    where: { key: "recommendations.progress" },
   });
 
-  const status = (setting?.value as RecommendationProgress["status"]) || "idle";
+  if (!setting?.value) {
+    return { processed: 0, total: 0, status: "idle" };
+  }
 
-  return {
-    processed: 0,
-    total: 0,
-    status,
-  };
+  try {
+    const stored = JSON.parse(setting.value) as RecommendationProgress;
+    return {
+      processed: stored.processed ?? 0,
+      total: stored.total ?? 0,
+      status: stored.status ?? "idle",
+      error: stored.error,
+    };
+  } catch {
+    return { processed: 0, total: 0, status: "idle" };
+  }
 }
 
 export interface RecommendedPost {
@@ -56,13 +64,18 @@ export async function pregenRecommendations(
   syncLog.info({ limit }, "Starting recommendation pregeneration");
   const startTime = Date.now();
 
+  const updateProgress = async (progress: RecommendationProgress) => {
+    const value = JSON.stringify(progress);
+    await prisma.settings.upsert({
+      where: { key: "recommendations.progress" },
+      create: { key: "recommendations.progress", value },
+      update: { value },
+    });
+  };
+
   try {
     // Mark as running in Settings table
-    await prisma.settings.upsert({
-      where: { key: "recommendations.status" },
-      create: { key: "recommendations.status", value: "running" },
-      update: { value: "running" },
-    });
+    await updateProgress({ processed: 0, total: 0, status: "running" });
 
     // Call the PL/pgSQL function - uses LATERAL join for fast set-based processing
     syncLog.info({}, "Calling pregen_all_recommendations...");
@@ -86,30 +99,33 @@ export async function pregenRecommendations(
       "Recommendation pregeneration completed"
     );
 
-    // Mark as completed in Settings table
-    await prisma.settings.upsert({
-      where: { key: "recommendations.status" },
-      create: { key: "recommendations.status", value: "completed" },
-      update: { value: "completed" },
-    });
-
-    return {
+    const completedProgress: RecommendationProgress = {
       processed,
       total,
       status: "completed",
     };
-  } catch (error) {
-    // Mark as error in Settings
-    await prisma.settings.upsert({
-      where: { key: "recommendations.status" },
-      create: { key: "recommendations.status", value: "error" },
-      update: { value: "error" },
-    });
+    await updateProgress(completedProgress);
 
-    syncLog.error(
-      { error: error instanceof Error ? error.message : String(error) },
-      "Recommendation pregeneration failed"
-    );
+    return completedProgress;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Wrap status update in try-catch to avoid masking original error
+    try {
+      await updateProgress({
+        processed: 0,
+        total: 0,
+        status: "error",
+        error: errorMessage,
+      });
+    } catch (updateError) {
+      syncLog.error(
+        { updateError: updateError instanceof Error ? updateError.message : String(updateError) },
+        "Failed to update error status in settings"
+      );
+    }
+
+    syncLog.error({ error: errorMessage }, "Recommendation pregeneration failed");
     throw error;
   }
 }
@@ -217,12 +233,9 @@ export async function getRecommendationStats(): Promise<{
 }> {
   const [totalRecommendations, postsWithRecommendations] = await Promise.all([
     prisma.postRecommendation.count(),
-    prisma.postRecommendation
-      .groupBy({
-        by: ["postId"],
-        _count: true,
-      })
-      .then((groups) => groups.length),
+    prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(DISTINCT "postId") as count FROM "PostRecommendation"
+    `.then(([result]) => Number(result.count)),
   ]);
 
   return {

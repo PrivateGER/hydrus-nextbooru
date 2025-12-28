@@ -8,6 +8,7 @@ CREATE TABLE "PostRecommendation" (
 );
 
 CREATE INDEX "PostRecommendation_postId_idx" ON "PostRecommendation"("postId");
+CREATE INDEX "PostRecommendation_recommendedId_idx" ON "PostRecommendation"("recommendedId");
 
 CREATE UNIQUE INDEX "PostRecommendation_postId_recommendedId_key" ON "PostRecommendation"("postId", "recommendedId");
 
@@ -95,8 +96,8 @@ BEGIN
 
   GET DIAGNOSTICS v_inserted = ROW_COUNT;
 
-  -- Return stats
-  processed := v_total;
+  -- Return stats: processed = recommendations inserted, total = posts processed
+  processed := v_inserted;
   total := v_total;
   RETURN NEXT;
 END;
