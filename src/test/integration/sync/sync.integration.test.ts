@@ -292,21 +292,21 @@ describe('syncFromHydrus (Integration)', () => {
     it('should stop processing when cancelled', async () => {
       const prisma = getTestPrisma();
 
-      // Setup enough files to ensure multiple batches (just over TEST_BATCH_SIZE)
-      const fileCount = TEST_BATCH_SIZE + 5;
+      // Setup enough files to ensure multiple batches (3x batch size for reliable cancellation)
+      const fileCount = TEST_BATCH_SIZE * 3;
       const files = Array.from({ length: fileCount }, (_, i) =>
         createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
       );
       addFilesToState(hydrusState, files);
 
       // Add delay to metadata fetch so we have time to cancel
-      hydrusState.metadataDelayMs = 20;
+      hydrusState.metadataDelayMs = 50;
 
       // Start sync with small batch size
       const syncPromise = syncFromHydrus({ batchSize: TEST_BATCH_SIZE });
 
-      // Cancel after short delay
-      await new Promise((r) => setTimeout(r, 10));
+      // Cancel after first batch has time to start but before all complete
+      await new Promise((r) => setTimeout(r, 30));
       await prisma.syncState.updateMany({
         where: { status: 'running' },
         data: { status: 'cancelled' },
