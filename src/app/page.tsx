@@ -240,6 +240,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </div>
 
+        {/* Top pagination */}
+        <Suspense fallback={null}>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            basePath={paginationBasePath}
+          />
+        </Suspense>
+
         {/* Posts grid */}
         <Suspense
           fallback={

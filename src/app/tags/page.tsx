@@ -270,6 +270,13 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
         </div>
       </div>
 
+      {/* Top pagination */}
+      {totalPages > 1 && (
+        <Suspense fallback={null}>
+          <Pagination currentPage={page} totalPages={totalPages} basePath="/tags" />
+        </Suspense>
+      )}
+
       {/* Tags grid */}
       {tags.length > 0 ? (
         <div className="flex flex-wrap gap-2">

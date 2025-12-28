@@ -186,6 +186,13 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       )}
 
+      {/* Top pagination */}
+      {totalPages > 1 && (
+        <Suspense fallback={null}>
+          <Pagination currentPage={page} totalPages={totalPages} basePath="/search" />
+        </Suspense>
+      )}
+
       {isNotesSearch && notes.length > 0 && (
         <div className="space-y-3">
           {notes.map((note) => <NoteSearchResult key={note.contentHash} note={note} />)}
