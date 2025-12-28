@@ -151,6 +151,31 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
         </div>
       </div>
 
+      {/* Top pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2">
+          {page > 1 && (
+            <Link
+              href={buildUrl({ page: page - 1 })}
+              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
+            >
+              ← Prev
+            </Link>
+          )}
+          <span className="text-sm text-zinc-400">
+            Page {page} of {totalPages}
+          </span>
+          {page < totalPages && (
+            <Link
+              href={buildUrl({ page: page + 1 })}
+              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
+            >
+              Next →
+            </Link>
+          )}
+        </div>
+      )}
+
       {/* Groups list */}
       <div className="space-y-4">
         {groupsWithPosts.map((mergedGroup) => {
