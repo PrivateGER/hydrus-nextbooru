@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SourceType } from "@/generated/prisma/client";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
+import { Pagination } from "@/components/pagination";
 import { SourceBadge } from "@/components/source-badge";
 import { searchGroups, OrderOption } from "@/lib/groups";
 
@@ -82,6 +84,16 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
     return `/groups${queryString ? `?${queryString}` : ""}`;
   };
 
+  // Build basePath for pagination (preserves filters but not page)
+  const paginationBasePath = (() => {
+    const params = new URLSearchParams();
+    if (typeFilter) params.set("type", typeFilter);
+    params.set("order", order);
+    if (order === "random") params.set("seed", seed);
+    const queryString = params.toString();
+    return `/groups${queryString ? `?${queryString}` : ""}`;
+  })();
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -152,29 +164,13 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
       </div>
 
       {/* Top pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          {page > 1 && (
-            <Link
-              href={buildUrl({ page: page - 1 })}
-              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-            >
-              ← Prev
-            </Link>
-          )}
-          <span className="text-sm text-zinc-400">
-            Page {page} of {totalPages}
-          </span>
-          {page < totalPages && (
-            <Link
-              href={buildUrl({ page: page + 1 })}
-              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-            >
-              Next →
-            </Link>
-          )}
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <Pagination
+          currentPage={page}
+          totalPages={totalPages}
+          basePath={paginationBasePath}
+        />
+      </Suspense>
 
       {/* Groups list */}
       <div className="space-y-4">
@@ -270,29 +266,13 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          {page > 1 && (
-            <Link
-              href={buildUrl({ page: page - 1 })}
-              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-            >
-              ← Prev
-            </Link>
-          )}
-          <span className="text-sm text-zinc-400">
-            Page {page} of {totalPages}
-          </span>
-          {page < totalPages && (
-            <Link
-              href={buildUrl({ page: page + 1 })}
-              className="rounded bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700"
-            >
-              Next →
-            </Link>
-          )}
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <Pagination
+          currentPage={page}
+          totalPages={totalPages}
+          basePath={paginationBasePath}
+        />
+      </Suspense>
     </div>
   );
 }
