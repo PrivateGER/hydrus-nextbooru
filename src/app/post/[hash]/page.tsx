@@ -12,6 +12,8 @@ import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
+import { RelatedPosts } from "@/components/post/related-posts";
+import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -43,6 +45,8 @@ async function getPost(hash: string) {
                       hash: true,
                       width: true,
                       height: true,
+                      blurhash: true,
+                      mimeType: true,
                     },
                   },
                 },
@@ -267,36 +271,13 @@ export default async function PostPage({ params }: PostPageProps) {
                   {group.posts.length} images
                 </Link>
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
-                {group.posts.map((pg) => (
-                  <Link
-                    key={pg.post.hash}
-                    href={`/post/${pg.post.hash}`}
-                    className={`relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] ${
-                      pg.post.hash === post.hash
-                        ? "ring-2 ring-blue-500"
-                        : "hover:ring-2 hover:ring-blue-500"
-                    }`}
-                  >
-                    <img
-                      src={`/api/thumbnails/${pg.post.hash}.webp`}
-                      alt=""
-                      className="h-24 w-auto"
-                      style={
-                        pg.post.width && pg.post.height
-                          ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
-                          : { aspectRatio: "1" }
-                      }
-                    />
-                    <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                      {pg.position || "?"}
-                    </span>
-                  </Link>
-                ))}
-              </div>
+              <GroupFilmstrip posts={group.posts} currentHash={post.hash} />
             </div>
           );
         })}
+
+        {/* Similar posts based on tag similarity */}
+        <RelatedPosts hash={post.hash} />
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">

@@ -8,6 +8,7 @@ import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
+import { pregenRecommendations } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 
 export const BATCH_SIZE = 512;
@@ -761,6 +762,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     await recalculateTagCounts();
     // Update precomputed homepage stats
     await updateHomeStatsCache();
+    // Pregenerate post recommendations based on tag similarity
+    await pregenRecommendations();
 
     invalidateAllCaches();
     await updateSyncState({
