@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from './setup';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from './setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags, createGroup, createPostInGroup, createPost, createTag } from './factories';
 import { TagCategory, SourceType } from '@/generated/prisma/client';
@@ -40,12 +40,8 @@ describe('Recommendations Module (Integration)', () => {
       const post1 = await createPostWithTags(prisma, ['tag-a', 'tag-b']);
       await createPostWithTags(prisma, ['tag-c', 'tag-d']);
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(post1.id, 10);
 
@@ -61,12 +57,8 @@ describe('Recommendations Module (Integration)', () => {
       const post2 = await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
       await createPostWithTags(prisma, ['other-tag']); // Third post with different tag
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(post1.id, 10);
 
@@ -82,12 +74,8 @@ describe('Recommendations Module (Integration)', () => {
       const post2 = await createPostWithTags(prisma, ['tag-a']); // 1 shared tag
       const post3 = await createPostWithTags(prisma, ['tag-a', 'tag-b']); // 2 shared tags
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(post1.id, 10);
 
@@ -118,12 +106,8 @@ describe('Recommendations Module (Integration)', () => {
       // Create a third post NOT in the group but with the same tag
       const post3 = await createPostWithTags(prisma, ['shared-tag']);
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(post1.id, 10);
 
@@ -142,12 +126,8 @@ describe('Recommendations Module (Integration)', () => {
         await createPostWithTags(prisma, ['shared-tag', `unique-${i}`]);
       }
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(post1.id, 3);
 
@@ -171,12 +151,8 @@ describe('Recommendations Module (Integration)', () => {
       // Create post with both tags - should have highest score
       const bothPost = await createPostWithTags(prisma, ['common-tag', 'rare-tag']);
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const recommendations = await computeRecommendationsForPost(sourcePost.id, 10);
 
@@ -200,12 +176,8 @@ describe('Recommendations Module (Integration)', () => {
       await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
       await createPostWithTags(prisma, ['shared-tag', 'unique-c']);
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       const result = await pregenRecommendations(10);
 
@@ -226,12 +198,8 @@ describe('Recommendations Module (Integration)', () => {
       const post1 = await createPostWithTags(prisma, ['shared-tag']);
       const post2 = await createPostWithTags(prisma, ['shared-tag']);
 
-      // Recalculate tag counts
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
 
       // Run pregen
       await pregenRecommendations(10);
@@ -258,12 +226,8 @@ describe('Recommendations Module (Integration)', () => {
       const post2 = await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
       await createPostWithTags(prisma, ['other-tag']); // Third post with different tag
 
-      // Recalculate tag counts and generate recommendations
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
       await pregenRecommendations(10);
 
       const recommendations = await getRecommendations(post1.id, 10);
@@ -291,12 +255,8 @@ describe('Recommendations Module (Integration)', () => {
       const post1 = await createPostWithTags(prisma, ['shared-tag']);
       const post2 = await createPostWithTags(prisma, ['shared-tag']);
 
-      // Recalculate tag counts and generate recommendations
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      // Recalculate tag counts and IDF weights
+      await recalculateTagStats();
       await pregenRecommendations(10);
 
       const recommendations = await getRecommendationsByHash(post1.hash, 10);
@@ -324,11 +284,7 @@ describe('Recommendations Module (Integration)', () => {
       await createPostWithTags(prisma, ['shared-tag']);
       await createPostWithTags(prisma, ['shared-tag']);
 
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      await recalculateTagStats();
       await pregenRecommendations(10);
 
       const result = await hasRecommendations();
@@ -345,11 +301,7 @@ describe('Recommendations Module (Integration)', () => {
       await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
       await createPostWithTags(prisma, ['shared-tag', 'unique-c']);
 
-      await prisma.$executeRaw`
-        UPDATE "Tag" t SET "postCount" = (
-          SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
-        )
-      `;
+      await recalculateTagStats();
       await pregenRecommendations(10);
 
       const stats = await getRecommendationStats();

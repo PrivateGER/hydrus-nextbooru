@@ -117,6 +117,7 @@ model Tag {
   name      String
   category  TagCategory
   postCount Int         @default(0)
+  idfWeight Float       @default(0) // Pre-computed IDF weight: LN(total_posts / postCount)
 
   posts PostTag[]
 

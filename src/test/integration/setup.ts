@@ -76,6 +76,7 @@ export async function cleanDatabase(): Promise<void> {
   const p = getTestPrisma();
 
   // Delete in order of dependencies (children first)
+  await p.postRecommendation.deleteMany();
   await p.postTag.deleteMany();
   await p.postGroup.deleteMany();
   await p.thumbnail.deleteMany();
@@ -87,4 +88,32 @@ export async function cleanDatabase(): Promise<void> {
   await p.syncState.deleteMany();
   // Clear stats settings for test isolation
   await p.settings.deleteMany({ where: { key: { startsWith: 'stats.' } } });
+}
+
+/**
+ * Recalculate postCount and idfWeight for all tags.
+ * Call this in tests after creating posts with tags to ensure
+ * recommendation algorithms have accurate data.
+ */
+export async function recalculateTagStats(): Promise<void> {
+  const p = getTestPrisma();
+
+  // Update postCount
+  await p.$executeRaw`
+    UPDATE "Tag" t SET "postCount" = (
+      SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
+    )
+  `;
+
+  // Update idfWeight based on postCount
+  const totalPosts = await p.post.count();
+  if (totalPosts > 0) {
+    await p.$executeRaw`
+      UPDATE "Tag" SET "idfWeight" = GREATEST(0, LN(${totalPosts}::FLOAT / GREATEST(1, "postCount")))
+      WHERE "postCount" > 0
+    `;
+    await p.$executeRaw`
+      UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0
+    `;
+  }
 }
