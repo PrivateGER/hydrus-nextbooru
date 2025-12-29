@@ -933,15 +933,30 @@ async function isSyncCancelled(): Promise<boolean> {
 }
 
 /**
- * Recalculate postCount for all tags.
- * Called after sync to ensure counts are accurate for efficient sorting.
+ * Recalculate postCount and idfWeight for all tags.
+ * Called after sync to ensure counts are accurate for efficient sorting
+ * and IDF weights are fresh for recommendation computation.
  */
 async function recalculateTagCounts(): Promise<void> {
+  // First update postCount
   await prisma.$executeRaw`
     UPDATE "Tag" t SET "postCount" = (
       SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
     )
   `;
+
+  // Then compute IDF weights based on updated counts
+  const totalPosts = await prisma.post.count();
+  if (totalPosts > 0) {
+    await prisma.$executeRaw`
+      UPDATE "Tag" SET "idfWeight" = GREATEST(0, LN(${totalPosts}::FLOAT / GREATEST(1, "postCount")))
+      WHERE "postCount" > 0
+    `;
+    // Reset idfWeight to 0 for tags with no posts
+    await prisma.$executeRaw`
+      UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0
+    `;
+  }
 }
 
 /**

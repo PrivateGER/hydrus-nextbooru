@@ -77,12 +77,12 @@ export async function pregenRecommendations(
     // Mark as running in Settings table
     await updateProgress({ processed: 0, total: 0, status: "running" });
 
-    // Call the PL/pgSQL function - uses LATERAL join for fast set-based processing
-    syncLog.info({}, "Calling pregen_all_recommendations...");
+    // Call the optimized PL/pgSQL function - uses set-based matrix computation
+    syncLog.info({}, "Calling pregen_all_recommendations_v2...");
     const results = await prisma.$queryRaw<{ processed: bigint; total: bigint }[]>`
-      SELECT * FROM pregen_all_recommendations(${limit})
+      SELECT * FROM pregen_all_recommendations_v2(${limit})
     `;
-    syncLog.info({ results }, "pregen_all_recommendations returned");
+    syncLog.info({ results }, "pregen_all_recommendations_v2 returned");
 
     const finalResult = results[results.length - 1] || { processed: BigInt(0), total: BigInt(0) };
     // Convert BigInt to number (safe for reasonable post counts)
