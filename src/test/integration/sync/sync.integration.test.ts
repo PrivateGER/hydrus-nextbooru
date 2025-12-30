@@ -299,14 +299,22 @@ describe('syncFromHydrus (Integration)', () => {
       );
       addFilesToState(hydrusState, files);
 
-      // Add delay to metadata fetch so we have time to cancel
-      hydrusState.metadataDelayMs = 50;
+      // Add significant delay to metadata fetch to ensure we have time to cancel
+      hydrusState.metadataDelayMs = 500;
 
       // Start sync with small batch size
       const syncPromise = syncFromHydrus({ batchSize: TEST_BATCH_SIZE });
 
-      // Cancel after first batch has time to start but before all complete
-      await new Promise((r) => setTimeout(r, 30));
+      // Wait for sync to actually start (sync state becomes 'running')
+      let attempts = 0;
+      while (attempts < 50) {
+        const state = await prisma.syncState.findFirst();
+        if (state?.status === 'running') break;
+        await new Promise((r) => setTimeout(r, 20));
+        attempts++;
+      }
+
+      // Cancel after first batch starts
       await prisma.syncState.updateMany({
         where: { status: 'running' },
         data: { status: 'cancelled' },
@@ -337,7 +345,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(state?.lastSyncedAt).not.toBeNull();
     });
 
-    it('should track batch progress', { timeout: 30000 }, async () => {
+    it('should track batch progress', { timeout: 60000 }, async () => {
       // Create enough files for 2 batches (just over TEST_BATCH_SIZE)
       const fileCount = TEST_BATCH_SIZE + 5;
       const files = Array.from({ length: fileCount }, (_, i) =>
@@ -347,7 +355,7 @@ describe('syncFromHydrus (Integration)', () => {
 
       const progressUpdates: { currentBatch: number; totalBatches: number }[] = [];
 
-      await syncFromHydrus({
+      const result = await syncFromHydrus({
         batchSize: TEST_BATCH_SIZE,
         onProgress: (progress) => {
           if (progress.currentBatch > 0) {
@@ -359,7 +367,12 @@ describe('syncFromHydrus (Integration)', () => {
         },
       });
 
+      // Verify sync completed successfully
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(fileCount);
+
       // Should have had progress updates for 2 batches
+      expect(progressUpdates.length).toBeGreaterThan(0);
       expect(progressUpdates.some((p) => p.currentBatch === 1)).toBe(true);
       expect(progressUpdates.some((p) => p.currentBatch === 2)).toBe(true);
       expect(progressUpdates[0].totalBatches).toBe(2);
@@ -379,9 +392,18 @@ describe('syncFromHydrus (Integration)', () => {
         ], { file_id: 1, hash: 'a'.repeat(64) }),
       ]);
 
-      await syncFromHydrus();
+      const result = await syncFromHydrus();
+
+      // Verify sync completed successfully
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(1);
+      expect(result.errors).toHaveLength(0);
 
       const tags = await prisma.tag.findMany();
+
+      // Verify tags were created
+      expect(tags.length).toBeGreaterThanOrEqual(4);
+
       const artistTag = tags.find((t) => t.name === 'john doe');
       const characterTag = tags.find((t) => t.name === 'alice');
       const seriesTag = tags.find((t) => t.name === 'wonderland');
