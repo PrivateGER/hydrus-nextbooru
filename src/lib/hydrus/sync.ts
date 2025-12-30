@@ -8,6 +8,7 @@ import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
+import { invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 
 export const BATCH_SIZE = 512;
@@ -436,6 +437,8 @@ async function processFileSafe(
           skipDuplicates: true,
         });
       }
+      // Invalidate cached recommendations since tags changed
+      await invalidateRecommendationsForPost(post.id);
     }
 
     // Update groups only if changed
