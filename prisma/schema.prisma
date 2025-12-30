@@ -249,10 +249,11 @@ model Settings {
 // ============================================
 
 model PostRecommendation {
-  id            Int   @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   postId        Int
   recommendedId Int
-  score         Float // IDF-weighted tag similarity score
+  score         Float    // IDF-weighted tag similarity score
+  computedAt    DateTime @default(now()) // When this recommendation was computed (for cache TTL)
 
   post        Post @relation("PostRecommendations", fields: [postId], references: [id], onDelete: Cascade)
   recommended Post @relation("RecommendedTo", fields: [recommendedId], references: [id], onDelete: Cascade)
@@ -260,4 +261,5 @@ model PostRecommendation {
   @@unique([postId, recommendedId])
   @@index([postId])
   @@index([recommendedId])
+  @@index([postId, computedAt(sort: Desc)])
 }

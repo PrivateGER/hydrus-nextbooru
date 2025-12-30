@@ -1,4 +1,4 @@
-import { getRecommendationsByHash } from "@/lib/recommendations";
+import { getOrComputeRecommendationsByHash } from "@/lib/recommendations";
 import { RelatedPostsClient } from "./related-posts-client";
 
 interface RelatedPostsProps {
@@ -11,7 +11,7 @@ interface RelatedPostsProps {
  * Uses RelatedPostsClient for the enhanced UI rendering.
  */
 export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
-  const recommendations = await getRecommendationsByHash(hash, limit);
+  const recommendations = await getOrComputeRecommendationsByHash(hash, limit);
 
   if (recommendations.length === 0) {
     return null;

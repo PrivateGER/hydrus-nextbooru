@@ -4,10 +4,10 @@ import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags, createGroup, createPostInGroup, createPost, createTag } from './factories';
 import { TagCategory, SourceType } from '@/generated/prisma/client';
 
-let getRecommendations: typeof import('@/lib/recommendations').getRecommendations;
-let getRecommendationsByHash: typeof import('@/lib/recommendations').getRecommendationsByHash;
+let getOrComputeRecommendations: typeof import('@/lib/recommendations').getOrComputeRecommendations;
+let getOrComputeRecommendationsByHash: typeof import('@/lib/recommendations').getOrComputeRecommendationsByHash;
 let computeRecommendationsForPost: typeof import('@/lib/recommendations').computeRecommendationsForPost;
-let pregenRecommendations: typeof import('@/lib/recommendations').pregenRecommendations;
+let invalidateRecommendationsForPost: typeof import('@/lib/recommendations').invalidateRecommendationsForPost;
 let hasRecommendations: typeof import('@/lib/recommendations').hasRecommendations;
 let getRecommendationStats: typeof import('@/lib/recommendations').getRecommendationStats;
 
@@ -16,10 +16,10 @@ describe('Recommendations Module (Integration)', () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
     const module = await import('@/lib/recommendations');
-    getRecommendations = module.getRecommendations;
-    getRecommendationsByHash = module.getRecommendationsByHash;
+    getOrComputeRecommendations = module.getOrComputeRecommendations;
+    getOrComputeRecommendationsByHash = module.getOrComputeRecommendationsByHash;
     computeRecommendationsForPost = module.computeRecommendationsForPost;
-    pregenRecommendations = module.pregenRecommendations;
+    invalidateRecommendationsForPost = module.invalidateRecommendationsForPost;
     hasRecommendations = module.hasRecommendations;
     getRecommendationStats = module.getRecommendationStats;
   });
@@ -167,58 +167,8 @@ describe('Recommendations Module (Integration)', () => {
     });
   });
 
-  describe('pregenRecommendations', () => {
-    it('should generate recommendations for all posts', async () => {
-      const prisma = getTestPrisma();
-
-      // Create posts with shared tags
-      await createPostWithTags(prisma, ['shared-tag', 'unique-a']);
-      await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
-      await createPostWithTags(prisma, ['shared-tag', 'unique-c']);
-
-      // Recalculate tag counts and IDF weights
-      await recalculateTagStats();
-
-      const result = await pregenRecommendations(10);
-
-      // processed = recommendations inserted (3 posts × 2 recommendations each = 6)
-      // total = posts processed (3)
-      expect(result.processed).toBe(6);
-      expect(result.total).toBe(3);
-
-      // Check that recommendations were stored
-      const storedRecs = await prisma.postRecommendation.count();
-      expect(storedRecs).toBeGreaterThan(0);
-    });
-
-    it('should clear existing recommendations before regenerating', async () => {
-      const prisma = getTestPrisma();
-
-      // Create initial posts
-      const post1 = await createPostWithTags(prisma, ['shared-tag']);
-      const post2 = await createPostWithTags(prisma, ['shared-tag']);
-
-      // Recalculate tag counts and IDF weights
-      await recalculateTagStats();
-
-      // Run pregen
-      await pregenRecommendations(10);
-
-      const count1 = await prisma.postRecommendation.count();
-      expect(count1).toBeGreaterThan(0);
-
-      // Run pregen again
-      await pregenRecommendations(10);
-
-      const count2 = await prisma.postRecommendation.count();
-
-      // Count should be the same (not doubled)
-      expect(count2).toBe(count1);
-    });
-  });
-
-  describe('getRecommendations', () => {
-    it('should return cached recommendations', async () => {
+  describe('getOrComputeRecommendations (JIT)', () => {
+    it('should compute and cache recommendations on first call', async () => {
       const prisma = getTestPrisma();
 
       // Need at least 3 posts so IDF is meaningful
@@ -228,47 +178,116 @@ describe('Recommendations Module (Integration)', () => {
 
       // Recalculate tag counts and IDF weights
       await recalculateTagStats();
-      await pregenRecommendations(10);
 
-      const recommendations = await getRecommendations(post1.id, 10);
+      // No cached recommendations initially
+      const cachedBefore = await prisma.postRecommendation.count({ where: { postId: post1.id } });
+      expect(cachedBefore).toBe(0);
+
+      // Call JIT function
+      const recommendations = await getOrComputeRecommendations(post1.id, 10);
 
       expect(recommendations).toHaveLength(1);
       expect(recommendations[0].hash).toBe(post2.hash);
       expect(recommendations[0].score).toBeGreaterThan(0);
+
+      // Should have cached the result
+      const cachedAfter = await prisma.postRecommendation.count({ where: { postId: post1.id } });
+      expect(cachedAfter).toBe(1);
     });
 
-    it('should return empty array if no recommendations exist', async () => {
-      const prisma = getTestPrisma();
-
-      const post = await createPost(prisma);
-
-      const recommendations = await getRecommendations(post.id, 10);
-
-      expect(recommendations).toEqual([]);
-    });
-  });
-
-  describe('getRecommendationsByHash', () => {
-    it('should return recommendations by hash', async () => {
+    it('should return cached results on subsequent calls', async () => {
       const prisma = getTestPrisma();
 
       const post1 = await createPostWithTags(prisma, ['shared-tag']);
       const post2 = await createPostWithTags(prisma, ['shared-tag']);
 
-      // Recalculate tag counts and IDF weights
       await recalculateTagStats();
-      await pregenRecommendations(10);
 
-      const recommendations = await getRecommendationsByHash(post1.hash, 10);
+      // First call - computes and caches
+      const first = await getOrComputeRecommendations(post1.id, 10);
+      expect(first).toHaveLength(1);
+
+      // Get the cached timestamp
+      const cached = await prisma.postRecommendation.findFirst({
+        where: { postId: post1.id },
+        select: { computedAt: true },
+      });
+
+      // Second call - should use cache
+      const second = await getOrComputeRecommendations(post1.id, 10);
+      expect(second).toHaveLength(1);
+
+      // Verify cache wasn't regenerated (same timestamp)
+      const cachedAfter = await prisma.postRecommendation.findFirst({
+        where: { postId: post1.id },
+        select: { computedAt: true },
+      });
+      expect(cachedAfter?.computedAt.getTime()).toBe(cached?.computedAt.getTime());
+    });
+
+    it('should return empty array and clean cache if no recommendations', async () => {
+      const prisma = getTestPrisma();
+
+      // Create post with no shared tags
+      const post1 = await createPostWithTags(prisma, ['unique-tag-a']);
+      await createPostWithTags(prisma, ['unique-tag-b']);
+
+      await recalculateTagStats();
+
+      const recommendations = await getOrComputeRecommendations(post1.id, 10);
+
+      expect(recommendations).toEqual([]);
+
+      // Should have no cached entries
+      const cached = await prisma.postRecommendation.count({ where: { postId: post1.id } });
+      expect(cached).toBe(0);
+    });
+  });
+
+  describe('getOrComputeRecommendationsByHash', () => {
+    it('should compute recommendations by hash', async () => {
+      const prisma = getTestPrisma();
+
+      const post1 = await createPostWithTags(prisma, ['shared-tag']);
+      const post2 = await createPostWithTags(prisma, ['shared-tag']);
+
+      await recalculateTagStats();
+
+      const recommendations = await getOrComputeRecommendationsByHash(post1.hash, 10);
 
       expect(recommendations).toHaveLength(1);
       expect(recommendations[0].hash).toBe(post2.hash);
     });
 
     it('should return empty array for non-existent hash', async () => {
-      const recommendations = await getRecommendationsByHash('0'.repeat(64), 10);
+      const recommendations = await getOrComputeRecommendationsByHash('0'.repeat(64), 10);
 
       expect(recommendations).toEqual([]);
+    });
+  });
+
+  describe('invalidateRecommendationsForPost', () => {
+    it('should clear cached recommendations for a post', async () => {
+      const prisma = getTestPrisma();
+
+      const post1 = await createPostWithTags(prisma, ['shared-tag']);
+      await createPostWithTags(prisma, ['shared-tag']);
+
+      await recalculateTagStats();
+
+      // Generate recommendations
+      await getOrComputeRecommendations(post1.id, 10);
+
+      // Verify cached
+      const cachedBefore = await prisma.postRecommendation.count({ where: { postId: post1.id } });
+      expect(cachedBefore).toBe(1);
+
+      // Invalidate
+      await invalidateRecommendationsForPost(post1.id);
+
+      // Verify cleared
+      const cachedAfter = await prisma.postRecommendation.count({ where: { postId: post1.id } });
+      expect(cachedAfter).toBe(0);
     });
   });
 
@@ -281,11 +300,11 @@ describe('Recommendations Module (Integration)', () => {
     it('should return true when recommendations exist', async () => {
       const prisma = getTestPrisma();
 
-      await createPostWithTags(prisma, ['shared-tag']);
+      const post1 = await createPostWithTags(prisma, ['shared-tag']);
       await createPostWithTags(prisma, ['shared-tag']);
 
       await recalculateTagStats();
-      await pregenRecommendations(10);
+      await getOrComputeRecommendations(post1.id, 10);
 
       const result = await hasRecommendations();
       expect(result).toBe(true);
@@ -297,12 +316,16 @@ describe('Recommendations Module (Integration)', () => {
       const prisma = getTestPrisma();
 
       // Create 3 posts with shared tags
-      await createPostWithTags(prisma, ['shared-tag', 'unique-a']);
-      await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
-      await createPostWithTags(prisma, ['shared-tag', 'unique-c']);
+      const post1 = await createPostWithTags(prisma, ['shared-tag', 'unique-a']);
+      const post2 = await createPostWithTags(prisma, ['shared-tag', 'unique-b']);
+      const post3 = await createPostWithTags(prisma, ['shared-tag', 'unique-c']);
 
       await recalculateTagStats();
-      await pregenRecommendations(10);
+
+      // Trigger JIT for all posts
+      await getOrComputeRecommendations(post1.id, 10);
+      await getOrComputeRecommendations(post2.id, 10);
+      await getOrComputeRecommendations(post3.id, 10);
 
       const stats = await getRecommendationStats();
 

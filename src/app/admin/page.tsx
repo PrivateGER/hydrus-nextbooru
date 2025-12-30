@@ -320,8 +320,6 @@ export default function AdminPage() {
 
   // Maintenance state
   const [isRecalculating, setIsRecalculating] = useState(false);
-  const [isRegeneratingRecs, setIsRegeneratingRecs] = useState(false);
-  const recsWasRunningRef = useRef(false);
 
   // Translation settings state
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
@@ -432,61 +430,28 @@ export default function AdminPage() {
     }
   }, []);
 
-  const fetchRecsStatus = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/recommendations");
-      const data = await response.json();
-      const isRunning = data.status === "running";
-
-      // Detect transition from running to completed (for page refresh case)
-      if (recsWasRunningRef.current && !isRunning) {
-        if (data.status === "completed") {
-          triggerSuccessAnimation();
-          setMessage({
-            type: "success",
-            text: `Recommendations generated for ${data.postsWithRecommendations.toLocaleString()} posts!`,
-          });
-        } else if (data.status === "error") {
-          setMessage({
-            type: "error",
-            text: "Recommendation generation failed. Check logs for details.",
-          });
-        }
-      }
-
-      recsWasRunningRef.current = isRunning;
-      setIsRegeneratingRecs(isRunning);
-    } catch (error) {
-      console.error("Error fetching recommendations status:", error);
-    }
-  }, [triggerSuccessAnimation]);
-
   // Initial fetch on mount
   useEffect(() => {
     fetchStatus();
     fetchThumbStats();
     fetchTranslationSettings();
-    fetchRecsStatus();
-  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, fetchRecsStatus]);
+  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings]);
 
   // Polling when operations are running - use refs to avoid recreating interval
   const isSyncingRef = useRef(isSyncing);
   const isGeneratingThumbsRef = useRef(isGeneratingThumbs);
-  const isRegeneratingRecsRef = useRef(isRegeneratingRecs);
 
   useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
   useEffect(() => { isGeneratingThumbsRef.current = isGeneratingThumbs; }, [isGeneratingThumbs]);
-  useEffect(() => { isRegeneratingRecsRef.current = isRegeneratingRecs; }, [isRegeneratingRecs]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       if (isSyncingRef.current) fetchStatus();
       if (isGeneratingThumbsRef.current) fetchThumbStats();
-      if (isRegeneratingRecsRef.current) fetchRecsStatus();
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchThumbStats, fetchRecsStatus]);
+  }, [fetchStatus, fetchThumbStats]);
 
   const startSync = async (tags?: string[]) => {
     setIsSyncing(true);
@@ -697,31 +662,6 @@ export default function AdminPage() {
       });
     } finally {
       setIsRecalculating(false);
-    }
-  };
-
-  const handleRegenerateRecommendations = async () => {
-    setIsRegeneratingRecs(true);
-    recsWasRunningRef.current = true;
-    setMessage(null);
-
-    try {
-      const response = await fetch("/api/admin/recommendations", { method: "POST" });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to start recommendation generation");
-      }
-
-      setMessage({ type: "success", text: "Generating recommendations..." });
-      // Polling is handled by useEffect via fetchRecsStatus
-    } catch (error) {
-      setIsRegeneratingRecs(false);
-      recsWasRunningRef.current = false;
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : "Failed to generate recommendations",
-      });
     }
   };
 
@@ -1176,19 +1116,6 @@ export default function AdminPage() {
         </Button>
 
         <InfoBox variant="tip" className={"mt-2"}>Run this if tag counts or homepage stats look incorrect.</InfoBox>
-      </Card>
-
-      <Card>
-        <h3 className="mb-1 font-medium text-zinc-200">Regenerate Recommendations</h3>
-        <p className="mb-4 text-sm text-zinc-400">
-          Rebuild &quot;Similar Posts&quot; suggestions based on tag similarity. Runs automatically after sync.
-        </p>
-        <Button onClick={handleRegenerateRecommendations} disabled={isRegeneratingRecs || isSyncing} loading={isRegeneratingRecs} variant="secondary">
-          <ArrowPathIcon className="h-4 w-4" />
-          Regenerate
-        </Button>
-
-        <InfoBox variant="tip" className={"mt-2"}>Run this if similar posts aren&apos;t showing or seem outdated. This may take a long time.</InfoBox>
       </Card>
     </div>
   );
