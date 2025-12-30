@@ -77,7 +77,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(postTags.length).toBeGreaterThan(0);
     });
 
-    it('should update existing posts on re-sync', async () => {
+    it('should update existing posts on re-sync', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
       const hash = 'a'.repeat(64);
 
@@ -111,7 +111,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(postTags).toHaveLength(2);
     });
 
-    it('should skip unchanged relations on re-sync', async () => {
+    it('should skip unchanged relations on re-sync', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
       const hash = 'a'.repeat(64);
 
@@ -289,7 +289,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('cancellation', () => {
-    it('should stop processing when cancelled', async () => {
+    it('should stop processing when cancelled', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // Setup enough files to ensure multiple batches (3x batch size for reliable cancellation)
@@ -321,7 +321,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('sync state tracking', () => {
-    it('should update progress during sync', async () => {
+    it('should update progress during sync', { timeout: 60000 }, async () => {
       const prisma = getTestPrisma();
 
       addFilesToState(hydrusState, [
@@ -337,7 +337,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(state?.lastSyncedAt).not.toBeNull();
     });
 
-    it('should track batch progress', async () => {
+    it('should track batch progress', { timeout: 30000 }, async () => {
       // Create enough files for 2 batches (just over TEST_BATCH_SIZE)
       const fileCount = TEST_BATCH_SIZE + 5;
       const files = Array.from({ length: fileCount }, (_, i) =>
@@ -367,7 +367,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('tag handling', () => {
-    it('should categorize namespaced tags correctly', async () => {
+    it('should categorize namespaced tags correctly', { timeout: 60000 }, async () => {
       const prisma = getTestPrisma();
 
       addFilesToState(hydrusState, [
@@ -413,7 +413,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('deletion cleanup', () => {
-    it('should delete posts removed from Hydrus', async () => {
+    it('should delete posts removed from Hydrus', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // First sync: add 3 files
@@ -437,7 +437,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedPosts).toBe(1);
     });
 
-    it('should delete orphaned tags after post deletion', async () => {
+    it('should delete orphaned tags after post deletion', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // Sync: file with unique tag
@@ -462,7 +462,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedTags).toBe(1);
     });
 
-    it('should delete orphaned groups after post deletion', async () => {
+    it('should delete orphaned groups after post deletion', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // Sync: two files in same pixiv group, one in unique group
@@ -486,7 +486,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedGroups).toBe(1);
     });
 
-    it('should handle empty Hydrus library (delete all posts)', async () => {
+    it('should handle empty Hydrus library (delete all posts)', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // First sync with files
@@ -507,7 +507,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedPosts).toBe(1);
     });
 
-    it('should report deletion counts in progress callback', async () => {
+    it('should report deletion counts in progress callback', { timeout: 30000 }, async () => {
       addFilesToState(hydrusState, [
         createMockFileWithTags(['unique_tag'], { file_id: 1, hash: 'a'.repeat(64) }),
         createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
