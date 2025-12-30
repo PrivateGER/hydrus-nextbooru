@@ -273,7 +273,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
       {/* Top pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/tags" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
 
@@ -305,7 +305,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
       {/* Pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/tags" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
     </div>

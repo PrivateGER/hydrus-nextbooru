@@ -183,11 +183,7 @@ function TagTreeContent() {
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="mt-6">
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                basePath="/tree"
-              />
+              <Pagination currentPage={currentPage} totalPages={totalPages} />
             </div>
           )}
         </div>

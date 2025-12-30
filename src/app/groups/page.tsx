@@ -84,15 +84,6 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
     return `/groups${queryString ? `?${queryString}` : ""}`;
   };
 
-  // Build basePath for pagination (preserves filters but not page)
-  const paginationBasePath = (() => {
-    const params = new URLSearchParams();
-    if (typeFilter) params.set("type", typeFilter);
-    params.set("order", order);
-    if (order === "random") params.set("seed", seed);
-    const queryString = params.toString();
-    return `/groups${queryString ? `?${queryString}` : ""}`;
-  })();
 
   return (
     <div className="space-y-6">
@@ -165,11 +156,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
 
       {/* Top pagination */}
       <Suspense fallback={null}>
-        <Pagination
-          currentPage={page}
-          totalPages={totalPages}
-          basePath={paginationBasePath}
-        />
+        <Pagination currentPage={page} totalPages={totalPages} />
       </Suspense>
 
       {/* Groups list */}
@@ -267,11 +254,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
 
       {/* Pagination */}
       <Suspense fallback={null}>
-        <Pagination
-          currentPage={page}
-          totalPages={totalPages}
-          basePath={paginationBasePath}
-        />
+        <Pagination currentPage={page} totalPages={totalPages} />
       </Suspense>
     </div>
   );

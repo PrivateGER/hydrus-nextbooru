@@ -189,7 +189,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       {/* Top pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/search" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
 
@@ -215,7 +215,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/search" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
     </div>

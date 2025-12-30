@@ -153,12 +153,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Only fetch homepage data on first page with default sort
   const homeData = isFirstPage ? await getHomeData() : null;
 
-  // Build basePath for pagination that preserves sort
-  const paginationBasePath = sort === "newest"
-    ? "/"
-    : sort === "random"
-      ? `/?sort=random&seed=${seed}`
-      : `/?sort=${sort}`;
 
   return (
     <div className="space-y-8">
@@ -242,11 +236,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {/* Top pagination */}
         <Suspense fallback={null}>
-          <Pagination
-            currentPage={page}
-            totalPages={totalPages}
-            basePath={paginationBasePath}
-          />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
 
         {/* Posts grid */}
@@ -268,11 +258,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {/* Pagination */}
         <Suspense fallback={null}>
-          <Pagination
-            currentPage={page}
-            totalPages={totalPages}
-            basePath={paginationBasePath}
-          />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       </div>
     </div>
