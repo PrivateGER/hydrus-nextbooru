@@ -1,37 +1,7 @@
 import { prisma } from "@/lib/db";
-import { syncLog } from "@/lib/logger";
 
-export interface RecommendationProgress {
-  processed: number;
-  total: number;
-  status: "idle" | "running" | "completed" | "error";
-  error?: string;
-}
-
-/**
- * Get the current pregen status from the Settings table.
- */
-export async function getPregenProgress(): Promise<RecommendationProgress> {
-  const setting = await prisma.settings.findUnique({
-    where: { key: "recommendations.progress" },
-  });
-
-  if (!setting?.value) {
-    return { processed: 0, total: 0, status: "idle" };
-  }
-
-  try {
-    const stored = JSON.parse(setting.value) as RecommendationProgress;
-    return {
-      processed: stored.processed ?? 0,
-      total: stored.total ?? 0,
-      status: stored.status ?? "idle",
-      error: stored.error,
-    };
-  } catch {
-    return { processed: 0, total: 0, status: "idle" };
-  }
-}
+// Cache TTL: 24 hours in milliseconds
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface RecommendedPost {
   id: number;
@@ -44,104 +14,21 @@ export interface RecommendedPost {
 }
 
 /**
- * Pregenerate recommendations for all posts using the PL/pgSQL function.
- * Uses LATERAL join for fast set-based processing.
+ * Get or compute recommendations for a post (JIT with caching).
  *
- * @param limit - Max recommendations per post (default: 10)
- * @returns Final progress with total processed count
- */
-export async function pregenRecommendations(
-  limit = 10
-): Promise<RecommendationProgress> {
-  // Check if already running
-  const currentStatus = await getPregenProgress();
-  syncLog.info({ currentStatus }, "Current pregen status before starting");
-  if (currentStatus.status === "running") {
-    syncLog.warn({}, "Recommendation pregen already running");
-    return currentStatus;
-  }
-
-  syncLog.info({ limit }, "Starting recommendation pregeneration");
-  const startTime = Date.now();
-
-  const updateProgress = async (progress: RecommendationProgress) => {
-    const value = JSON.stringify(progress);
-    await prisma.settings.upsert({
-      where: { key: "recommendations.progress" },
-      create: { key: "recommendations.progress", value },
-      update: { value },
-    });
-  };
-
-  try {
-    // Mark as running in Settings table
-    await updateProgress({ processed: 0, total: 0, status: "running" });
-
-    // Call the optimized PL/pgSQL function - uses set-based matrix computation
-    syncLog.info({}, "Calling pregen_all_recommendations_v2...");
-    const results = await prisma.$queryRaw<{ processed: bigint; total: bigint }[]>`
-      SELECT * FROM pregen_all_recommendations_v2(${limit})
-    `;
-    syncLog.info({ results }, "pregen_all_recommendations_v2 returned");
-
-    const finalResult = results[results.length - 1] || { processed: BigInt(0), total: BigInt(0) };
-    // Convert BigInt to number (safe for reasonable post counts)
-    const processed = Number(finalResult.processed);
-    const total = Number(finalResult.total);
-
-    const durationMs = Date.now() - startTime;
-    syncLog.info(
-      {
-        processed,
-        total,
-        durationMs,
-      },
-      "Recommendation pregeneration completed"
-    );
-
-    const completedProgress: RecommendationProgress = {
-      processed,
-      total,
-      status: "completed",
-    };
-    await updateProgress(completedProgress);
-
-    return completedProgress;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    // Wrap status update in try-catch to avoid masking original error
-    try {
-      await updateProgress({
-        processed: 0,
-        total: 0,
-        status: "error",
-        error: errorMessage,
-      });
-    } catch (updateError) {
-      syncLog.error(
-        { updateError: updateError instanceof Error ? updateError.message : String(updateError) },
-        "Failed to update error status in settings"
-      );
-    }
-
-    syncLog.error({ error: errorMessage }, "Recommendation pregeneration failed");
-    throw error;
-  }
-}
-
-/**
- * Get cached recommendations for a post.
+ * - If cached recommendations exist and are fresh (< 24h), returns cached
+ * - Otherwise, computes recommendations on-demand and caches them
  *
  * @param postId - The post ID to get recommendations for
  * @param limit - Max number of recommendations to return (default: 10)
  * @returns Array of recommended posts with similarity scores
  */
-export async function getRecommendations(
+export async function getOrComputeRecommendations(
   postId: number,
   limit = 10
 ): Promise<RecommendedPost[]> {
-  const recommendations = await prisma.postRecommendation.findMany({
+  // Check for cached recommendations
+  const cached = await prisma.postRecommendation.findMany({
     where: { postId },
     include: {
       recommended: {
@@ -159,25 +46,38 @@ export async function getRecommendations(
     take: limit,
   });
 
-  return recommendations.map((rec) => ({
-    id: rec.recommended.id,
-    hash: rec.recommended.hash,
-    width: rec.recommended.width,
-    height: rec.recommended.height,
-    blurhash: rec.recommended.blurhash,
-    mimeType: rec.recommended.mimeType,
-    score: rec.score,
-  }));
+  // If cache exists and is fresh, return it
+  if (cached.length > 0) {
+    const computedAt = cached[0].computedAt;
+    // Treat missing computedAt as stale (pre-migration data)
+    if (computedAt) {
+      const cacheAge = Date.now() - computedAt.getTime();
+      if (cacheAge < CACHE_TTL_MS) {
+        return cached.map((rec) => ({
+          id: rec.recommended.id,
+          hash: rec.recommended.hash,
+          width: rec.recommended.width,
+          height: rec.recommended.height,
+          blurhash: rec.recommended.blurhash,
+          mimeType: rec.recommended.mimeType,
+          score: rec.score,
+        }));
+      }
+    }
+  }
+
+  // Compute fresh recommendations
+  return computeAndCacheRecommendations(postId, limit);
 }
 
 /**
- * Get recommendations for a post by its hash.
+ * Get or compute recommendations for a post by its hash (JIT with caching).
  *
  * @param hash - The post hash to get recommendations for
  * @param limit - Max number of recommendations to return (default: 10)
  * @returns Array of recommended posts with similarity scores, or empty if post not found
  */
-export async function getRecommendationsByHash(
+export async function getOrComputeRecommendationsByHash(
   hash: string,
   limit = 10
 ): Promise<RecommendedPost[]> {
@@ -190,12 +90,82 @@ export async function getRecommendationsByHash(
     return [];
   }
 
-  return getRecommendations(post.id, limit);
+  return getOrComputeRecommendations(post.id, limit);
+}
+
+/**
+ * Compute recommendations for a post and cache them.
+ */
+async function computeAndCacheRecommendations(
+  postId: number,
+  limit: number
+): Promise<RecommendedPost[]> {
+  // Call the SQL function to compute recommendations
+  const rawResults = await prisma.$queryRaw<
+    { recommended_id: number; score: number }[]
+  >`SELECT * FROM compute_post_recommendations(${postId}, ${limit})`;
+
+  if (rawResults.length === 0) {
+    // Delete any stale cache entries
+    await prisma.postRecommendation.deleteMany({ where: { postId } });
+    return [];
+  }
+
+  const recommendedIds = rawResults.map((r) => r.recommended_id);
+
+  // Fetch post details for the recommended IDs
+  const posts = await prisma.post.findMany({
+    where: { id: { in: recommendedIds } },
+    select: {
+      id: true,
+      hash: true,
+      width: true,
+      height: true,
+      blurhash: true,
+      mimeType: true,
+    },
+  });
+
+  const postMap = new Map(posts.map((p) => [p.id, p]));
+  const now = new Date();
+
+  // Upsert recommendations in a transaction
+  await prisma.$transaction(async (tx) => {
+    // Delete old recommendations for this post
+    await tx.postRecommendation.deleteMany({ where: { postId } });
+
+    // Insert new recommendations
+    await tx.postRecommendation.createMany({
+      data: rawResults.map((r) => ({
+        postId,
+        recommendedId: r.recommended_id,
+        score: r.score,
+        computedAt: now,
+      })),
+    });
+  });
+
+  // Return results in score order
+  return rawResults
+    .map((r) => {
+      const post = postMap.get(r.recommended_id);
+      if (!post) return null;
+      return {
+        id: post.id,
+        hash: post.hash,
+        width: post.width,
+        height: post.height,
+        blurhash: post.blurhash,
+        mimeType: post.mimeType,
+        score: r.score,
+      };
+    })
+    .filter((p): p is RecommendedPost => p !== null);
 }
 
 /**
  * Compute recommendations for a single post on-demand (not cached).
- * Useful for testing or when cached recommendations are stale.
+ * Useful for testing or benchmarking.
  *
  * @param postId - The post ID to compute recommendations for
  * @param limit - Max recommendations to return (default: 10)
@@ -216,8 +186,17 @@ export async function computeRecommendationsForPost(
 }
 
 /**
+ * Invalidate cached recommendations for a specific post.
+ * Call this when a post's tags change significantly.
+ */
+export async function invalidateRecommendationsForPost(postId: number): Promise<void> {
+  await prisma.postRecommendation.deleteMany({
+    where: { postId },
+  });
+}
+
+/**
  * Check if recommendations exist for any posts.
- * Useful to determine if pregeneration has been run.
  */
 export async function hasRecommendations(): Promise<boolean> {
   const count = await prisma.postRecommendation.count({ take: 1 });
