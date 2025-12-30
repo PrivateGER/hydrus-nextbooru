@@ -1,21 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 interface PaginationProps {
   currentPage: number;
   totalPages: number;
-  basePath?: string;
 }
 
-export function Pagination({ currentPage, totalPages, basePath = "" }: PaginationProps) {
+/**
+ * Render a pagination navigation bar with previous/next controls and page links, using ellipses to truncate long ranges.
+ *
+ * @param currentPage - The currently active page (1-based).
+ * @param totalPages - Total number of pages available.
+ * @returns The pagination navigation element, or `null` when there is one or zero pages.
+ */
+export function Pagination({ currentPage, totalPages }: PaginationProps) {
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const buildPageUrl = (page: number) => {
     const params = new URLSearchParams(searchParams.toString());
-    params.set("page", String(page));
-    return `${basePath}?${params.toString()}`;
+    if (page > 1) {
+      params.set("page", String(page));
+    } else {
+      params.delete("page");
+    }
+    const queryString = params.toString();
+    return queryString ? `${pathname}?${queryString}` : pathname;
   };
 
   // Generate page numbers to show

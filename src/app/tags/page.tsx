@@ -168,6 +168,12 @@ async function getCategoryCounts(): Promise<TagsCategoryCounts> {
   return result;
 }
 
+/**
+ * Renders the Tags page with search, category filters, sorting controls, and paginated tag results.
+ *
+ * @param searchParams - Object providing query parameters (`q`, `category`, `sort`, `page`)
+ * @returns The rendered page JSX for browsing and filtering tags
+ */
 export default async function TagsPage({ searchParams }: TagsPageProps) {
   const params = await searchParams;
 
@@ -273,7 +279,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
       {/* Top pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/tags" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
 
@@ -305,7 +311,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
       {/* Pagination */}
       {totalPages > 1 && (
         <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} basePath="/tags" />
+          <Pagination currentPage={page} totalPages={totalPages} />
         </Suspense>
       )}
     </div>
