@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
@@ -12,7 +13,7 @@ import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
-import { RelatedPosts } from "@/components/post/related-posts";
+import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 
 interface PostPageProps {
@@ -277,7 +278,9 @@ export default async function PostPage({ params }: PostPageProps) {
         })}
 
         {/* Similar posts based on tag similarity */}
-        <RelatedPosts hash={post.hash} />
+        <Suspense fallback={<RelatedPostsSkeleton />}>
+          <RelatedPosts hash={post.hash} />
+        </Suspense>
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">

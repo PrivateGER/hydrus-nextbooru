@@ -48,17 +48,21 @@ export async function getOrComputeRecommendations(
 
   // If cache exists and is fresh, return it
   if (cached.length > 0) {
-    const cacheAge = Date.now() - cached[0].computedAt.getTime();
-    if (cacheAge < CACHE_TTL_MS) {
-      return cached.map((rec) => ({
-        id: rec.recommended.id,
-        hash: rec.recommended.hash,
-        width: rec.recommended.width,
-        height: rec.recommended.height,
-        blurhash: rec.recommended.blurhash,
-        mimeType: rec.recommended.mimeType,
-        score: rec.score,
-      }));
+    const computedAt = cached[0].computedAt;
+    // Treat missing computedAt as stale (pre-migration data)
+    if (computedAt) {
+      const cacheAge = Date.now() - computedAt.getTime();
+      if (cacheAge < CACHE_TTL_MS) {
+        return cached.map((rec) => ({
+          id: rec.recommended.id,
+          hash: rec.recommended.hash,
+          width: rec.recommended.width,
+          height: rec.recommended.height,
+          blurhash: rec.recommended.blurhash,
+          mimeType: rec.recommended.mimeType,
+          score: rec.score,
+        }));
+      }
     }
   }
 

@@ -1,3 +1,4 @@
+import { SparklesIcon } from "@heroicons/react/24/outline";
 import { getOrComputeRecommendationsByHash } from "@/lib/recommendations";
 import { RelatedPostsClient } from "./related-posts-client";
 
@@ -18,4 +19,31 @@ export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
   }
 
   return <RelatedPostsClient recommendations={recommendations} />;
+}
+
+/**
+ * Loading skeleton for RelatedPosts.
+ * Use with Suspense to avoid blocking page render.
+ */
+export function RelatedPostsSkeleton() {
+  return (
+    <div className="rounded-lg bg-zinc-800 p-4 animate-pulse">
+      {/* Header */}
+      <div className="mb-3 flex items-center gap-2">
+        <SparklesIcon className="h-5 w-5 text-zinc-600" />
+        <div className="h-5 w-28 rounded bg-zinc-700" />
+        <div className="h-4 w-16 rounded bg-zinc-700" />
+      </div>
+
+      {/* Skeleton thumbnails */}
+      <div className="flex gap-2 overflow-hidden">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-36 w-24 shrink-0 rounded-lg bg-zinc-700"
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
