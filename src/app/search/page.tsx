@@ -33,6 +33,16 @@ interface SearchPageProps {
   searchParams: Promise<{ tags?: string; notes?: string; page?: string }>;
 }
 
+/**
+ * Render the search results page, handling tag-based and note-content searches with pagination.
+ *
+ * Processes search parameters (tags, notes, page), performs a cached search, groups duplicate notes,
+ * and renders the search bar, wildcard expansions, result counts, results list (posts or notes),
+ * pagination, and any error or empty-state messages.
+ *
+ * @param searchParams - A promise resolving to query parameters: `tags` (comma-separated string), `notes` (note query string), and `page` (page number string)
+ * @returns The React element for the search page containing the search UI and results
+ */
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const params = await searchParams;
   const tagsParam = params.tags || "";

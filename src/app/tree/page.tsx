@@ -22,6 +22,13 @@ interface PostsResponse {
   totalPages: number;
 }
 
+/**
+ * Render the tag-based filtering UI with a tag selector, results area, loading and empty states, and pagination.
+ *
+ * Reads selected tags and page from the URL, fetches matching posts when tags or page change, and updates the URL when the selected tags change (resetting the page to 1). When no tags are selected it shows an instructional empty state and does not fetch results.
+ *
+ * @returns The component's rendered JSX: a two-column layout containing a TagTreeSelector and a results area that shows result counts, loading placeholders, a posts grid, a no-results message, and pagination controls when applicable.
+ */
 function TagTreeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();

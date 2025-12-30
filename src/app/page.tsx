@@ -100,6 +100,12 @@ async function getHomeData() {
   return { stats, popularTags, randomPosts, recentImports };
 }
 
+/**
+ * Render the gallery home page with search, sorting, stable-random ordering, and paginated post results.
+ *
+ * @param searchParams - A promise resolving to URL query parameters (e.g., `page`, `sort`, `seed`) used to determine pagination, sort mode, and random seed.
+ * @returns The page's React element containing the search bar, optional homepage sections on the first page (stats, popular tags, random highlights), gallery header and sort controls, a grid of posts for the current page, and pagination controls.
+ */
 export default async function HomePage({ searchParams }: HomePageProps) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page || "1", 10));

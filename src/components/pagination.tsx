@@ -8,6 +8,13 @@ interface PaginationProps {
   totalPages: number;
 }
 
+/**
+ * Render a pagination navigation bar with previous/next controls and page links, using ellipses to truncate long ranges.
+ *
+ * @param currentPage - The currently active page (1-based).
+ * @param totalPages - Total number of pages available.
+ * @returns The pagination navigation element, or `null` when there is one or zero pages.
+ */
 export function Pagination({ currentPage, totalPages }: PaginationProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
