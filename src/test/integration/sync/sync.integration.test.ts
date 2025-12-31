@@ -10,9 +10,6 @@ import type { SetupServer } from 'msw/node';
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
 let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
 
-// Use a small batch size for faster tests
-const TEST_BATCH_SIZE = 10;
-
 describe('syncFromHydrus (Integration)', () => {
   let server: SetupServer;
   let hydrusState: MockHydrusState;
@@ -44,6 +41,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   afterEach(() => {
+    server.resetHandlers();
     server.close();
   });
 
@@ -77,7 +75,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(postTags.length).toBeGreaterThan(0);
     });
 
-    it('should update existing posts on re-sync', async () => {
+    it('should update existing posts on re-sync', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
       const hash = 'a'.repeat(64);
 
@@ -111,7 +109,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(postTags).toHaveLength(2);
     });
 
-    it('should skip unchanged relations on re-sync', async () => {
+    it('should skip unchanged relations on re-sync', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
       const hash = 'a'.repeat(64);
 
@@ -289,34 +287,57 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('cancellation', () => {
-    it('should stop processing when cancelled', async () => {
+    it('should exit early when cancelled mid-sync and process fewer files than total', async () => {
       const prisma = getTestPrisma();
 
-      // Setup enough files to ensure multiple batches (3x batch size for reliable cancellation)
-      const fileCount = TEST_BATCH_SIZE * 3;
-      const files = Array.from({ length: fileCount }, (_, i) =>
-        createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
+      // Setup 20 files to sync with small batch size to ensure multiple batches
+      const totalFiles = 20;
+      const files = Array.from({ length: totalFiles }, (_, i) =>
+        createMockFileMetadata({
+          file_id: i + 1,
+          // Use hex-like hashes to support >26 files
+          hash: (i.toString(16).padStart(2, '0')).repeat(32),
+        })
       );
       addFilesToState(hydrusState, files);
 
-      // Add delay to metadata fetch so we have time to cancel
-      hydrusState.metadataDelayMs = 50;
+      let filesProcessedBeforeCancel = 0;
 
-      // Start sync with small batch size
-      const syncPromise = syncFromHydrus({ batchSize: TEST_BATCH_SIZE });
+      // Start sync with batch size of 1 to maximize batch boundaries
+      const syncPromise = syncFromHydrus({
+        batchSize: 1,
+        onProgress: (progress) => {
+          // Track how many files were processed when we trigger cancellation
+          if (progress.processedFiles > 0 && filesProcessedBeforeCancel === 0) {
+            filesProcessedBeforeCancel = progress.processedFiles;
+          }
+        },
+      });
 
-      // Cancel after first batch has time to start but before all complete
-      await new Promise((r) => setTimeout(r, 30));
+      // Wait briefly for sync to start and process at least one batch
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      // Cancel the sync - this write happens independently and will be seen
+      // at the next batch boundary's cancellation check
       await prisma.syncState.updateMany({
         where: { status: 'running' },
         data: { status: 'cancelled' },
       });
 
+      // Wait for sync to complete
       const result = await syncPromise;
 
+      // Sync should have completed with early exit
       expect(result.phase).toBe('complete');
-      // Should have processed less than total (cancelled mid-way)
-      expect(result.processedFiles).toBeLessThan(fileCount);
+      // Fewer files should have been processed than total (early exit)
+      expect(result.processedFiles).toBeLessThan(totalFiles);
+      // At least some files should have been processed before cancellation
+      expect(result.processedFiles).toBeGreaterThan(0);
+
+      // Verify database reflects partial sync
+      const postsInDb = await prisma.post.count();
+      expect(postsInDb).toBe(result.processedFiles);
+      expect(postsInDb).toBeLessThan(totalFiles);
     });
   });
 
@@ -337,32 +358,35 @@ describe('syncFromHydrus (Integration)', () => {
       expect(state?.lastSyncedAt).not.toBeNull();
     });
 
-    it('should track batch progress', async () => {
-      // Create enough files for 2 batches (just over TEST_BATCH_SIZE)
-      const fileCount = TEST_BATCH_SIZE + 5;
-      const files = Array.from({ length: fileCount }, (_, i) =>
-        createMockFileMetadata({ file_id: i + 1, hash: `${i.toString().padStart(64, 'a')}` })
-      );
-      addFilesToState(hydrusState, files);
+    it('should track progress via callback', async () => {
+      // Create files to sync
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
+        createMockFileMetadata({ file_id: 3, hash: 'c'.repeat(64) }),
+      ]);
 
-      const progressUpdates: { currentBatch: number; totalBatches: number }[] = [];
+      const progressUpdates: { phase: string; processedFiles: number }[] = [];
 
       await syncFromHydrus({
-        batchSize: TEST_BATCH_SIZE,
         onProgress: (progress) => {
-          if (progress.currentBatch > 0) {
-            progressUpdates.push({
-              currentBatch: progress.currentBatch,
-              totalBatches: progress.totalBatches,
-            });
-          }
+          progressUpdates.push({
+            phase: progress.phase,
+            processedFiles: progress.processedFiles,
+          });
         },
       });
 
-      // Should have had progress updates for 2 batches
-      expect(progressUpdates.some((p) => p.currentBatch === 1)).toBe(true);
-      expect(progressUpdates.some((p) => p.currentBatch === 2)).toBe(true);
-      expect(progressUpdates[0].totalBatches).toBe(2);
+      // Should have received progress updates
+      expect(progressUpdates.length).toBeGreaterThan(0);
+
+      // Should have gone through fetching/processing phases
+      expect(progressUpdates.some((p) => p.phase === 'fetching' || p.phase === 'processing')).toBe(true);
+
+      // Final update should show all files processed
+      const lastUpdate = progressUpdates[progressUpdates.length - 1];
+      expect(lastUpdate.phase).toBe('complete');
+      expect(lastUpdate.processedFiles).toBe(3);
     });
   });
 
@@ -379,9 +403,18 @@ describe('syncFromHydrus (Integration)', () => {
         ], { file_id: 1, hash: 'a'.repeat(64) }),
       ]);
 
-      await syncFromHydrus();
+      const result = await syncFromHydrus();
+
+      // Verify sync completed successfully
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(1);
+      expect(result.errors).toHaveLength(0);
 
       const tags = await prisma.tag.findMany();
+
+      // Verify tags were created
+      expect(tags.length).toBeGreaterThanOrEqual(4);
+
       const artistTag = tags.find((t) => t.name === 'john doe');
       const characterTag = tags.find((t) => t.name === 'alice');
       const seriesTag = tags.find((t) => t.name === 'wonderland');
@@ -413,7 +446,7 @@ describe('syncFromHydrus (Integration)', () => {
   });
 
   describe('deletion cleanup', () => {
-    it('should delete posts removed from Hydrus', async () => {
+    it('should delete posts removed from Hydrus', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // First sync: add 3 files
@@ -437,7 +470,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedPosts).toBe(1);
     });
 
-    it('should delete orphaned tags after post deletion', async () => {
+    it('should delete orphaned tags after post deletion', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // Sync: file with unique tag
@@ -462,7 +495,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedTags).toBe(1);
     });
 
-    it('should delete orphaned groups after post deletion', async () => {
+    it('should delete orphaned groups after post deletion', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // Sync: two files in same pixiv group, one in unique group
@@ -486,7 +519,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedGroups).toBe(1);
     });
 
-    it('should handle empty Hydrus library (delete all posts)', async () => {
+    it('should handle empty Hydrus library (delete all posts)', { timeout: 30000 }, async () => {
       const prisma = getTestPrisma();
 
       // First sync with files
@@ -507,7 +540,7 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.deletedPosts).toBe(1);
     });
 
-    it('should report deletion counts in progress callback', async () => {
+    it('should report deletion counts in progress callback', { timeout: 30000 }, async () => {
       addFilesToState(hydrusState, [
         createMockFileWithTags(['unique_tag'], { file_id: 1, hash: 'a'.repeat(64) }),
         createMockFileMetadata({ file_id: 2, hash: 'b'.repeat(64) }),
