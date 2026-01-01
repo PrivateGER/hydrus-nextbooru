@@ -4,8 +4,8 @@ import { TagCategory, Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter } from "@/lib/tag-blacklist";
 
 const VALID_CATEGORIES = Object.values(TagCategory);
-const VALID_SORT = ["count", "name", "-count", "-name"] as const;
-type SortOption = (typeof VALID_SORT)[number];
+const VALID_SORT_OPTIONS = ["count", "name", "-count", "-name"] as const;
+type SortOption = (typeof VALID_SORT_OPTIONS)[number];
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPostWithTags, createPostsWithTag, createTag } from '../factories';
+import { createPostWithTags } from '../factories';
 import { TagCategory } from '@/generated/prisma/client';
 import { invalidateAllCaches } from '@/lib/cache';
 import { clearPatternCache } from '@/lib/tag-blacklist';

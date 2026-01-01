@@ -30,8 +30,6 @@ describe('Performance: Tag Search API', () => {
 
   describe('simple search (no selected tags)', () => {
     it('should complete simple search under 50ms p95', async () => {
-      const prisma = getTestPrisma();
-
       // Warm up caches
       invalidateAllCaches();
       clearPatternCache();

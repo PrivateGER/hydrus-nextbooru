@@ -26,7 +26,7 @@ export function BlurhashImage({ blurhash, width, height, className }: BlurhashIm
       const imageData = ctx.createImageData(32, 32);
       imageData.data.set(pixels);
       ctx.putImageData(imageData, 0, 0);
-    } catch (e) {
+    } catch {
       // Invalid blurhash, leave canvas empty
     }
   }, [blurhash]);

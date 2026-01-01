@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from './setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPostWithTags, createGroup, createPostInGroup, createPost, createTag } from './factories';
-import { TagCategory, SourceType } from '@/generated/prisma/client';
+import { createPostWithTags, createGroup, createPostInGroup, createTag } from './factories';
+import { SourceType } from '@/generated/prisma/client';
 
 let getOrComputeRecommendations: typeof import('@/lib/recommendations').getOrComputeRecommendations;
 let getOrComputeRecommendationsByHash: typeof import('@/lib/recommendations').getOrComputeRecommendationsByHash;
@@ -199,7 +199,8 @@ describe('Recommendations Module (Integration)', () => {
       const prisma = getTestPrisma();
 
       const post1 = await createPostWithTags(prisma, ['shared-tag']);
-      const post2 = await createPostWithTags(prisma, ['shared-tag']);
+      // Create another post with shared tag so recommendations have something to find
+      await createPostWithTags(prisma, ['shared-tag']);
 
       await recalculateTagStats();
 
