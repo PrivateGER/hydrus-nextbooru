@@ -39,7 +39,7 @@ export function isWildcardPattern(tag: string): boolean {
  * @param tag - Tag pattern that may start with `-` for negation
  * @returns The pattern without the negation prefix
  */
-export function getBasePattern(tag: string): string {
+function getBasePattern(tag: string): string {
   return tag.startsWith("-") && tag.length > 1 ? tag.slice(1) : tag;
 }
 
@@ -49,7 +49,7 @@ export function getBasePattern(tag: string): string {
  * @param tag - The tag to check
  * @returns True if the tag is negated
  */
-export function isNegatedPattern(tag: string): boolean {
+function isNegatedPattern(tag: string): boolean {
   return tag.startsWith("-") && tag.length > 1;
 }
 
@@ -62,7 +62,7 @@ export function isNegatedPattern(tag: string): boolean {
  * @param pattern - The user wildcard pattern (without negation prefix)
  * @returns The SQL LIKE pattern
  */
-export function wildcardToSqlPattern(pattern: string): string {
+function wildcardToSqlPattern(pattern: string): string {
   // First escape SQL LIKE special characters (%, _, \)
   const escaped = pattern.replace(/[\\%_]/g, "\\$&");
   // Then convert user wildcards (*) to SQL wildcards (%)
@@ -123,7 +123,7 @@ export function validateWildcardPattern(tag: string): {
  * @param tags - Array of tag patterns
  * @returns Object with regular tags and wildcard patterns separated
  */
-export function separateWildcardPatterns(tags: string[]): {
+function separateWildcardPatterns(tags: string[]): {
   regularTags: string[];
   wildcardPatterns: string[];
 } {
@@ -215,7 +215,7 @@ export async function resolveWildcardPattern(
  * @param tags - Array of tag strings to parse
  * @returns An object containing `includeTags` and `excludeTags` arrays
  */
-export function parseTagsWithNegation(tags: string[]): {
+function parseTagsWithNegation(tags: string[]): {
   includeTags: string[];
   excludeTags: string[];
 } {

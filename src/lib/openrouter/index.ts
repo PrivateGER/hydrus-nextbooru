@@ -4,7 +4,6 @@ export {
   getOpenRouterClient,
   updateSetting,
   updateSettings,
-  deleteSetting,
   maskApiKey,
 } from "./settings";
 export {
