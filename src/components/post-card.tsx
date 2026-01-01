@@ -27,7 +27,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   const loadedRef = useRef(false); // Track loaded state for timeout callback
-  const hashShort = hash.slice(0, 8);
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
@@ -35,7 +34,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
   // Reset state when hash changes (component reuse in virtualized lists)
   useEffect(() => {
-    console.log(`[${hashShort}] hash changed, resetting state`);
     setLoaded(false);
     setError(false);
     setPreviewLoaded(false);
@@ -44,7 +42,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       clearTimeout(timeoutRef.current);
       timeoutRef.current = undefined;
     }
-  }, [hash, hashShort]);
+  }, [hash]);
 
   // Preload animated preview for videos/GIFs when card is visible
   useEffect(() => {
@@ -83,13 +81,11 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
   // Track mounted state to prevent setState after unmount
   useEffect(() => {
-    console.log(`[${hashShort}] mounted`);
     mountedRef.current = true;
     return () => {
-      console.log(`[${hashShort}] unmounting`);
       mountedRef.current = false;
     };
-  }, [hashShort]);
+  }, []);
 
   // Sync loadedRef with loaded state for timeout callback
   useEffect(() => {
@@ -101,29 +97,23 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   useEffect(() => {
     const img = imgRef.current;
     if (!img) {
-      console.log(`[${hashShort}] no img ref`);
       return;
     }
 
     // Check immediately if image is already cached (important for browser back/forward cache)
     if (img.complete && img.naturalWidth > 0) {
-      console.log(`[${hashShort}] image already complete on effect setup, setting loaded=true`);
       if (mountedRef.current) setLoaded(true);
       return;
     }
 
-    console.log(`[${hashShort}] setting up IntersectionObserver, img.complete=${img.complete}, img.naturalWidth=${img.naturalWidth}`);
-
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
-        console.log(`[${hashShort}] intersection: isIntersecting=${entry.isIntersecting}, img.complete=${img.complete}, img.naturalWidth=${img.naturalWidth}`);
 
         if (!entry.isIntersecting) return;
 
         // Image is now visible - check if already cached
         if (img.complete && img.naturalWidth > 0) {
-          console.log(`[${hashShort}] already complete, setting loaded=true`);
           if (mountedRef.current) setLoaded(true);
           observer.disconnect();
           return;
@@ -132,12 +122,9 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         // Start timeout only when image enters viewport
         // This prevents false errors for lazy-loaded below-fold images
         if (!timeoutRef.current) {
-          console.log(`[${hashShort}] starting ${LOAD_TIMEOUT_MS}ms timeout`);
           timeoutRef.current = setTimeout(() => {
             // Use ref to get current loaded state, avoiding stale closure
-            console.log(`[${hashShort}] timeout fired, mounted=${mountedRef.current}, loaded=${loadedRef.current}`);
             if (mountedRef.current && !loadedRef.current) {
-              console.log(`[${hashShort}] setting error=true due to timeout`);
               setError(true);
             }
           }, LOAD_TIMEOUT_MS);
@@ -151,20 +138,16 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     observer.observe(img);
 
     return () => {
-      console.log(`[${hashShort}] cleanup: disconnecting observer`);
       observer.disconnect();
       if (timeoutRef.current) {
-        console.log(`[${hashShort}] cleanup: clearing timeout`);
         clearTimeout(timeoutRef.current);
         timeoutRef.current = undefined;
       }
     };
-  }, [hash, hashShort]);
+  }, [hash]);
 
   // Handle successful load
   const handleLoad = () => {
-    const img = imgRef.current;
-    console.log(`[${hashShort}] onLoad fired, mounted=${mountedRef.current}, img.complete=${img?.complete}, img.naturalWidth=${img?.naturalWidth}`);
     if (!mountedRef.current) return;
     loadedRef.current = true; // Update ref immediately to prevent race with timeout
     setLoaded(true);
@@ -176,7 +159,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
   // Handle load error
   const handleError = () => {
-    console.log(`[${hashShort}] onError fired, mounted=${mountedRef.current}`);
     if (!mountedRef.current) return;
     setError(true);
     if (timeoutRef.current) {
@@ -184,11 +166,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       timeoutRef.current = undefined;
     }
   };
-
-  // Log state changes
-  useEffect(() => {
-    console.log(`[${hashShort}] state: loaded=${loaded}, error=${error}`);
-  }, [hashShort, loaded, error]);
 
   const isMasonry = layout === "masonry";
   const showAnimatedPreview = canHavePreview && previewLoaded && isHovering;
