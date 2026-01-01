@@ -3,7 +3,6 @@ import type {
   HydrusMetadataResponse,
   HydrusFilePathResponse,
   HydrusThumbnailPathResponse,
-  HydrusServicesResponse,
   HydrusVerifyAccessKeyResponse,
   HydrusFileSortType,
 } from "./types";
@@ -74,13 +73,6 @@ export class HydrusClient {
    */
   async verifyAccessKey(): Promise<HydrusVerifyAccessKeyResponse> {
     return this.request<HydrusVerifyAccessKeyResponse>("/verify_access_key");
-  }
-
-  /**
-   * Get all services configured in Hydrus
-   */
-  async getServices(): Promise<HydrusServicesResponse> {
-    return this.request<HydrusServicesResponse>("/get_services");
   }
 
   /**
@@ -161,67 +153,6 @@ export class HydrusClient {
     });
   }
 
-  /**
-   * Get the actual file bytes (useful for proxying)
-   */
-  async getFile(options: { fileId?: number; hash?: string }): Promise<Response> {
-    if (!options.fileId && !options.hash) {
-      throw new Error("Either fileId or hash must be provided");
-    }
-
-    const url = new URL("/get_files/file", this.apiUrl);
-    if (options.fileId) {
-      url.searchParams.set("file_id", String(options.fileId));
-    } else if (options.hash) {
-      url.searchParams.set("hash", options.hash);
-    }
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        "Hydrus-Client-API-Access-Key": this.apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      throw new HydrusApiError(
-        `Hydrus API error: ${response.status} ${response.statusText}`,
-        response.status
-      );
-    }
-
-    return response;
-  }
-
-  /**
-   * Get the actual thumbnail bytes (useful for proxying)
-   */
-  async getThumbnail(options: { fileId?: number; hash?: string }): Promise<Response> {
-    if (!options.fileId && !options.hash) {
-      throw new Error("Either fileId or hash must be provided");
-    }
-
-    const url = new URL("/get_files/thumbnail", this.apiUrl);
-    if (options.fileId) {
-      url.searchParams.set("file_id", String(options.fileId));
-    } else if (options.hash) {
-      url.searchParams.set("hash", options.hash);
-    }
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        "Hydrus-Client-API-Access-Key": this.apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      throw new HydrusApiError(
-        `Hydrus API error: ${response.status} ${response.statusText}`,
-        response.status
-      );
-    }
-
-    return response;
-  }
 }
 
 export class HydrusApiError extends Error {

@@ -44,7 +44,7 @@ const PAGE_NUMBER_EXTRACTORS: { pattern: RegExp; group: number }[] = [
  * Extract title tags from Hydrus metadata.
  * Returns all `title:` namespaced tags.
  */
-export function extractTitleTags(metadata: HydrusFileMetadata): string[] {
+function extractTitleTags(metadata: HydrusFileMetadata): string[] {
   const titles: string[] = [];
 
   if (!metadata.tags || typeof metadata.tags !== "object") {
@@ -78,7 +78,7 @@ export function extractTitleTags(metadata: HydrusFileMetadata): string[] {
  * Looks for `page:` namespaced tags.
  * Returns the page number (1-indexed as tagged) or 0 if not found.
  */
-export function extractPageNumber(metadata: HydrusFileMetadata): number {
+function extractPageNumber(metadata: HydrusFileMetadata): number {
   if (!metadata.tags || typeof metadata.tags !== "object") {
     return 0;
   }
@@ -110,7 +110,7 @@ export function extractPageNumber(metadata: HydrusFileMetadata): number {
  * Normalize a title by stripping page numbers.
  * Returns the base title suitable for grouping.
  */
-export function normalizeTitle(title: string): { baseTitle: string; position: number } {
+function normalizeTitle(title: string): { baseTitle: string; position: number } {
   let normalized = title.trim();
 
   // Extract position number before stripping (1-indexed, matching user expectations)
@@ -152,7 +152,7 @@ function hashTitle(title: string): string {
  * Parse a title tag to extract title group information.
  * Returns null if the title is too short or doesn't look groupable.
  */
-export function parseTitleGroup(title: string): TitleGroup | null {
+function parseTitleGroup(title: string): TitleGroup | null {
   const { baseTitle, position } = normalizeTitle(title);
 
   // Skip if base title is too short
