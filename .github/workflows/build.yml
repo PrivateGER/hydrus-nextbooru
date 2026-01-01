@@ -42,11 +42,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           report_type: test_results
+          file: test-report.junit.xml
 
   build:
     runs-on: ubuntu-latest
