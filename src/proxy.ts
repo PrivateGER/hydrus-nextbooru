@@ -8,7 +8,7 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/types";
  *
  * Protects /admin/* and /api/admin/* routes, requiring admin session.
  */
-export async function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
 
   // Only protect admin routes (exact match or with trailing path)
