@@ -13,9 +13,15 @@ import {
   type SessionType,
   SESSION_DURATION_HOURS,
 } from "./types";
+import { createLogger } from "@/lib/logger";
+
+const authLog = createLogger("auth");
 
 /** Maximum token payload size (prevents DoS via huge tokens) */
 const MAX_PAYLOAD_SIZE = 1024;
+
+/** Minimum password length for security */
+const MIN_PASSWORD_LENGTH = 16;
 
 /** Salt for HKDF key derivation (domain separation) */
 const HKDF_SALT = "booru-session-signing-v1";
@@ -25,17 +31,54 @@ const HKDF_INFO = "session-hmac";
 
 /** Cached crypto key for HMAC operations */
 let cachedKey: CryptoKey | null = null;
-let cachedSecret: string | null = null;
+let cachedSecretHash: string | null = null;
+
+/** Generated password stored in memory (when auto-generated) */
+let generatedPassword: string | null = null;
 
 /**
- * Get the signing secret from environment
- * @throws Error if ADMIN_PASSWORD is not set
+ * Generate a cryptographically secure random password
+ */
+function generateRandomPassword(): string {
+  const bytes = new Uint8Array(24); // 192 bits = 32 base64 chars
+  crypto.getRandomValues(bytes);
+  return bufferToBase64url(bytes.buffer);
+}
+
+/**
+ * Hash a string for cache comparison (avoids storing plaintext password)
+ */
+async function hashForComparison(value: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return bufferToBase64url(hash);
+}
+
+/**
+ * Get the signing secret from environment or generate one
+ * @throws Error if password is too short
  */
 function getSecret(): string {
-  const secret = process.env.ADMIN_PASSWORD;
+  let secret = process.env.ADMIN_PASSWORD;
+
   if (!secret) {
-    throw new Error("ADMIN_PASSWORD environment variable is not set");
+    // Generate a random password if not provided
+    if (!generatedPassword) {
+      generatedPassword = generateRandomPassword();
+      authLog.warn(
+        { password: generatedPassword },
+        "ADMIN_PASSWORD not set. Generated random password (shown above). Set ADMIN_PASSWORD env var for persistence."
+      );
+    }
+    secret = generatedPassword;
   }
+
+  if (secret.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(
+      `ADMIN_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters (got ${secret.length})`
+    );
+  }
+
   return secret;
 }
 
@@ -49,9 +92,10 @@ function getSecret(): string {
  */
 async function getKey(): Promise<CryptoKey> {
   const secret = getSecret();
+  const secretHash = await hashForComparison(secret);
 
-  // Return cached key if secret hasn't changed
-  if (cachedKey && cachedSecret === secret) {
+  // Return cached key if secret hasn't changed (compare hash, not plaintext)
+  if (cachedKey && cachedSecretHash === secretHash) {
     return cachedKey;
   }
 
@@ -79,7 +123,7 @@ async function getKey(): Promise<CryptoKey> {
     false,
     ["sign", "verify"]
   );
-  cachedSecret = secret;
+  cachedSecretHash = secretHash;
 
   return cachedKey;
 }
@@ -100,6 +144,20 @@ function bufferToBase64url(buffer: ArrayBuffer): string {
 }
 
 /**
+ * Convert base64url string to ArrayBuffer
+ */
+function base64urlToBuffer(base64url: string): ArrayBuffer {
+  const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(base64 + padding);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+/**
  * Generate cryptographically random bytes as base64url
  */
 function generateRandomId(): string {
@@ -110,7 +168,7 @@ function generateRandomId(): string {
 
 /**
  * Constant-time string comparison to prevent timing attacks.
- * Always iterates over the longer string to avoid leaking length information.
+ * Used for password verification where crypto.subtle.verify isn't available.
  */
 function timingSafeEqual(a: string, b: string): boolean {
   const maxLen = Math.max(a.length, b.length);
@@ -139,14 +197,27 @@ async function sign(payload: string): Promise<string> {
 }
 
 /**
- * Verify a signature using constant-time comparison
+ * Verify a signature using Web Crypto API (guaranteed constant-time)
  */
 async function verifySignature(
   payload: string,
   signature: string
 ): Promise<boolean> {
-  const expected = await sign(payload);
-  return timingSafeEqual(expected, signature);
+  try {
+    const key = await getKey();
+    const encoder = new TextEncoder();
+    const signatureBuffer = base64urlToBuffer(signature);
+
+    return await crypto.subtle.verify(
+      "HMAC",
+      key,
+      signatureBuffer,
+      encoder.encode(payload)
+    );
+  } catch {
+    // Invalid base64 or other errors
+    return false;
+  }
 }
 
 /**
