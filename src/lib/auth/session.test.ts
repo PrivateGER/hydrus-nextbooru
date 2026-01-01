@@ -234,10 +234,47 @@ describe("session", () => {
       expect(result).toBe(false);
     });
 
-    it("should return false when ADMIN_PASSWORD is not set", () => {
+    it("should return false when ADMIN_PASSWORD is not set and no password generated", () => {
       delete process.env.ADMIN_PASSWORD;
       const result = verifyAdminPassword("any-password");
       expect(result).toBe(false);
+    });
+
+    it("should accept generated password when ADMIN_PASSWORD is not set", async () => {
+      // Capture the generated password via logger mock
+      let capturedPassword: string | undefined;
+      const loggerMock = {
+        warn: vi.fn((obj: { password: string }) => {
+          capturedPassword = obj.password;
+        }),
+      };
+
+      vi.doMock("@/lib/logger", () => ({
+        createLogger: () => loggerMock,
+      }));
+
+      // Clear cached modules and import fresh
+      vi.resetModules();
+      delete process.env.ADMIN_PASSWORD;
+
+      // Dynamic import to get fresh module with mocked logger
+      const { createSession, verifyAdminPassword: verify } = await import(
+        "./session"
+      );
+
+      // Create a session which triggers password generation
+      await createSession("admin");
+
+      // The password should have been logged
+      expect(capturedPassword).toBeDefined();
+      expect(loggerMock.warn).toHaveBeenCalled();
+
+      // Verify that the generated password works for login
+      expect(verify(capturedPassword!)).toBe(true);
+      expect(verify("wrong-password-definitely")).toBe(false);
+
+      // Cleanup
+      vi.doUnmock("@/lib/logger");
     });
 
     it("should use timing-safe comparison (same length)", () => {

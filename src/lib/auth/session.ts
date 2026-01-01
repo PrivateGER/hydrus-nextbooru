@@ -311,13 +311,13 @@ export async function verifySession(
 }
 
 /**
- * Verify the admin password against the environment variable
+ * Verify the admin password against the configured or generated password
  *
  * @param password - The password to verify
- * @returns True if the password matches ADMIN_PASSWORD
+ * @returns True if the password matches ADMIN_PASSWORD or the generated password
  */
 export function verifyAdminPassword(password: string): boolean {
-  const adminPassword = process.env.ADMIN_PASSWORD;
+  const adminPassword = process.env.ADMIN_PASSWORD ?? generatedPassword;
   if (!adminPassword) {
     return false;
   }
