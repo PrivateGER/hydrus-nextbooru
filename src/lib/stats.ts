@@ -90,7 +90,7 @@ export async function getPopularTags(
  * Compute and store home stats in Settings.
  * Called after sync to precompute values.
  */
-export async function computeAndStoreHomeStats(): Promise<HomeStats> {
+async function computeAndStoreHomeStats(): Promise<HomeStats> {
   const [postCount, tagCounts, groupCount] = await Promise.all([
     prisma.post.count(),
     prisma.tag.groupBy({
@@ -126,7 +126,7 @@ export async function computeAndStoreHomeStats(): Promise<HomeStats> {
  * Compute and store popular tags in Settings.
  * Called after sync to precompute values.
  */
-export async function computeAndStorePopularTags(): Promise<PopularTagsByCategory> {
+async function computeAndStorePopularTags(): Promise<PopularTagsByCategory> {
   const categories = [
     TagCategory.ARTIST,
     TagCategory.CHARACTER,

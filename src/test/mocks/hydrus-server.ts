@@ -1,5 +1,5 @@
-import { http, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
+import { http, HttpResponse, type RequestHandler } from 'msw';
+import { setupServer, type SetupServer } from 'msw/node';
 import type { HydrusFileMetadata } from '@/lib/hydrus/types';
 import {
   createMockFileBatch,
@@ -21,7 +21,7 @@ export interface MockHydrusState {
   metadataDelayMs?: number;
 }
 
-export function createMockHydrusState(fileCount: number = 0): MockHydrusState {
+export function createMockHydrusState(fileCount = 0): MockHydrusState {
   const files = createMockFileBatch(fileCount);
   const metadata = new Map<number, HydrusFileMetadata>();
   files.forEach((f) => metadata.set(f.file_id, f));
@@ -35,7 +35,7 @@ export function createMockHydrusState(fileCount: number = 0): MockHydrusState {
 /**
  * Create MSW handlers for Hydrus API endpoints.
  */
-export function createHydrusHandlers(state: MockHydrusState) {
+export function createHydrusHandlers(state: MockHydrusState): RequestHandler[] {
   return [
     // verify_access_key
     http.get(`${HYDRUS_URL}/verify_access_key`, () => {
@@ -94,7 +94,7 @@ export function createHydrusHandlers(state: MockHydrusState) {
 /**
  * Create and return a configured MSW server for Hydrus API.
  */
-export function createMockHydrusServer(state: MockHydrusState) {
+export function createMockHydrusServer(state: MockHydrusState): SetupServer {
   return setupServer(...createHydrusHandlers(state));
 }
 

@@ -79,15 +79,6 @@ export async function updateSettings(
 }
 
 /**
- * Remove all settings entries that match the provided key from the database.
- *
- * @param key - The settings key to delete; all rows with this key will be removed
- */
-export async function deleteSetting(key: string): Promise<void> {
-  await prisma.settings.deleteMany({ where: { key } });
-}
-
-/**
  * Create an OpenRouterClient using configured settings, falling back to environment variables when necessary.
  *
  * @returns An initialized OpenRouterClient configured with the resolved API key, model (if present), and default target language (if present).

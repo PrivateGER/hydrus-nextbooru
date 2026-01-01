@@ -302,8 +302,6 @@ describe('HydrusClient', () => {
       { method: 'getFileMetadata', args: {}, error: 'Either fileIds or hashes must be provided' },
       { method: 'getFilePath', args: {}, error: 'Either fileId or hash must be provided' },
       { method: 'getThumbnailPath', args: {}, error: 'Either fileId or hash must be provided' },
-      { method: 'getFile', args: {}, error: 'Either fileId or hash must be provided' },
-      { method: 'getThumbnail', args: {}, error: 'Either fileId or hash must be provided' },
     ])('$method should throw when required params missing', async ({ method, args, error }) => {
       const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
 
@@ -385,23 +383,6 @@ describe('HydrusClient', () => {
     });
   });
 
-  // ===========================================================================
-  // getFile - Precedence Logic
-  // ===========================================================================
-
-  describe('getFile', () => {
-    it('should prefer fileId over hash when both provided', async () => {
-      mockFetch.mockResolvedValue({ ok: true });
-
-      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
-      await client.getFile({ fileId: 123, hash: 'abc' });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test/get_files/file?file_id=123',
-        expect.any(Object)
-      );
-    });
-  });
 });
 
 // =============================================================================

@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   parseSourceUrl,
   parseSourceUrls,
-  hasKnownSource,
-  getPrimarySource,
   getCanonicalSourceUrl,
 } from './url-parser';
 import { SourceType } from '@/generated/prisma/client';
@@ -235,94 +233,6 @@ describe('parseSourceUrls', () => {
     expect(result).toHaveLength(2);
     expect(result[0].sourceId).toBe('11111111');
     expect(result[1].sourceId).toBe('22222222');
-  });
-});
-
-describe('hasKnownSource', () => {
-  it('should return true when any URL is from known source', () => {
-    const urls = [
-      'https://example.com/unknown',
-      'https://www.pixiv.net/artworks/12345678',
-    ];
-
-    expect(hasKnownSource(urls)).toBe(true);
-  });
-
-  it('should return false when no URL is from known source', () => {
-    const urls = [
-      'https://example.com/unknown',
-      'https://another-site.com/path',
-    ];
-
-    expect(hasKnownSource(urls)).toBe(false);
-  });
-
-  it('should return false for empty array', () => {
-    expect(hasKnownSource([])).toBe(false);
-  });
-});
-
-describe('getPrimarySource', () => {
-  it('should prefer Pixiv over boorus', () => {
-    const urls = [
-      'https://danbooru.donmai.us/posts/1234567',
-      'https://www.pixiv.net/artworks/12345678',
-    ];
-
-    const result = getPrimarySource(urls);
-
-    expect(result).not.toBeNull();
-    expect(result!.sourceType).toBe(SourceType.PIXIV);
-  });
-
-  it('should prefer DeviantArt over Twitter', () => {
-    const urls = [
-      'https://twitter.com/user/status/1234567890',
-      'https://www.deviantart.com/artist/art/Title-123456789',
-    ];
-
-    const result = getPrimarySource(urls);
-
-    expect(result).not.toBeNull();
-    expect(result!.sourceType).toBe(SourceType.DEVIANTART);
-  });
-
-  it('should prefer Twitter over Danbooru', () => {
-    const urls = [
-      'https://danbooru.donmai.us/posts/1234567',
-      'https://twitter.com/user/status/1234567890',
-    ];
-
-    const result = getPrimarySource(urls);
-
-    expect(result).not.toBeNull();
-    expect(result!.sourceType).toBe(SourceType.TWITTER);
-  });
-
-  it('should prefer Danbooru over Gelbooru', () => {
-    const urls = [
-      'https://gelbooru.com/index.php?page=post&s=view&id=12345',
-      'https://danbooru.donmai.us/posts/1234567',
-    ];
-
-    const result = getPrimarySource(urls);
-
-    expect(result).not.toBeNull();
-    expect(result!.sourceType).toBe(SourceType.DANBOORU);
-  });
-
-  it('should return null when no known sources', () => {
-    const urls = ['https://example.com/unknown'];
-
-    const result = getPrimarySource(urls);
-
-    expect(result).toBeNull();
-  });
-
-  it('should return null for empty array', () => {
-    const result = getPrimarySource([]);
-
-    expect(result).toBeNull();
   });
 });
 

@@ -72,7 +72,7 @@ export function filterBlacklistedTags<T extends { name: string }>(tags: T[]): T[
  * Get Prisma AND conditions to exclude blacklisted tags
  * Returns an array of NOT conditions that can be spread into an AND clause
  */
-export function getBlacklistNotConditions(): Prisma.TagWhereInput[] {
+function getBlacklistNotConditions(): Prisma.TagWhereInput[] {
   const patterns = getPatterns();
   if (patterns.length === 0) return [];
 
@@ -141,17 +141,10 @@ function getPostHidingPatternsWithCache(): string[] {
 }
 
 /**
- * Check if post hiding is enabled (HIDE_POSTS_WITH_TAGS has patterns)
- */
-export function hasPostHidingPatterns(): boolean {
-  return getPostHidingPatternsWithCache().length > 0;
-}
-
-/**
  * Get Prisma WHERE conditions to exclude posts that have any tags matching
  * HIDE_POSTS_WITH_TAGS patterns.
  */
-export function getPostHidingConditions(): Prisma.PostWhereInput[] {
+function getPostHidingConditions(): Prisma.PostWhereInput[] {
   const patterns = getPostHidingPatternsWithCache();
   if (patterns.length === 0) return [];
 

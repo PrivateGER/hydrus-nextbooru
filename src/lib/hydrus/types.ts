@@ -91,14 +91,6 @@ export interface HydrusVerifyAccessKeyResponse extends HydrusApiResponse {
   human_description: string;
 }
 
-// Tag status enum from Hydrus
-export enum HydrusTagStatus {
-  Current = 0,
-  Pending = 1,
-  Deleted = 2,
-  Petitioned = 3,
-}
-
 // File sort types
 export enum HydrusFileSortType {
   FileSize = 0,
@@ -121,27 +113,4 @@ export enum HydrusFileSortType {
   LastViewedTime = 18,
   ArchiveTimestamp = 19,
   Hash = 20,
-}
-
-// Service types
-export enum HydrusServiceType {
-  TagRepository = 0,
-  FileRepository = 1,
-  LocalFilesDomain = 2,
-  LocalTagsDomain = 5,
-  NumericalRating = 6,
-  LikeDislikeRating = 7,
-  AllKnownTags = 10,
-  AllKnownFiles = 11,
-  LocalBooru = 12,
-  IPFS = 13,
-  Trash = 14,
-  AllLocalFiles = 15,
-  FileNotes = 17,
-  ClientAPI = 18,
-  DeletedFromAnywhere = 19,
-  LocalUpdates = 20,
-  AllMyFiles = 21,
-  IncDecRating = 22,
-  ServerAdmin = 99,
 }

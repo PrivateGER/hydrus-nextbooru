@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { setupTestFiles, createTestFile, cleanupTestFiles, createPngBuffer } from '../file-helpers';
 import { randomHash } from '../factories';

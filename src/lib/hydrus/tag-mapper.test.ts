@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTag,
   parseTags,
-  getTagDisplayName,
-  groupTagsByCategory,
   normalizeTagForStorage,
 } from './tag-mapper';
 import { TagCategory } from '@/generated/prisma/client';
@@ -220,72 +218,6 @@ describe('parseTags', () => {
     const result = parseTags([]);
 
     expect(result).toHaveLength(0);
-  });
-});
-
-describe('getTagDisplayName', () => {
-  it('should return name without namespace by default', () => {
-    const tag = parseTag('artist:john doe');
-    const result = getTagDisplayName(tag);
-
-    expect(result).toBe('john doe');
-  });
-
-  it('should include namespace when requested', () => {
-    const tag = parseTag('artist:john doe');
-    const result = getTagDisplayName(tag, true);
-
-    expect(result).toBe('artist:john doe');
-  });
-
-  it('should return just name for tags without namespace', () => {
-    const tag = parseTag('blue eyes');
-    const result = getTagDisplayName(tag, true);
-
-    expect(result).toBe('blue eyes');
-  });
-});
-
-describe('groupTagsByCategory', () => {
-  it('should group tags correctly by category', () => {
-    const tags = parseTags([
-      'blue eyes',
-      'artist:john',
-      'character:alice',
-      'series:wonderland',
-      'meta:high res',
-      'blonde hair',
-    ]);
-
-    const result = groupTagsByCategory(tags);
-
-    expect(result[TagCategory.GENERAL]).toHaveLength(2);
-    expect(result[TagCategory.ARTIST]).toHaveLength(1);
-    expect(result[TagCategory.CHARACTER]).toHaveLength(1);
-    expect(result[TagCategory.COPYRIGHT]).toHaveLength(1);
-    expect(result[TagCategory.META]).toHaveLength(1);
-  });
-
-  it('should return empty arrays for unused categories', () => {
-    const tags = parseTags(['blue eyes']);
-
-    const result = groupTagsByCategory(tags);
-
-    expect(result[TagCategory.GENERAL]).toHaveLength(1);
-    expect(result[TagCategory.ARTIST]).toHaveLength(0);
-    expect(result[TagCategory.CHARACTER]).toHaveLength(0);
-    expect(result[TagCategory.COPYRIGHT]).toHaveLength(0);
-    expect(result[TagCategory.META]).toHaveLength(0);
-  });
-
-  it('should handle empty tag array', () => {
-    const result = groupTagsByCategory([]);
-
-    expect(result[TagCategory.GENERAL]).toHaveLength(0);
-    expect(result[TagCategory.ARTIST]).toHaveLength(0);
-    expect(result[TagCategory.CHARACTER]).toHaveLength(0);
-    expect(result[TagCategory.COPYRIGHT]).toHaveLength(0);
-    expect(result[TagCategory.META]).toHaveLength(0);
   });
 });
 

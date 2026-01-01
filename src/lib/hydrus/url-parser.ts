@@ -99,41 +99,6 @@ export function parseSourceUrls(urls: string[]): ParsedSourceUrl[] {
 }
 
 /**
- * Check if any URL is from a known source
- */
-export function hasKnownSource(urls: string[]): boolean {
-  return urls.some((url) => parseSourceUrl(url) !== null);
-}
-
-// Source priority order (higher = preferred)
-const SOURCE_PRIORITY: SourceType[] = [
-  SourceType.PIXIV,
-  SourceType.DEVIANTART,
-  SourceType.TWITTER,
-  SourceType.DANBOORU,
-  SourceType.GELBOORU,
-  SourceType.OTHER,
-];
-
-/**
- * Get the primary source from a list of URLs
- * Prefers original sources (Pixiv, DeviantArt) over aggregators (Danbooru)
- */
-export function getPrimarySource(urls: string[]): ParsedSourceUrl | null {
-  const sources = parseSourceUrls(urls);
-  if (sources.length === 0) return null;
-
-  // Sort by priority and return the highest
-  sources.sort((a, b) => {
-    const priorityA = SOURCE_PRIORITY.indexOf(a.sourceType);
-    const priorityB = SOURCE_PRIORITY.indexOf(b.sourceType);
-    return priorityA - priorityB;
-  });
-
-  return sources[0];
-}
-
-/**
  * Generate a canonical source URL for display
  */
 export function getCanonicalSourceUrl(sourceType: SourceType, sourceId: string): string {

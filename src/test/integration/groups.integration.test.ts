@@ -6,7 +6,6 @@ import { SourceType } from '@/generated/prisma/client';
 
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
-let getGroupById: typeof import('@/lib/groups').getGroupById;
 
 describe('Groups Module (Integration)', () => {
   beforeAll(async () => {
@@ -15,7 +14,6 @@ describe('Groups Module (Integration)', () => {
     const module = await import('@/lib/groups');
     searchGroups = module.searchGroups;
     getGroupTypeCounts = module.getGroupTypeCounts;
-    getGroupById = module.getGroupById;
   });
 
   afterAll(async () => {
@@ -300,45 +298,6 @@ describe('Groups Module (Integration)', () => {
       const counts = await getGroupTypeCounts(prisma);
 
       expect(counts).toHaveLength(0);
-    });
-  });
-
-  describe('getGroupById', () => {
-    it('should return group with posts', async () => {
-      const prisma = getTestPrisma();
-
-      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
-      await createPostInGroup(prisma, group, 0);
-      await createPostInGroup(prisma, group, 1);
-
-      const result = await getGroupById(group.id, prisma);
-
-      expect(result).not.toBeNull();
-      expect(result?.sourceType).toBe(SourceType.PIXIV);
-      expect(result?.sourceId).toBe('12345');
-      expect(result?.posts).toHaveLength(2);
-    });
-
-    it('should return null for non-existent group', async () => {
-      const prisma = getTestPrisma();
-
-      const result = await getGroupById(99999, prisma);
-
-      expect(result).toBeNull();
-    });
-
-    it('should order posts by position', async () => {
-      const prisma = getTestPrisma();
-
-      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
-      // Create posts in reverse order
-      await createPostInGroup(prisma, group, 2);
-      await createPostInGroup(prisma, group, 0);
-      await createPostInGroup(prisma, group, 1);
-
-      const result = await getGroupById(group.id, prisma);
-
-      expect(result?.posts.map(p => p.position)).toEqual([0, 1, 2]);
     });
   });
 });

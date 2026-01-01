@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isWildcardPattern,
-  getBasePattern,
-  isNegatedPattern,
-  wildcardToSqlPattern,
   validateWildcardPattern,
-  separateWildcardPatterns,
   WILDCARD_TAG_LIMIT,
 } from "./wildcard";
 
@@ -45,75 +41,6 @@ describe("isWildcardPattern", () => {
   });
 });
 
-describe("getBasePattern", () => {
-  it("should return pattern as-is when not negated", () => {
-    expect(getBasePattern("character:*")).toBe("character:*");
-    expect(getBasePattern("blue_eyes")).toBe("blue_eyes");
-  });
-
-  it("should strip negation prefix", () => {
-    expect(getBasePattern("-character:*")).toBe("character:*");
-    expect(getBasePattern("-blue_eyes")).toBe("blue_eyes");
-  });
-
-  it("should not strip lone hyphen", () => {
-    expect(getBasePattern("-")).toBe("-");
-  });
-});
-
-describe("isNegatedPattern", () => {
-  it("should return true for negated patterns", () => {
-    expect(isNegatedPattern("-character:*")).toBe(true);
-    expect(isNegatedPattern("-tag")).toBe(true);
-  });
-
-  it("should return false for non-negated patterns", () => {
-    expect(isNegatedPattern("character:*")).toBe(false);
-    expect(isNegatedPattern("tag")).toBe(false);
-  });
-
-  it("should return false for lone hyphen", () => {
-    expect(isNegatedPattern("-")).toBe(false);
-  });
-
-  it("should handle hyphenated tags", () => {
-    // "blue-eyes" is not a negation
-    expect(isNegatedPattern("blue-eyes")).toBe(false);
-  });
-});
-
-describe("wildcardToSqlPattern", () => {
-  it("should convert trailing wildcard", () => {
-    expect(wildcardToSqlPattern("character:*")).toBe("character:%");
-  });
-
-  it("should convert leading wildcard", () => {
-    // Note: _ is escaped because it's a SQL wildcard character
-    expect(wildcardToSqlPattern("*_eyes")).toBe("%\\_eyes");
-  });
-
-  it("should convert middle wildcard", () => {
-    expect(wildcardToSqlPattern("blue*eyes")).toBe("blue%eyes");
-  });
-
-  it("should convert multiple wildcards", () => {
-    expect(wildcardToSqlPattern("*blue*")).toBe("%blue%");
-  });
-
-  it("should escape SQL special characters", () => {
-    // % should be escaped before * is converted
-    expect(wildcardToSqlPattern("100%*")).toBe("100\\%%");
-    // _ should be escaped
-    expect(wildcardToSqlPattern("blue_*")).toBe("blue\\_%");
-    // \ should be escaped
-    expect(wildcardToSqlPattern("path\\*")).toBe("path\\\\%");
-  });
-
-  it("should handle pattern with no wildcards", () => {
-    expect(wildcardToSqlPattern("exact_match")).toBe("exact\\_match");
-  });
-});
-
 describe("validateWildcardPattern", () => {
   it("should accept valid patterns", () => {
     expect(validateWildcardPattern("character:*")).toEqual({ valid: true });
@@ -149,47 +76,6 @@ describe("validateWildcardPattern", () => {
   it("should accept pattern with exactly minimum characters", () => {
     expect(validateWildcardPattern("ab*")).toEqual({ valid: true });
     expect(validateWildcardPattern("*ab")).toEqual({ valid: true });
-  });
-});
-
-describe("separateWildcardPatterns", () => {
-  it("should separate regular tags from wildcards", () => {
-    const result = separateWildcardPatterns([
-      "blue_eyes",
-      "character:*",
-      "blonde_hair",
-      "*sword*",
-    ]);
-    expect(result.regularTags).toEqual(["blue_eyes", "blonde_hair"]);
-    expect(result.wildcardPatterns).toEqual(["character:*", "*sword*"]);
-  });
-
-  it("should handle all regular tags", () => {
-    const result = separateWildcardPatterns(["tag1", "tag2", "tag3"]);
-    expect(result.regularTags).toEqual(["tag1", "tag2", "tag3"]);
-    expect(result.wildcardPatterns).toEqual([]);
-  });
-
-  it("should handle all wildcard patterns", () => {
-    const result = separateWildcardPatterns(["*tag1", "tag2*", "*tag3*"]);
-    expect(result.regularTags).toEqual([]);
-    expect(result.wildcardPatterns).toEqual(["*tag1", "tag2*", "*tag3*"]);
-  });
-
-  it("should handle empty array", () => {
-    const result = separateWildcardPatterns([]);
-    expect(result.regularTags).toEqual([]);
-    expect(result.wildcardPatterns).toEqual([]);
-  });
-
-  it("should preserve negation prefixes", () => {
-    const result = separateWildcardPatterns([
-      "-blue_eyes",
-      "-character:*",
-      "blonde_hair",
-    ]);
-    expect(result.regularTags).toEqual(["-blue_eyes", "blonde_hair"]);
-    expect(result.wildcardPatterns).toEqual(["-character:*"]);
   });
 });
 

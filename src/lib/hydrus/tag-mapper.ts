@@ -70,35 +70,6 @@ export function parseTags(tags: string[]): ParsedTag[] {
 }
 
 /**
- * Get display name for a tag (with or without namespace)
- */
-export function getTagDisplayName(tag: ParsedTag, includeNamespace = false): string {
-  if (includeNamespace && tag.namespace) {
-    return `${tag.namespace}:${tag.name}`;
-  }
-  return tag.name;
-}
-
-/**
- * Group tags by category
- */
-export function groupTagsByCategory(tags: ParsedTag[]): Record<TagCategory, ParsedTag[]> {
-  const grouped: Record<TagCategory, ParsedTag[]> = {
-    [TagCategory.GENERAL]: [],
-    [TagCategory.ARTIST]: [],
-    [TagCategory.CHARACTER]: [],
-    [TagCategory.COPYRIGHT]: [],
-    [TagCategory.META]: [],
-  };
-
-  for (const tag of tags) {
-    grouped[tag.category].push(tag);
-  }
-
-  return grouped;
-}
-
-/**
  * Convert a parsed tag to a normalized format for database storage
  * The name stored in the database is the full tag without namespace for display,
  * but we keep the category separate for filtering

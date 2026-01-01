@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPost, createPostWithTags, createGroup, createPostInGroup, randomHash } from '../factories';
-import { setupTestFiles, createTestFile, cleanupTestFiles, createPngBuffer, createJpegBuffer } from '../file-helpers';
+import { setupTestFiles, createTestFile, cleanupTestFiles, createPngBuffer } from '../file-helpers';
 import { TagCategory, SourceType } from '@/generated/prisma/client';
 
 let GET: typeof import('@/app/api/download/[filename]/route').GET;

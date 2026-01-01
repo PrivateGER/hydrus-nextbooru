@@ -187,31 +187,3 @@ export async function searchGroups(
     page,
   };
 }
-
-/**
- * Get a single group by ID with all its posts
- */
-export async function getGroupById(
-  id: number,
-  prisma: PrismaClient = defaultPrisma
-) {
-  return prisma.group.findUnique({
-    where: { id },
-    include: {
-      posts: {
-        include: {
-          post: {
-            select: {
-              hash: true,
-              width: true,
-              height: true,
-              blurhash: true,
-              mimeType: true,
-            },
-          },
-        },
-        orderBy: { position: "asc" },
-      },
-    },
-  });
-}
