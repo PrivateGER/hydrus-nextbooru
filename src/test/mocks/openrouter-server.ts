@@ -1,5 +1,5 @@
-import { http, HttpResponse } from 'msw';
-import { setupServer } from 'msw/node';
+import { http, HttpResponse, type RequestHandler } from 'msw';
+import { setupServer, type SetupServer } from 'msw/node';
 import type { ChatCompletionResponse } from '@/lib/openrouter/types';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -65,7 +65,7 @@ function createTranslationResponse(state: MockOpenRouterState): ChatCompletionRe
  */
 function createImageTranslationResponse(
   state: MockOpenRouterState,
-  hasText: boolean = true
+  hasText = true
 ): ChatCompletionResponse {
   const content = hasText
     ? `LANGUAGE: ${state.sourceLang || 'Japanese'}\nTRANSLATION:\n${state.translationResponse || 'Mock image translation'}`
@@ -95,7 +95,7 @@ function createImageTranslationResponse(
 /**
  * Create MSW handlers for OpenRouter API endpoints.
  */
-export function createOpenRouterHandlers(state: MockOpenRouterState) {
+export function createOpenRouterHandlers(state: MockOpenRouterState): RequestHandler[] {
   return [
     http.post(OPENROUTER_URL, async ({ request }) => {
       if (state.delayMs) {
@@ -146,7 +146,7 @@ export function createOpenRouterHandlers(state: MockOpenRouterState) {
 /**
  * Create a mock OpenRouter server for testing.
  */
-export function createMockOpenRouterServer(state: MockOpenRouterState) {
+export function createMockOpenRouterServer(state: MockOpenRouterState): SetupServer {
   return setupServer(...createOpenRouterHandlers(state));
 }
 
@@ -156,7 +156,7 @@ export function createMockOpenRouterServer(state: MockOpenRouterState) {
 export function setTranslationResponse(
   state: MockOpenRouterState,
   translation: string,
-  sourceLang: string = 'Japanese'
+  sourceLang = 'Japanese'
 ): void {
   state.translationResponse = translation;
   state.sourceLang = sourceLang;
@@ -168,7 +168,7 @@ export function setTranslationResponse(
 export function setOpenRouterError(
   state: MockOpenRouterState,
   message: string,
-  status: number = 500
+  status = 500
 ): void {
   state.error = { message, status };
 }
@@ -183,6 +183,6 @@ export function clearOpenRouterError(state: MockOpenRouterState): void {
 /**
  * Helper to simulate empty translation response
  */
-export function setEmptyTranslation(state: MockOpenRouterState, empty: boolean = true): void {
+export function setEmptyTranslation(state: MockOpenRouterState, empty = true): void {
   state.emptyTranslation = empty;
 }

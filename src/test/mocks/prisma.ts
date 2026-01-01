@@ -9,7 +9,7 @@ export const prismaMock = mockDeep<PrismaClient>();
  * Setup the transaction mock to handle both array and callback styles.
  * Call this in beforeEach after mockReset.
  */
-export function setupTransactionMock() {
+export function setupTransactionMock(): void {
   prismaMock.$transaction.mockImplementation(async (arg: unknown) => {
     if (typeof arg === 'function') {
       return (arg as (tx: MockPrismaClient) => Promise<unknown>)(prismaMock);
@@ -22,7 +22,7 @@ export function setupTransactionMock() {
  * Reset the Prisma mock and re-setup transaction handling.
  * Call this in beforeEach.
  */
-export function resetPrismaMock() {
+export function resetPrismaMock(): void {
   mockReset(prismaMock);
   setupTransactionMock();
 }

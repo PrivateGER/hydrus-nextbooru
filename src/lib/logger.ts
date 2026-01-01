@@ -38,7 +38,7 @@ export const logger = pino(
  * @param module - The module name (e.g., "wildcard", "sync", "api")
  * @returns A child logger with the module context
  */
-export function createLogger(module: string) {
+export function createLogger(module: string): pino.Logger {
   return logger.child({ module });
 }
 

@@ -32,7 +32,7 @@ export function setTestPrisma(client: PrismaClient | null): void {
   testPrisma = client;
 }
 
-function createPrismaClient() {
+function createPrismaClient(): PrismaClient {
   // Enable query logging when LOG_QUERIES=true
   const enableQueryLog = process.env.LOG_QUERIES === 'true';
 
