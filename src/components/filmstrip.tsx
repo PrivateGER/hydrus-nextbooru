@@ -109,9 +109,3 @@ export function Filmstrip({
     </div>
   );
 }
-
-/** Ref handle for programmatic control of the filmstrip */
-export interface FilmstripRef {
-  scrollToIndex: (index: number) => void;
-  getScrollContainer: () => HTMLDivElement | null;
-}
