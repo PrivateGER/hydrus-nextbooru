@@ -179,7 +179,7 @@ export default async function GroupPage({ params }: GroupPageProps) {
             />
             {/* Position indicator - enhanced styling */}
             <span className="absolute top-2 left-2 rounded-md bg-black/80 px-2 py-1 text-xs font-bold text-white pointer-events-none z-10 backdrop-blur-sm shadow-sm">
-              {pg.position || index + 1}
+              {pg.position ?? index + 1}
             </span>
           </div>
         ))}

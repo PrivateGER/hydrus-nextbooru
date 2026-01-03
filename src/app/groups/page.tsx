@@ -261,7 +261,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                     />
                     {/* Position badge */}
                     <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
-                      {pg.position || index + 1}
+                      {pg.position ?? index + 1}
                     </span>
                   </Link>
                 ))}
