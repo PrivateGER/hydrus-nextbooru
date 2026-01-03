@@ -141,7 +141,8 @@ model PostTag {
 model Group {
   id         Int        @id @default(autoincrement())
   sourceType SourceType // PIXIV, TWITTER, etc.
-  sourceId   String     // The pixiv/twitter post ID
+  sourceId   String     // The pixiv/twitter post ID or title hash
+  title      String?    // Human-readable title (mainly for TITLE groups)
 
   posts PostGroup[]
 

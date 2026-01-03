@@ -67,13 +67,20 @@ function collectTagsFromBatch(files: HydrusFileMetadata[]): Map<string, { name: 
   return allTags;
 }
 
+/** Group data collected during batch processing */
+interface GroupData {
+  sourceType: SourceType;
+  sourceId: string;
+  title?: string; // Human-readable title (for TITLE groups)
+}
+
 /**
  * Pre-extract all unique groups from a batch of files.
  * Includes both URL-based groups and title-based groups.
- * Returns a Map of "SOURCETYPE:sourceId" -> { sourceType, sourceId }
+ * Returns a Map of "SOURCETYPE:sourceId" -> { sourceType, sourceId, title? }
  */
-function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, { sourceType: SourceType; sourceId: string }> {
-  const allGroups = new Map<string, { sourceType: SourceType; sourceId: string }>();
+function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, GroupData> {
+  const allGroups = new Map<string, GroupData>();
 
   for (const file of files) {
     // URL-based groups
@@ -90,7 +97,11 @@ function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, { sour
     for (const titleGroup of titleGroups) {
       const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
       if (!allGroups.has(key)) {
-        allGroups.set(key, { sourceType: titleGroup.sourceType, sourceId: titleGroup.sourceId });
+        allGroups.set(key, {
+          sourceType: titleGroup.sourceType,
+          sourceId: titleGroup.sourceId,
+          title: titleGroup.normalizedTitle,
+        });
       }
     }
   }
@@ -158,12 +169,12 @@ async function bulkEnsureTags(
 }
 
 /**
- * Bulk insert groups using INSERT ... ON CONFLICT DO NOTHING.
+ * Bulk insert groups using INSERT ... ON CONFLICT DO UPDATE (for title).
  * Wrapped in a transaction to ensure INSERT and SELECT are atomic.
  * Returns a Map of "SOURCETYPE:sourceId" -> id
  */
 async function bulkEnsureGroups(
-  groups: Map<string, { sourceType: SourceType; sourceId: string }>
+  groups: Map<string, GroupData>
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
   if (groups.size === 0) return result;
@@ -179,13 +190,14 @@ async function bulkEnsureGroups(
 
   // Wrap INSERT and SELECT in a transaction to prevent race conditions
   await prisma.$transaction(async (tx) => {
-    // Build values for INSERT
-    const values = groupArray.map((g, i) => `($${i * 2 + 1}::"SourceType", $${i * 2 + 2})`).join(', ');
-    const params = groupArray.flatMap(g => [g.sourceType, g.sourceId]);
+    // Build values for INSERT with title
+    const values = groupArray.map((g, i) => `($${i * 3 + 1}::"SourceType", $${i * 3 + 2}, $${i * 3 + 3})`).join(', ');
+    const params = groupArray.flatMap(g => [g.sourceType, g.sourceId, g.title ?? null]);
 
-    // Atomic bulk insert - ON CONFLICT DO NOTHING handles duplicates
+    // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
     await tx.$executeRawUnsafe(
-      `INSERT INTO "Group" ("sourceType", "sourceId") VALUES ${values} ON CONFLICT ("sourceType", "sourceId") DO NOTHING`,
+      `INSERT INTO "Group" ("sourceType", "sourceId", "title") VALUES ${values}
+       ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")`,
       ...params
     );
 

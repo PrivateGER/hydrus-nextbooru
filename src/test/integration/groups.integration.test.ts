@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from './setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPost, createGroup, createPostInGroup } from './factories';
-import { SourceType } from '@/generated/prisma/client';
+import { createPost, createGroup, createPostInGroup, createTag } from './factories';
+import { SourceType, TagCategory } from '@/generated/prisma/client';
 
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
@@ -298,6 +298,157 @@ describe('Groups Module (Integration)', () => {
       const counts = await getGroupTypeCounts(prisma);
 
       expect(counts).toHaveLength(0);
+    });
+  });
+
+  describe('group titles', () => {
+    it('should return title for groups with titles', async () => {
+      const prisma = getTestPrisma();
+
+      const group = await createGroup(prisma, SourceType.TITLE, 'hash123', 'My Collection');
+      await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups).toHaveLength(1);
+      expect(result.groups[0].groups[0].title).toBe('My Collection');
+    });
+
+    it('should return null title for groups without titles', async () => {
+      const prisma = getTestPrisma();
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups).toHaveLength(1);
+      expect(result.groups[0].groups[0].title).toBeNull();
+    });
+  });
+
+  describe('group creators', () => {
+    it('should return artist tags as creators', async () => {
+      const prisma = getTestPrisma();
+
+      // Create an artist tag
+      const artistTag = await createTag(prisma, 'famous_artist', TagCategory.ARTIST);
+
+      // Create group with posts
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      const post1 = await createPostInGroup(prisma, group, 0);
+      const post2 = await createPostInGroup(prisma, group, 1);
+
+      // Link posts to artist tag
+      await prisma.postTag.create({ data: { postId: post1.id, tagId: artistTag.id } });
+      await prisma.postTag.create({ data: { postId: post2.id, tagId: artistTag.id } });
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups).toHaveLength(1);
+      expect(result.groups[0].creators).toContain('famous_artist');
+    });
+
+    it('should filter out purely numerical creator names', async () => {
+      const prisma = getTestPrisma();
+
+      // Create artist tags - one valid, one numerical
+      const validArtist = await createTag(prisma, 'real_artist', TagCategory.ARTIST);
+      const numericArtist = await createTag(prisma, '12345678', TagCategory.ARTIST);
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      const post = await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      await prisma.postTag.create({ data: { postId: post.id, tagId: validArtist.id } });
+      await prisma.postTag.create({ data: { postId: post.id, tagId: numericArtist.id } });
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].creators).toContain('real_artist');
+      expect(result.groups[0].creators).not.toContain('12345678');
+    });
+
+    it('should filter out anonymous user IDs like "user abcd1234"', async () => {
+      const prisma = getTestPrisma();
+
+      const validArtist = await createTag(prisma, 'known_artist', TagCategory.ARTIST);
+      const anonUser = await createTag(prisma, 'user abcd1234', TagCategory.ARTIST);
+      const anonUser2 = await createTag(prisma, 'user_wxyz9999', TagCategory.ARTIST);
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      const post = await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      await prisma.postTag.create({ data: { postId: post.id, tagId: validArtist.id } });
+      await prisma.postTag.create({ data: { postId: post.id, tagId: anonUser.id } });
+      await prisma.postTag.create({ data: { postId: post.id, tagId: anonUser2.id } });
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].creators).toContain('known_artist');
+      expect(result.groups[0].creators).not.toContain('user abcd1234');
+      expect(result.groups[0].creators).not.toContain('user_wxyz9999');
+    });
+
+    it('should return empty creators array when no artist tags', async () => {
+      const prisma = getTestPrisma();
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].creators).toEqual([]);
+    });
+
+    it('should limit creators to 3 per group', async () => {
+      const prisma = getTestPrisma();
+
+      // Create 5 artist tags
+      const artists = await Promise.all([
+        createTag(prisma, 'artist1', TagCategory.ARTIST),
+        createTag(prisma, 'artist2', TagCategory.ARTIST),
+        createTag(prisma, 'artist3', TagCategory.ARTIST),
+        createTag(prisma, 'artist4', TagCategory.ARTIST),
+        createTag(prisma, 'artist5', TagCategory.ARTIST),
+      ]);
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      const post = await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      // Link all artists to the post
+      for (const artist of artists) {
+        await prisma.postTag.create({ data: { postId: post.id, tagId: artist.id } });
+      }
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].creators).toHaveLength(3);
+    });
+
+    it('should not include non-artist tags as creators', async () => {
+      const prisma = getTestPrisma();
+
+      const artistTag = await createTag(prisma, 'the_artist', TagCategory.ARTIST);
+      const generalTag = await createTag(prisma, 'some_tag', TagCategory.GENERAL);
+      const characterTag = await createTag(prisma, 'some_character', TagCategory.CHARACTER);
+
+      const group = await createGroup(prisma, SourceType.PIXIV, '12345');
+      const post = await createPostInGroup(prisma, group, 0);
+      await createPostInGroup(prisma, group, 1);
+
+      await prisma.postTag.create({ data: { postId: post.id, tagId: artistTag.id } });
+      await prisma.postTag.create({ data: { postId: post.id, tagId: generalTag.id } });
+      await prisma.postTag.create({ data: { postId: post.id, tagId: characterTag.id } });
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].creators).toEqual(['the_artist']);
     });
   });
 });

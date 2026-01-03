@@ -168,76 +168,110 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
           return (
             <div
               key={mergedGroup.contentHash}
-              className="rounded-lg bg-zinc-800 p-4"
+              className="group/card rounded-xl bg-zinc-800/80 p-4 transition-all duration-200 hover:bg-zinc-800 hover:shadow-lg hover:shadow-black/20 border border-zinc-700/50 hover:border-zinc-600/50"
             >
-              <div className="mb-3 flex flex-wrap items-center gap-3">
-                {/* Show all source types for merged groups */}
-                {mergedGroup.groups.map((g) => {
-                  const canonicalUrl = getCanonicalSourceUrl(g.sourceType, g.sourceId);
-                  return (
-                    <div key={g.id} className="flex items-center gap-2">
-                      <Link
-                        href={`/groups/${g.id}`}
-                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                      >
-                        <SourceBadge sourceType={g.sourceType} />
-                        {g.sourceType !== SourceType.TITLE && (
-                          <span className="font-mono text-sm text-zinc-400">
-                            {g.sourceId}
-                          </span>
-                        )}
-                      </Link>
-                      {canonicalUrl && (
-                        <a
-                          href={canonicalUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300"
-                          title="View source"
+              {/* Header with sources and post count */}
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Show all source types for merged groups */}
+                  {mergedGroup.groups.map((g) => {
+                    const canonicalUrl = getCanonicalSourceUrl(g.sourceType, g.sourceId);
+                    const displayTitle = g.sourceType === SourceType.TITLE && g.title;
+                    return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <Link
+                          href={`/groups/${g.id}`}
+                          className="flex items-center gap-2 rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors hover:bg-zinc-700/50"
                         >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                          </svg>
-                        </a>
-                      )}
-                    </div>
-                  );
-                })}
-                <span className="text-sm text-zinc-500">
-                  {postCount} posts
-                </span>
+                          <SourceBadge sourceType={g.sourceType} />
+                          {displayTitle ? (
+                            <span className="text-sm font-medium text-zinc-200 max-w-xs truncate" title={g.title!}>
+                              {g.title}
+                            </span>
+                          ) : g.sourceType !== SourceType.TITLE && (
+                            <span className="font-mono text-sm text-zinc-400">
+                              {g.sourceId}
+                            </span>
+                          )}
+                        </Link>
+                        {canonicalUrl && (
+                          <a
+                            href={canonicalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-700 hover:text-blue-400"
+                            title="View source"
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Post count and creators */}
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-700/80 px-3 py-1 text-sm font-medium text-zinc-300">
+                    <svg className="h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    {postCount}
+                  </span>
+                  {mergedGroup.creators.length > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-sm text-zinc-400">
+                      <svg className="h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                      {mergedGroup.creators.map((creator, i) => (
+                        <span key={creator}>
+                          <Link
+                            href={`/search?tags=${encodeURIComponent(creator)}`}
+                            className="hover:text-zinc-200 transition-colors"
+                          >
+                            {creator}
+                          </Link>
+                          {i < mergedGroup.creators.length - 1 && ", "}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Post thumbnails - horizontal filmstrip */}
-              <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
-                {mergedGroup.posts.map((pg) => (
+              <div className="flex gap-2 overflow-x-auto pb-2 snap-x scrollbar-thin scrollbar-thumb-zinc-600 scrollbar-track-transparent">
+                {mergedGroup.posts.map((pg, index) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
-                    className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500"
+                    className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/30"
                   >
                     <img
                       src={`/api/thumbnails/${pg.post.hash}.webp`}
                       alt=""
                       loading="lazy"
-                      className="h-48 w-auto"
+                      className="h-44 w-auto object-cover"
                       style={
                         pg.post.width && pg.post.height
                           ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
                           : { aspectRatio: "1" }
                       }
                     />
-                    <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-                      {pg.position || "?"}
+                    {/* Position badge */}
+                    <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
+                      {pg.position || index + 1}
                     </span>
                   </Link>
                 ))}
                 {postCount > 10 && (
                   <Link
                     href={`/groups/${primaryGroup.id}`}
-                    className="flex h-48 w-24 shrink-0 items-center justify-center rounded-lg bg-zinc-700 text-sm font-medium text-zinc-400 hover:bg-zinc-600 transition-colors"
+                    className="flex h-44 w-28 shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-zinc-700/80 text-zinc-400 transition-all duration-200 hover:bg-zinc-600 hover:text-zinc-200"
                   >
-                    +{postCount - 10}
+                    <span className="text-2xl font-bold">+{postCount - 10}</span>
+                    <span className="text-xs">more</span>
                   </Link>
                 )}
               </div>

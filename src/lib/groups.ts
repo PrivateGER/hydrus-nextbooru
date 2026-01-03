@@ -1,5 +1,5 @@
 import { prisma as defaultPrisma } from "@/lib/db";
-import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
+import { SourceType, Prisma, PrismaClient, TagCategory } from "@/generated/prisma/client";
 
 export type OrderOption = "random" | "newest" | "oldest" | "largest";
 
@@ -17,18 +17,30 @@ export interface MergedGroup {
     id: number;
     sourceType: SourceType;
     sourceId: string;
+    title: string | null;
   }>;
   postCount: number;
+  creators: string[];
   posts: Array<{
     postId: number;
     groupId: number;
     position: number;
     post: {
+      id: number;
       hash: string;
       width: number | null;
       height: number | null;
     };
   }>;
+}
+
+// Filter out placeholder/anonymous usernames
+const ANONYMOUS_USER_PATTERN = /^user[\s_]*[a-z]{4}\d{4}$/i;
+
+function isValidCreatorName(name: string): boolean {
+  if (/^\d+$/.test(name)) return false;
+  if (ANONYMOUS_USER_PATTERN.test(name)) return false;
+  return true;
 }
 
 export interface TypeCount {
@@ -98,6 +110,7 @@ export async function searchGroups(
     groupIds: number[];
     sourceTypes: string[];
     sourceIds: string[];
+    titles: (string | null)[];
     postCount: bigint;
   }[]>`
     WITH group_content AS (
@@ -105,6 +118,7 @@ export async function searchGroups(
         g.id as group_id,
         g."sourceType",
         g."sourceId",
+        g."title",
         MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash,
         COUNT(pg."postId")::bigint as post_count
       FROM "Group" g
@@ -118,6 +132,7 @@ export async function searchGroups(
       ARRAY_AGG(group_id ORDER BY group_id) as "groupIds",
       ARRAY_AGG("sourceType"::text ORDER BY group_id) as "sourceTypes",
       ARRAY_AGG("sourceId" ORDER BY group_id) as "sourceIds",
+      ARRAY_AGG("title" ORDER BY group_id) as "titles",
       MAX(post_count) as "postCount",
       MIN(group_id) as min_group_id,
       MAX(post_count) as max_post_count
@@ -134,6 +149,7 @@ export async function searchGroups(
     include: {
       post: {
         select: {
+          id: true,
           hash: true,
           width: true,
           height: true,
@@ -151,17 +167,56 @@ export async function searchGroups(
     postsByGroup.set(pg.groupId, existing);
   }
 
+  // Fetch artist tags for all posts across all groups
+  const allPostIds = [...new Set(groupPosts.map(pg => pg.post.id))];
+  const artistTagsRaw = allPostIds.length > 0 ? await prisma.$queryRaw<{
+    postId: number;
+    name: string;
+  }[]>`
+    SELECT pt."postId", t.name
+    FROM "PostTag" pt
+    JOIN "Tag" t ON t.id = pt."tagId"
+    WHERE pt."postId" = ANY(${allPostIds}::int[])
+      AND t.category = 'ARTIST'::"TagCategory"
+    ORDER BY t."postCount" DESC
+  ` : [];
+
+  // Group artist tags by postId
+  const artistsByPost = new Map<number, string[]>();
+  for (const row of artistTagsRaw) {
+    const existing = artistsByPost.get(row.postId) || [];
+    existing.push(row.name);
+    artistsByPost.set(row.postId, existing);
+  }
+
   // Combine data
-  const groups: MergedGroup[] = mergedGroupsRaw.map(g => ({
-    contentHash: g.contentHash,
-    groups: g.groupIds.map((id, i) => ({
-      id,
-      sourceType: g.sourceTypes[i] as SourceType,
-      sourceId: g.sourceIds[i],
-    })),
-    postCount: Number(g.postCount),
-    posts: (postsByGroup.get(g.groupIds[0]) || []).slice(0, 10),
-  }));
+  const groups: MergedGroup[] = mergedGroupsRaw.map(g => {
+    const posts = (postsByGroup.get(g.groupIds[0]) || []).slice(0, 10);
+
+    // Collect unique creators from all posts in this group
+    const creatorSet = new Set<string>();
+    for (const pg of posts) {
+      const artists = artistsByPost.get(pg.post.id) || [];
+      for (const artist of artists) {
+        if (isValidCreatorName(artist)) {
+          creatorSet.add(artist);
+        }
+      }
+    }
+
+    return {
+      contentHash: g.contentHash,
+      groups: g.groupIds.map((id, i) => ({
+        id,
+        sourceType: g.sourceTypes[i] as SourceType,
+        sourceId: g.sourceIds[i],
+        title: g.titles[i],
+      })),
+      postCount: Number(g.postCount),
+      creators: [...creatorSet].slice(0, 3),
+      posts,
+    };
+  });
 
   // Count total merged groups
   const [{ count: filteredCount }] = await prisma.$queryRaw<{ count: bigint }[]>`
