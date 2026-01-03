@@ -286,10 +286,11 @@ export async function createSyncState(
 export async function createGroup(
   prisma: PrismaClient,
   sourceType: SourceType,
-  sourceId: string
+  sourceId: string,
+  title?: string
 ) {
   return prisma.group.create({
-    data: { sourceType, sourceId },
+    data: { sourceType, sourceId, title },
   });
 }
 
