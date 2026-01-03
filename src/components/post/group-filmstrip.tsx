@@ -90,7 +90,7 @@ export function GroupFilmstrip({
                     ? "bg-blue-500 text-white"
                     : "bg-black/70 text-white"
                 }`}>
-                  {pg.position || "?"}
+                  {pg.position ?? "?"}
                 </span>
               </ThumbnailCard>
             </Link>
