@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
+import { PIXIV_USER_PATTERN } from "@/lib/groups";
 import { SourceBadge } from "@/components/source-badge";
 import { PostCard } from "@/components/post-card";
 import { SourceType, TagCategory } from "@/generated/prisma/client";
@@ -41,14 +42,11 @@ async function getGroup(id: number) {
   return group;
 }
 
-// Filter out placeholder/anonymous usernames
-const ANONYMOUS_USER_PATTERN = /^user\s*[a-z]{4}\d{4}$/i;
-
 function isValidCreatorName(name: string): boolean {
   // Filter out purely numerical names
   if (/^\d+$/.test(name)) return false;
-  // Filter out "user XXXX1234" style IDs
-  if (ANONYMOUS_USER_PATTERN.test(name)) return false;
+  // Filter out "user XXXX1234" style Pixiv IDs
+  if (PIXIV_USER_PATTERN.test(name)) return false;
   return true;
 }
 
