@@ -19,7 +19,7 @@ interface TranslationProgress {
   completedAt?: string;
 }
 
-let translationProgress: TranslationProgress = {
+const initialProgress: TranslationProgress = {
   status: "idle",
   total: 0,
   completed: 0,
@@ -27,8 +27,19 @@ let translationProgress: TranslationProgress = {
   errors: [],
 };
 
+let translationProgress: TranslationProgress = { ...initialProgress };
+
 // Mutex to prevent race conditions when starting translation
 let translationLock: Promise<void> | null = null;
+
+/**
+ * Reset translation progress to initial state.
+ * Exported for use in tests to ensure clean state between tests.
+ */
+export function resetTranslationProgress(): void {
+  translationProgress = { ...initialProgress };
+  translationLock = null;
+}
 
 // Concurrency control
 const MAX_CONCURRENT = 5;

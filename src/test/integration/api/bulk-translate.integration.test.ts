@@ -5,6 +5,7 @@ import { createGroup } from '../factories';
 import { SETTINGS_KEYS } from '@/lib/openrouter/types';
 import { SourceType } from '@/generated/prisma/client';
 import { NextRequest } from 'next/server';
+import { resetTranslationProgress } from '@/app/api/admin/translations/route';
 
 // Mock admin session verification to bypass auth in tests
 vi.mock('@/lib/auth', () => ({
@@ -49,6 +50,8 @@ describe('Bulk Translation API', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+    // Reset in-memory translation state for test isolation
+    resetTranslationProgress();
   });
 
   describe('GET /api/admin/translations/estimate', () => {
@@ -150,8 +153,8 @@ describe('Bulk Translation API', () => {
 
       expect(response.status).toBe(200);
       const data = await response.json();
-      // Status could be idle or completed from previous tests
-      expect(['idle', 'completed']).toContain(data.status);
+      // Status should be idle since we reset in beforeEach
+      expect(data.status).toBe('idle');
     });
   });
 
@@ -209,7 +212,14 @@ describe('Bulk Translation API', () => {
 
   describe('Translation completion status', () => {
     it('should complete immediately when no untranslated titles exist', async () => {
-      await waitForTranslationComplete(); // Ensure clean state
+      const prisma = getTestPrisma();
+
+      // Configure OpenRouter API key so the translation can proceed
+      await prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.API_KEY },
+        update: { value: 'test-api-key' },
+        create: { key: SETTINGS_KEYS.API_KEY, value: 'test-api-key' },
+      });
 
       const { POST } = await import('@/app/api/admin/translations/route');
       const request = new NextRequest('http://localhost/api/admin/translations', {
@@ -218,8 +228,8 @@ describe('Bulk Translation API', () => {
       await POST(request);
 
       const status = await waitForTranslationComplete();
-      // Status should be completed or error (if it tried to get OpenRouter client)
-      expect(['completed', 'error']).toContain(status.status);
+      // With OpenRouter configured and no titles to translate, should complete immediately
+      expect(status.status).toBe('completed');
     });
 
     it('should set error status when OpenRouter is not configured', async () => {
@@ -238,7 +248,13 @@ describe('Bulk Translation API', () => {
       const status = await waitForTranslationComplete();
       // Should be error since OpenRouter is not configured
       expect(status.status).toBe('error');
-      expect((status.errors as string[]).length).toBeGreaterThan(0);
+
+      // Validate errors array structure before asserting on length
+      expect(status.errors).toBeDefined();
+      expect(Array.isArray(status.errors)).toBe(true);
+      const errors = status.errors as unknown[];
+      expect(errors.every((e) => typeof e === 'string')).toBe(true);
+      expect(errors.length).toBeGreaterThan(0);
     });
   });
 });
