@@ -27,9 +27,12 @@ let translationProgress: TranslationProgress = {
   errors: [],
 };
 
+// Mutex to prevent race conditions when starting translation
+let translationLock: Promise<void> | null = null;
+
 // Concurrency control
 const MAX_CONCURRENT = 5;
-const BATCH_DELAY_MS = 100;
+const BATCH_DELAY_MS = 500; // 500ms delay to avoid rate limiting
 
 /**
  * Get current translation progress.
@@ -48,7 +51,12 @@ export async function POST(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  // Check if already running
+  // Wait for any pending lock to release, then acquire it atomically
+  if (translationLock) {
+    await translationLock;
+  }
+
+  // Double-check status after acquiring lock
   if (translationProgress.status === "running") {
     return NextResponse.json(
       { error: "Translation already in progress" },
@@ -68,10 +76,32 @@ export async function POST(request: NextRequest) {
     // Ignore parse errors, use defaults
   }
 
-  // Start background job
-  runBulkTranslation(targetLang).catch((error) => {
-    aiLog.error({ error: String(error) }, "Bulk translation failed");
+  // Create a new lock and start background job
+  let releaseLock: () => void;
+  translationLock = new Promise((resolve) => {
+    releaseLock = resolve;
   });
+
+  // Mark as running immediately to prevent race conditions
+  translationProgress = {
+    status: "running",
+    total: 0,
+    completed: 0,
+    failed: 0,
+    errors: [],
+    startedAt: new Date().toISOString(),
+  };
+
+  // Start background job
+  runBulkTranslation(targetLang)
+    .catch((error) => {
+      aiLog.error({ error: String(error) }, "Bulk translation failed");
+    })
+    .finally(() => {
+      // Release lock when done
+      releaseLock!();
+      translationLock = null;
+    });
 
   return NextResponse.json({
     message: "Bulk translation started",
@@ -94,6 +124,7 @@ export async function DELETE() {
   }
 
   translationProgress.status = "cancelled";
+  translationProgress.completedAt = new Date().toISOString();
 
   return NextResponse.json({
     message: "Translation cancelled",
@@ -105,21 +136,11 @@ export async function DELETE() {
  * Run bulk translation in the background.
  */
 async function runBulkTranslation(targetLang?: string): Promise<void> {
-  // Reset progress
-  translationProgress = {
-    status: "running",
-    total: 0,
-    completed: 0,
-    failed: 0,
-    errors: [],
-    startedAt: new Date().toISOString(),
-  };
-
   try {
     // Get OpenRouter client
     const client = await getOpenRouterClient();
 
-    // Find all unique untranslated titles
+    // Find all unique untranslated titles (filter whitespace-only titles)
     const untranslatedTitles = await prisma.$queryRaw<
       { titleHash: string; title: string }[]
     >`
@@ -127,7 +148,7 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
       FROM "Group" g
       WHERE g."titleHash" IS NOT NULL
         AND g.title IS NOT NULL
-        AND g.title != ''
+        AND TRIM(g.title) != ''
         AND NOT EXISTS (
           SELECT 1 FROM "ContentTranslation" ct
           WHERE ct."contentHash" = g."titleHash"
@@ -147,11 +168,23 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
       "Starting bulk title translation"
     );
 
+    // Track if we should abort due to auth error
+    let authError: OpenRouterApiError | null = null;
+
     // Process in batches with concurrency limit
     for (let i = 0; i < untranslatedTitles.length; i += MAX_CONCURRENT) {
       // Check for cancellation
       if (translationProgress.status === "cancelled") {
         aiLog.info("Bulk translation cancelled by user");
+        return;
+      }
+
+      // Check for auth error from previous batch
+      if (authError) {
+        translationProgress.status = "error";
+        translationProgress.completedAt = new Date().toISOString();
+        translationProgress.errors.push(`Authentication failed: ${authError.message}`);
+        aiLog.error({ error: authError.message }, "Bulk translation aborted due to auth error");
         return;
       }
 
@@ -186,6 +219,10 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
 
             return { success: true, titleHash };
           } catch (error) {
+            // Check for auth errors (401) to abort early
+            if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+              authError = error;
+            }
             const message =
               error instanceof Error ? error.message : String(error);
             return { success: false, titleHash, error: message };
@@ -202,7 +239,7 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
             translationProgress.failed++;
             if (translationProgress.errors.length < 10) {
               translationProgress.errors.push(
-                `${result.value.titleHash}: ${result.value.error}`
+                `${result.value.titleHash.slice(0, 8)}...: ${result.value.error}`
               );
             }
           }
@@ -214,7 +251,7 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
         }
       }
 
-      // Small delay between batches to avoid rate limiting
+      // Delay between batches to avoid rate limiting
       if (i + MAX_CONCURRENT < untranslatedTitles.length) {
         await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
       }

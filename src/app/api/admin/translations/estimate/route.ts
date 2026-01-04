@@ -30,7 +30,7 @@ export async function GET() {
 
     const model = settings.model || OpenRouterClient.getDefaultModel();
 
-    // Find all unique untranslated titles
+    // Find all unique untranslated titles (filter whitespace-only titles)
     // Groups that have a title but no corresponding translation
     const untranslatedTitles = await prisma.$queryRaw<
       { titleHash: string; title: string }[]
@@ -39,14 +39,14 @@ export async function GET() {
       FROM "Group" g
       WHERE g."titleHash" IS NOT NULL
         AND g.title IS NOT NULL
-        AND g.title != ''
+        AND TRIM(g.title) != ''
         AND NOT EXISTS (
           SELECT 1 FROM "ContentTranslation" ct
           WHERE ct."contentHash" = g."titleHash"
         )
     `;
 
-    // Also get total stats
+    // Also get total stats (filter whitespace-only titles)
     const stats = await prisma.$queryRaw<
       { total: bigint; translated: bigint; untranslated: bigint }[]
     >`
@@ -61,7 +61,7 @@ export async function GET() {
           AND NOT EXISTS (SELECT 1 FROM "ContentTranslation" ct WHERE ct."contentHash" = g."titleHash")
         ) as untranslated
       FROM "Group" g
-      WHERE g.title IS NOT NULL AND g.title != ''
+      WHERE g.title IS NOT NULL AND TRIM(g.title) != ''
     `;
 
     const titles = untranslatedTitles.map((t) => t.title);
