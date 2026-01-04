@@ -133,7 +133,7 @@ function adjustPrefixHighlighting(headline: string | null, query: string): strin
 /**
  * Search notes by content using PostgreSQL full-text search.
  *
- * Searches both original note content and translations (via NoteTranslation table).
+ * Searches both original note content and translations (via ContentTranslation table).
  * Results are ranked using `ts_rank_cd` (cover density) which prioritizes
  * results where search terms appear closer together.
  *
@@ -220,7 +220,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           FROM "Note" n
           CROSS JOIN query q
           JOIN "Post" p ON n."postId" = p.id
-          JOIN "NoteTranslation" nt ON n."contentHash" = nt."contentHash"
+          JOIN "ContentTranslation" nt ON n."contentHash" = nt."contentHash"
           WHERE nt."translatedTsv" @@ q.q
             AND ${postHidingCondition}
         ),

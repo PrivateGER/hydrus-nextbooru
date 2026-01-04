@@ -9,14 +9,14 @@ interface TranslateRequestBody {
 }
 
 /**
- * Translate a note's content identified by the route `id` and persist translation metadata.
+ * Translate a group's title and persist translation metadata.
  *
- * Translations are stored in the ContentTranslation table keyed by content hash, so identical
- * note content across different posts shares the same translation.
+ * Translations are stored in the ContentTranslation table keyed by title hash,
+ * so identical titles across different groups share the same translation.
  *
  * @param request - The incoming NextRequest whose JSON body may include optional `sourceLang` and `targetLang`.
  * @param params - An object with a Promise that resolves to route parameters; expected to contain `id` as a string.
- * @returns A JSON response containing the note with translation data on success, or an error payload on failure.
+ * @returns A JSON response containing the group with translation data on success, or an error payload on failure.
  */
 export async function POST(
   request: NextRequest,
@@ -24,10 +24,10 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const noteId = parseInt(id, 10);
+    const groupId = parseInt(id, 10);
 
-    if (isNaN(noteId)) {
-      return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
+    if (isNaN(groupId)) {
+      return NextResponse.json({ error: "Invalid group ID" }, { status: 400 });
     }
 
     let body: TranslateRequestBody = {};
@@ -40,37 +40,44 @@ export async function POST(
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    // Fetch the note with its content hash
-    const note = await prisma.note.findUnique({
-      where: { id: noteId },
+    // Fetch the group with its title hash
+    const group = await prisma.group.findUnique({
+      where: { id: groupId },
     });
 
-    if (!note) {
-      return NextResponse.json({ error: "Note not found" }, { status: 404 });
+    if (!group) {
+      return NextResponse.json({ error: "Group not found" }, { status: 404 });
     }
 
-    if (!note.content.trim()) {
+    if (!group.title?.trim()) {
       return NextResponse.json(
-        { error: "Note content is empty" },
+        { error: "Group has no title to translate" },
         { status: 400 }
+      );
+    }
+
+    if (!group.titleHash) {
+      return NextResponse.json(
+        { error: "Group title hash not generated" },
+        { status: 500 }
       );
     }
 
     // Get OpenRouter client with settings from DB
     const client = await getOpenRouterClient();
 
-    // Translate the content
+    // Translate the title
     const result = await client.translate({
-      text: note.content,
+      text: group.title,
       sourceLang: body.sourceLang,
       targetLang: body.targetLang,
     });
 
-    // Upsert translation into ContentTranslation table (shared by notes and group titles with same content)
+    // Upsert translation into ContentTranslation table (shared by notes and group titles)
     const translation = await prisma.contentTranslation.upsert({
-      where: { contentHash: note.contentHash },
+      where: { contentHash: group.titleHash },
       create: {
-        contentHash: note.contentHash,
+        contentHash: group.titleHash,
         translatedContent: result.translatedText,
         sourceLanguage: result.sourceLang,
         targetLanguage: result.targetLang,
@@ -84,19 +91,18 @@ export async function POST(
       },
     });
 
-    aiLog.info({ noteId, contentHash: note.contentHash }, 'Translation saved to ContentTranslation table');
+    aiLog.info({ groupId, titleHash: group.titleHash }, 'Translation saved to ContentTranslation table');
 
     return NextResponse.json({
-      id: note.id,
-      name: note.name,
-      content: note.content,
-      translatedContent: translation.translatedContent,
+      id: group.id,
+      title: group.title,
+      translatedTitle: translation.translatedContent,
       sourceLanguage: translation.sourceLanguage,
       targetLanguage: translation.targetLanguage,
       translatedAt: translation.translatedAt?.toISOString(),
     });
   } catch (error) {
-    aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating note');
+    aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating group title');
 
     if (error instanceof OpenRouterConfigError) {
       return NextResponse.json(
@@ -113,7 +119,7 @@ export async function POST(
     }
 
     return NextResponse.json(
-      { error: "Failed to translate note" },
+      { error: "Failed to translate group title" },
       { status: 500 }
     );
   }

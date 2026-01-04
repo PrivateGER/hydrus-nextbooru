@@ -40,9 +40,8 @@ export class OpenRouterClient {
     this.defaultTargetLang = config.defaultTargetLang || DEFAULT_TARGET_LANG;
 
     if (!this.apiKey) {
-      throw new OpenRouterApiError(
-        "OpenRouter API key is required. Configure it in Admin Settings.",
-        401
+      throw new OpenRouterConfigError(
+        "OpenRouter API key is required. Configure it in Admin Settings."
       );
     }
   }
@@ -260,5 +259,12 @@ export class OpenRouterApiError extends Error {
     this.name = "OpenRouterApiError";
     this.statusCode = statusCode;
     this.responseBody = responseBody;
+  }
+}
+
+export class OpenRouterConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenRouterConfigError";
   }
 }

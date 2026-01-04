@@ -81,7 +81,7 @@ export async function cleanDatabase(): Promise<void> {
   await p.postGroup.deleteMany();
   await p.thumbnail.deleteMany();
   await p.note.deleteMany();
-  await p.noteTranslation.deleteMany();
+  await p.contentTranslation.deleteMany();
   await p.post.deleteMany();
   await p.tag.deleteMany();
   await p.group.deleteMany();

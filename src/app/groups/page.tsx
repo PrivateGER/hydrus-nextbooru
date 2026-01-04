@@ -176,7 +176,8 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                   {/* Show all source types for merged groups */}
                   {mergedGroup.groups.map((g) => {
                     const canonicalUrl = getCanonicalSourceUrl(g.sourceType, g.sourceId);
-                    const displayTitle = g.sourceType === SourceType.TITLE && g.title;
+                    const isTitleGroup = g.sourceType === SourceType.TITLE && g.title;
+                    const displayTitle = g.translatedTitle || g.title;
                     return (
                       <div key={g.id} className="flex items-center gap-2">
                         <Link
@@ -184,9 +185,9 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
                           className="flex items-center gap-2 rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors hover:bg-zinc-700/50"
                         >
                           <SourceBadge sourceType={g.sourceType} />
-                          {displayTitle ? (
-                            <span className="text-sm font-medium text-zinc-200 max-w-xs truncate" title={g.title!}>
-                              {g.title}
+                          {isTitleGroup ? (
+                            <span className="text-sm font-medium text-zinc-200 max-w-xs truncate" title={displayTitle!}>
+                              {displayTitle}
                             </span>
                           ) : g.sourceType !== SourceType.TITLE && (
                             <span className="font-mono text-sm text-zinc-400">
