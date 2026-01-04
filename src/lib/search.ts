@@ -155,6 +155,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
   const skip = (page - 1) * DEFAULT_LIMIT;
   const startTime = performance.now();
   const postHidingCondition = getPostHidingSqlCondition('p.id');
+  const groupPostHidingCondition = getPostHidingSqlCondition('first_post.id');
 
   try {
     // CTE to compute tsquery with prefix matching
@@ -162,6 +163,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
     // Then converts each lexeme to prefix match (e.g., 'back' → 'back':* matches 'background')
     // UNION allows each subquery to use its own GIN index efficiently
     // Count using window function
+    // Also searches group titles (original and translated)
     const results = await prisma.$queryRaw<(NoteResult & { total_count: bigint })[]>`
       WITH
         query AS (
@@ -180,7 +182,6 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             n.name,
             n.content,
             n."contentHash",
-            n."contentTsv",
             ts_rank_cd(n."contentTsv", q.q) AS rank,
             ts_headline('simple', n.content, q.q,
               'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
@@ -199,14 +200,13 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
           UNION
 
-          -- Match in translation content (uses NoteTranslation_translatedTsv_idx GIN index)
+          -- Match in note translation content (uses ContentTranslation_translatedTsv_idx GIN index)
           SELECT DISTINCT ON (n.id)
             n.id,
             n."postId",
             n.name,
             n.content,
             n."contentHash",
-            n."contentTsv",
             ts_rank_cd(nt."translatedTsv", q.q) AS rank,
             ts_headline('simple', nt."translatedContent", q.q,
               'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
@@ -223,9 +223,63 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           JOIN "ContentTranslation" nt ON n."contentHash" = nt."contentHash"
           WHERE nt."translatedTsv" @@ q.q
             AND ${postHidingCondition}
+
+          UNION
+
+          -- Match in group title (original)
+          SELECT DISTINCT ON (g.id)
+            -g.id AS id,
+            first_post.id AS "postId",
+            'Group Title' AS name,
+            g.title AS content,
+            g."titleHash" AS "contentHash",
+            ts_rank_cd(to_tsvector('simple', g.title), q.q) AS rank,
+            ts_headline('simple', g.title, q.q,
+              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            first_post.id AS post_id,
+            first_post.hash AS post_hash,
+            first_post.width AS post_width,
+            first_post.height AS post_height,
+            first_post.blurhash AS post_blurhash,
+            first_post."mimeType" AS post_mime,
+            first_post."importedAt" AS imported_at
+          FROM "Group" g
+          CROSS JOIN query q
+          JOIN "PostGroup" pg ON g.id = pg."groupId"
+          JOIN "Post" first_post ON pg."postId" = first_post.id AND pg.position = 0
+          WHERE g.title IS NOT NULL
+            AND to_tsvector('simple', g.title) @@ q.q
+            AND ${groupPostHidingCondition}
+
+          UNION
+
+          -- Match in group title translation
+          SELECT DISTINCT ON (g.id)
+            -g.id AS id,
+            first_post.id AS "postId",
+            'Group Title' AS name,
+            g.title AS content,
+            g."titleHash" AS "contentHash",
+            ts_rank_cd(ct."translatedTsv", q.q) AS rank,
+            ts_headline('simple', ct."translatedContent", q.q,
+              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            first_post.id AS post_id,
+            first_post.hash AS post_hash,
+            first_post.width AS post_width,
+            first_post.height AS post_height,
+            first_post.blurhash AS post_blurhash,
+            first_post."mimeType" AS post_mime,
+            first_post."importedAt" AS imported_at
+          FROM "Group" g
+          CROSS JOIN query q
+          JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+          JOIN "PostGroup" pg ON g.id = pg."groupId"
+          JOIN "Post" first_post ON pg."postId" = first_post.id AND pg.position = 0
+          WHERE ct."translatedTsv" @@ q.q
+            AND ${groupPostHidingCondition}
         ),
         deduplicated AS (
-          -- Deduplicate notes that match in both content and translation, keeping highest rank
+          -- Deduplicate matches, keeping highest rank
           SELECT DISTINCT ON (id)
             id, "postId", name, content, "contentHash", headline,
             post_id, post_hash, post_width, post_height, post_blurhash, post_mime,
