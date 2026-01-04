@@ -3,23 +3,25 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPost, randomHash } from '../factories';
-import { mkdir, writeFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { setupFsMock, teardownFsMock, resetFsVolume, createMemfsFile } from '../file-helpers';
 import { ThumbnailSize, ThumbnailStatus } from '@/generated/prisma/client';
 
 let GET: typeof import('@/app/api/thumbnails/[filename]/route').GET;
 
-// Test thumbnail directory
-const TEST_THUMBNAIL_PATH = join(process.cwd(), 'test-thumbnails');
+// Test thumbnail directory (in-memory)
+const TEST_THUMBNAIL_PATH = '/test-thumbnails';
 
 describe('GET /api/thumbnails/[filename] (Integration)', () => {
   beforeAll(async () => {
-    // Set up test thumbnail directory
-    process.env.THUMBNAIL_PATH = TEST_THUMBNAIL_PATH;
-    await mkdir(TEST_THUMBNAIL_PATH, { recursive: true });
-
+    // Set up database FIRST before any fs mocking
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
+
+    // Set up test thumbnail directory
+    process.env.THUMBNAIL_PATH = TEST_THUMBNAIL_PATH;
+
+    // Mock fs modules and import the route handler
+    await setupFsMock();
     const module = await import('@/app/api/thumbnails/[filename]/route');
     GET = module.GET;
   });
@@ -27,13 +29,20 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
   afterAll(async () => {
     setTestPrisma(null);
     await teardownTestDatabase();
-    // Clean up test thumbnails
-    await rm(TEST_THUMBNAIL_PATH, { recursive: true, force: true });
+    teardownFsMock();
   });
 
   beforeEach(async () => {
     await cleanDatabase();
+    resetFsVolume();
   });
+
+  /**
+   * Helper to create a thumbnail file in the memfs virtual filesystem.
+   */
+  function createThumbnailFile(relativePath: string, content: Buffer = Buffer.from('fake webp content')): void {
+    createMemfsFile(`${TEST_THUMBNAIL_PATH}/${relativePath}`, content);
+  }
 
   describe('validation', () => {
     it('should return 400 for invalid filename format', async () => {
@@ -97,11 +106,9 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
         },
       });
 
-      // Create actual thumbnail file
-      const thumbnailDir = join(TEST_THUMBNAIL_PATH, 'grid', hash.substring(0, 2));
-      await mkdir(thumbnailDir, { recursive: true });
+      // Create actual thumbnail file in memfs
       const thumbnailContent = Buffer.from('fake webp content');
-      await writeFile(join(thumbnailDir, `${hash}.webp`), thumbnailContent);
+      createThumbnailFile(relativePath, thumbnailContent);
 
       const request = new NextRequest(`http://localhost/api/thumbnails/${hash}.webp`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.webp` }) });
@@ -138,9 +145,7 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
         },
       });
 
-      const thumbnailDir = join(TEST_THUMBNAIL_PATH, 'preview', hash.substring(0, 2));
-      await mkdir(thumbnailDir, { recursive: true });
-      await writeFile(join(thumbnailDir, `${hash}.webp`), Buffer.from('fake preview content'));
+      createThumbnailFile(relativePath, Buffer.from('fake preview content'));
 
       const request = new NextRequest(`http://localhost/api/thumbnails/${hash}.webp?size=preview`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.webp` }) });
@@ -172,9 +177,7 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
         },
       });
 
-      const thumbnailDir = join(TEST_THUMBNAIL_PATH, 'grid', hash.substring(0, 2));
-      await mkdir(thumbnailDir, { recursive: true });
-      await writeFile(join(thumbnailDir, `${hash}.webp`), Buffer.from('content'));
+      createThumbnailFile(relativePath, Buffer.from('content'));
 
       const request = new NextRequest(`http://localhost/api/thumbnails/${hash}.webp`, {
         headers: { 'If-None-Match': `"${hash}-generated"` },

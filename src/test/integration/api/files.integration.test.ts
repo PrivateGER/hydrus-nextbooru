@@ -1,26 +1,46 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { setupTestFiles, createTestFile, cleanupTestFiles, createPngBuffer } from '../file-helpers';
+import {
+  setupFsMock,
+  teardownFsMock,
+  resetFsVolume,
+  createMemfsFile,
+  createPngBuffer,
+} from '../file-helpers';
 import { randomHash } from '../factories';
 
 let GET: typeof import('@/app/api/files/[filename]/route').GET;
 
 describe('GET /api/files/[filename] (Integration)', () => {
   beforeAll(async () => {
-    await setupTestFiles();
+    process.env.HYDRUS_FILES_PATH = '/hydrus/files';
+    await setupFsMock();
     const module = await import('@/app/api/files/[filename]/route');
     GET = module.GET;
   });
 
-  afterAll(async () => {
-    await cleanupTestFiles();
+  afterAll(() => {
+    teardownFsMock();
   });
+
+  beforeEach(() => {
+    resetFsVolume();
+  });
+
+  /**
+   * Helper to create a test file in the memfs virtual filesystem.
+   * Path: {HYDRUS_FILES_PATH}/f{hash[0:2]}/{hash}{extension}
+   */
+  function createTestFile(hash: string, extension: string, content: Buffer = Buffer.from('test content')): void {
+    const prefix = hash.substring(0, 2).toLowerCase();
+    createMemfsFile(`/hydrus/files/f${prefix}/${hash}${extension}`, content);
+  }
 
   describe('file serving', () => {
     it('should serve an existing file with correct content', async () => {
       const hash = randomHash();
       const content = createPngBuffer();
-      await createTestFile(hash, '.png', content);
+      createTestFile(hash, '.png', content);
 
       const request = new NextRequest(`http://localhost/api/files/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -67,7 +87,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
   describe('caching headers', () => {
     it('should set immutable cache headers', async () => {
       const hash = randomHash();
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/files/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -78,7 +98,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
 
     it('should return 304 for matching ETag', async () => {
       const hash = randomHash();
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/files/${hash}.png`, {
         headers: { 'If-None-Match': `"${hash}"` },
@@ -93,7 +113,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
     it('should handle range request for partial content', async () => {
       const hash = randomHash();
       const content = Buffer.alloc(1000, 'x');
-      await createTestFile(hash, '.mp4', content);
+      createTestFile(hash, '.mp4', content);
 
       const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
         headers: { Range: 'bytes=0-99' },
@@ -111,7 +131,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
 
     it('should set Accept-Ranges header', async () => {
       const hash = randomHash();
-      await createTestFile(hash, '.mp4', Buffer.alloc(100));
+      createTestFile(hash, '.mp4', Buffer.alloc(100));
 
       const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
@@ -131,7 +151,7 @@ describe('GET /api/files/[filename] (Integration)', () => {
       ['.webm', 'video/webm'],
     ])('should serve %s with correct MIME type', async (ext, expectedMime) => {
       const hash = randomHash();
-      await createTestFile(hash, ext, Buffer.from('test'));
+      createTestFile(hash, ext, Buffer.from('test'));
 
       const request = new NextRequest(`http://localhost/api/files/${hash}${ext}`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}${ext}` }) });
