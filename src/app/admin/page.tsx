@@ -62,6 +62,29 @@ interface TranslationSettings {
   defaultModel: string;
 }
 
+interface TranslationEstimate {
+  totalUniqueTitles: number;
+  translatedCount: number;
+  untranslatedCount: number;
+  uniqueTitlesToTranslate: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedCost: string;
+  estimatedCostUsd: number;
+  model: string;
+  pricing: { inputPer1M: number; outputPer1M: number };
+}
+
+interface BulkTranslationProgress {
+  status: "idle" | "running" | "completed" | "cancelled" | "error";
+  total: number;
+  completed: number;
+  failed: number;
+  errors: string[];
+  startedAt?: string;
+  completedAt?: string;
+}
+
 type Section = "sync" | "thumbnails" | "translation" | "maintenance" | "help";
 
 const NAV_ITEMS: { id: Section; label: string; icon: React.ComponentType<{ className?: string }>; description: string }[] = [
@@ -329,6 +352,11 @@ export default function AdminPage() {
   const [customModel, setCustomModel] = useState("");
   const [targetLang, setTargetLang] = useState("");
 
+  // Bulk translation state
+  const [translationEstimate, setTranslationEstimate] = useState<TranslationEstimate | null>(null);
+  const [bulkTranslationProgress, setBulkTranslationProgress] = useState<BulkTranslationProgress | null>(null);
+  const [isTranslatingTitles, setIsTranslatingTitles] = useState(false);
+
   // Confirmation modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -349,6 +377,7 @@ export default function AdminPage() {
   // Polling interval refs for cleanup on unmount
   const syncPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const thumbPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const translationPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cleanup polling intervals on unmount
   useEffect(() => {
@@ -360,6 +389,10 @@ export default function AdminPage() {
       if (thumbPollIntervalRef.current) {
         clearInterval(thumbPollIntervalRef.current);
         thumbPollIntervalRef.current = null;
+      }
+      if (translationPollIntervalRef.current) {
+        clearInterval(translationPollIntervalRef.current);
+        translationPollIntervalRef.current = null;
       }
     };
   }, []);
@@ -417,6 +450,31 @@ export default function AdminPage() {
     }
   }, []);
 
+  const fetchTranslationEstimate = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/translations/estimate");
+      if (response.ok) {
+        const data: TranslationEstimate = await response.json();
+        setTranslationEstimate(data);
+      }
+    } catch (error) {
+      console.error("Error fetching translation estimate:", error);
+    }
+  }, []);
+
+  const fetchBulkTranslationProgress = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/translations");
+      const data: BulkTranslationProgress = await response.json();
+      setBulkTranslationProgress(data);
+      setIsTranslatingTitles(data.status === "running");
+      return data;
+    } catch (error) {
+      console.error("Error fetching bulk translation progress:", error);
+      return null;
+    }
+  }, []);
+
   const fetchStatus = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/sync");
@@ -435,7 +493,9 @@ export default function AdminPage() {
     fetchStatus();
     fetchThumbStats();
     fetchTranslationSettings();
-  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings]);
+    fetchTranslationEstimate();
+    fetchBulkTranslationProgress();
+  }, [fetchStatus, fetchThumbStats, fetchTranslationSettings, fetchTranslationEstimate, fetchBulkTranslationProgress]);
 
   // Polling when operations are running - use refs to avoid recreating interval
   const isSyncingRef = useRef(isSyncing);
@@ -662,6 +722,83 @@ export default function AdminPage() {
       });
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  const handleStartBulkTranslation = async () => {
+    setIsTranslatingTitles(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/translations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetLang }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start translation");
+      }
+
+      setMessage({ type: "success", text: "Translating titles..." });
+
+      // Start polling for progress
+      translationPollIntervalRef.current = setInterval(async () => {
+        const progress = await fetchBulkTranslationProgress();
+
+        if (progress && progress.status !== "running") {
+          if (translationPollIntervalRef.current) {
+            clearInterval(translationPollIntervalRef.current);
+            translationPollIntervalRef.current = null;
+          }
+          setIsTranslatingTitles(false);
+          await fetchTranslationEstimate();
+
+          if (progress.status === "completed") {
+            triggerSuccessAnimation();
+            setMessage({
+              type: "success",
+              text: `Done! ${progress.completed} titles translated${progress.failed > 0 ? `, ${progress.failed} failed` : ""}.`,
+            });
+          } else if (progress.status === "cancelled") {
+            setMessage({
+              type: "success",
+              text: `Cancelled. ${progress.completed} titles were translated.`,
+            });
+          } else if (progress.status === "error") {
+            setMessage({
+              type: "error",
+              text: `Translation failed: ${progress.errors[0] || "Unknown error"}`,
+            });
+          }
+        }
+      }, 1000);
+    } catch (error) {
+      setIsTranslatingTitles(false);
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to start translation",
+      });
+    }
+  };
+
+  const handleCancelBulkTranslation = async () => {
+    try {
+      const response = await fetch("/api/admin/translations", { method: "DELETE" });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to cancel translation");
+      }
+
+      setMessage({ type: "success", text: "Stopping translation..." });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to cancel translation",
+      });
     }
   };
 
@@ -1098,6 +1235,97 @@ export default function AdminPage() {
           </Button>
         </div>
       </Card>
+
+      {/* Bulk Title Translation */}
+      {translationSettings?.apiKeyConfigured && translationEstimate && (
+        <Card>
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-zinc-200">Bulk Title Translation</h3>
+              <p className="mt-0.5 text-sm text-zinc-400">
+                Translate all group titles at once
+              </p>
+            </div>
+            {translationEstimate.untranslatedCount === 0 && (
+              <span className="flex items-center gap-1 text-xs text-emerald-400">
+                <CheckCircleIcon className="h-4 w-4" /> All translated
+              </span>
+            )}
+          </div>
+
+          {/* Stats */}
+          <div className="mb-4 grid grid-cols-3 gap-3">
+            <div className="rounded-lg bg-zinc-700/50 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums">{translationEstimate.totalUniqueTitles.toLocaleString()}</p>
+              <p className="text-xs text-zinc-500">Total</p>
+            </div>
+            <div className="rounded-lg bg-emerald-500/10 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums text-emerald-400">{translationEstimate.translatedCount.toLocaleString()}</p>
+              <p className="text-xs text-emerald-400/60">Translated</p>
+            </div>
+            <div className="rounded-lg bg-amber-500/10 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums text-amber-400">{translationEstimate.untranslatedCount.toLocaleString()}</p>
+              <p className="text-xs text-amber-400/60">Pending</p>
+            </div>
+          </div>
+
+          {/* Cost Estimate */}
+          {translationEstimate.untranslatedCount > 0 && (
+            <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">Estimated cost</span>
+                <span className="text-lg font-semibold text-zinc-200">{translationEstimate.estimatedCost}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <span>~{translationEstimate.estimatedInputTokens.toLocaleString()} input + ~{translationEstimate.estimatedOutputTokens.toLocaleString()} output tokens</span>
+                <span>{translationEstimate.model.split("/")[1]}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Progress */}
+          {bulkTranslationProgress?.status === "running" && (
+            <div className="mb-4">
+              <ProgressBar
+                current={bulkTranslationProgress.completed + bulkTranslationProgress.failed}
+                total={bulkTranslationProgress.total}
+                color="purple"
+              />
+              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <span>{bulkTranslationProgress.completed} translated, {bulkTranslationProgress.failed} failed</span>
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2">
+            {bulkTranslationProgress?.status === "running" ? (
+              <Button onClick={handleCancelBulkTranslation} variant="danger">
+                <StopIcon className="h-4 w-4" />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                onClick={() =>
+                  openConfirmModal({
+                    title: "Translate all titles?",
+                    message: `This will translate ${translationEstimate.untranslatedCount} titles for an estimated ${translationEstimate.estimatedCost}.`,
+                    confirmText: "Translate",
+                    confirmVariant: "primary",
+                    onConfirm: handleStartBulkTranslation,
+                  })
+                }
+                disabled={isTranslatingTitles || translationEstimate.untranslatedCount === 0}
+                loading={isTranslatingTitles}
+                className="bg-purple-600 hover:bg-purple-500"
+              >
+                <LanguageIcon className="h-4 w-4" />
+                Translate {translationEstimate.untranslatedCount.toLocaleString()} Titles
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
 
       <InfoBox>Source language is auto-detected. Translations are saved and apply to all matching content.</InfoBox>
     </div>
