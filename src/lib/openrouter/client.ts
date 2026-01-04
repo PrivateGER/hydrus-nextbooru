@@ -10,7 +10,7 @@ import type {
 import { aiLog } from "@/lib/logger";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "google/gemini-2.5-flash";
+const DEFAULT_MODEL = "google/gemini-3-flash-preview";
 const DEFAULT_TARGET_LANG = "en";
 
 const LANGUAGE_NAMES: Record<string, string> = {
