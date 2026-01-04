@@ -29,7 +29,7 @@ export function MaintenanceSection({
           loading={isRecalculating}
           variant="secondary"
         >
-          <ArrowPathIcon className="h-4 w-4" />
+          {!isRecalculating && <ArrowPathIcon className="h-4 w-4" />}
           Recalculate
         </Button>
 

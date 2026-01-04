@@ -73,24 +73,39 @@ export function useThumbnails(
 
       // Start polling for completion
       pollIntervalRef.current = setInterval(async () => {
-        const statsResponse = await fetch("/api/admin/thumbnails");
-        const statsData = await statsResponse.json();
+        try {
+          const statsResponse = await fetch("/api/admin/thumbnails");
+          const statsData = await statsResponse.json();
 
-        if (!mountedRef.current) return;
+          if (!mountedRef.current) return;
 
-        setThumbStats(statsData);
+          setThumbStats(statsData);
 
-        if (!statsData.batchRunning) {
+          if (!statsData.batchRunning) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setIsGenerating(false);
+            triggerSuccessAnimation();
+            setMessage({
+              type: "success",
+              text: `Done! ${statsData.complete.toLocaleString()} thumbnails ready.`,
+            });
+          }
+        } catch (error) {
+          console.error("Error polling thumbnail status:", error);
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
           }
-          setIsGenerating(false);
-          triggerSuccessAnimation();
-          setMessage({
-            type: "success",
-            text: `Done! ${statsData.complete.toLocaleString()} thumbnails ready.`,
-          });
+          if (mountedRef.current) {
+            setIsGenerating(false);
+            setMessage({
+              type: "error",
+              text: "Failed to check thumbnail generation status",
+            });
+          }
         }
       }, 2000);
     } catch (error) {

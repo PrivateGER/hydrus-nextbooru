@@ -108,7 +108,7 @@ export function TranslationSection({
           <div>
             <label className="mb-1.5 block text-sm font-medium text-zinc-300">Target Language</label>
             <Select value={targetLang} onChange={(e) => onTargetLangChange(e.target.value)}>
-              {settings?.supportedLanguages.map((lang) => (
+              {(settings?.supportedLanguages ?? []).map((lang) => (
                 <option key={lang.code} value={lang.code}>{lang.name}</option>
               ))}
             </Select>

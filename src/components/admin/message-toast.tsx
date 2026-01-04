@@ -13,6 +13,7 @@ export function MessageToast({ message, onDismiss }: MessageToastProps) {
 
   return (
     <div
+      role={message.type === "success" ? "status" : "alert"}
       className={`flex items-start gap-3 rounded-xl p-4 animate-in slide-in-from-top-2 ${
         message.type === "success"
           ? "bg-emerald-500/10 text-emerald-400"
@@ -25,7 +26,12 @@ export function MessageToast({ message, onDismiss }: MessageToastProps) {
         <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0" />
       )}
       <p className="flex-1 text-sm">{message.text}</p>
-      <button onClick={onDismiss} className="rounded p-1 hover:bg-white/10">
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss notification"
+        className="rounded p-1 hover:bg-white/10"
+      >
         <XMarkIcon className="h-4 w-4" />
       </button>
     </div>

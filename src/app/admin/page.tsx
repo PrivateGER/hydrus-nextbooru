@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { logout } from "@/app/login/actions";
 import { ArrowRightStartOnRectangleIcon } from "@heroicons/react/24/outline";
@@ -36,6 +36,18 @@ export default function AdminPage() {
   const [showSuccessAnimation, setShowSuccessAnimation] = useState(false);
   const [customTags, setCustomTags] = useState("");
 
+  // Ref for success animation timeout
+  const successTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup success animation timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Confirmation modal state
   const [confirmModal, setConfirmModal] = useState<ConfirmModalConfig>({
     isOpen: false,
@@ -52,8 +64,11 @@ export default function AdminPage() {
 
   // Success animation helper
   const triggerSuccessAnimation = useCallback(() => {
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current);
+    }
     setShowSuccessAnimation(true);
-    setTimeout(() => setShowSuccessAnimation(false), 1500);
+    successTimeoutRef.current = setTimeout(() => setShowSuccessAnimation(false), 1500);
   }, []);
 
   // Feature hooks

@@ -78,35 +78,50 @@ export function useSync(
 
       // Start polling for completion
       pollIntervalRef.current = setInterval(async () => {
-        const statusResponse = await fetch("/api/admin/sync");
-        const statusData = await statusResponse.json();
+        try {
+          const statusResponse = await fetch("/api/admin/sync");
+          const statusData = await statusResponse.json();
 
-        if (!mountedRef.current) return;
+          if (!mountedRef.current) return;
 
-        setSyncStatus(statusData);
+          setSyncStatus(statusData);
 
-        if (statusData.status !== "running") {
+          if (statusData.status !== "running") {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setIsSyncing(false);
+
+            if (statusData.status === "completed") {
+              triggerSuccessAnimation();
+              setMessage({
+                type: "success",
+                text: `Sync completed! ${statusData.lastSyncCount.toLocaleString()} files imported.`,
+              });
+            } else if (statusData.status === "cancelled") {
+              setMessage({
+                type: "success",
+                text: `Sync cancelled. ${statusData.processedFiles.toLocaleString()} files were imported.`,
+              });
+            } else if (statusData.status === "error") {
+              setMessage({
+                type: "error",
+                text: `Sync failed: ${statusData.errorMessage}`,
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Error polling sync status:", error);
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
           }
-          setIsSyncing(false);
-
-          if (statusData.status === "completed") {
-            triggerSuccessAnimation();
-            setMessage({
-              type: "success",
-              text: `Sync completed! ${statusData.lastSyncCount.toLocaleString()} files imported.`,
-            });
-          } else if (statusData.status === "cancelled") {
-            setMessage({
-              type: "success",
-              text: `Sync cancelled. ${statusData.processedFiles.toLocaleString()} files were imported.`,
-            });
-          } else if (statusData.status === "error") {
+          if (mountedRef.current) {
+            setIsSyncing(false);
             setMessage({
               type: "error",
-              text: `Sync failed: ${statusData.errorMessage}`,
+              text: "Failed to check sync status",
             });
           }
         }

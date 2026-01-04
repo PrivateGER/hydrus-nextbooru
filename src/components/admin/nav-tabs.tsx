@@ -29,6 +29,7 @@ export function NavTabs({ activeSection, onSectionChange }: NavTabsProps) {
         const isActive = activeSection === item.id;
         return (
           <button
+            type="button"
             key={item.id}
             onClick={() => onSectionChange(item.id)}
             className={`flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all ${
