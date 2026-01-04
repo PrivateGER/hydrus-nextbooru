@@ -4,7 +4,7 @@ import { ArrowPathIcon } from "@heroicons/react/24/outline";
 import { Tooltip } from "./tooltip";
 
 export interface ButtonProps {
-  onClick: () => void;
+  onClick?: () => void;
   disabled?: boolean;
   variant?: "primary" | "secondary" | "danger";
   loading?: boolean;
