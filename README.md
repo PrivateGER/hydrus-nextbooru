@@ -1,5 +1,7 @@
 # Hydrus Nextbooru
 
+[![codecov](https://codecov.io/gh/PrivateGER/hydrus-nextbooru/branch/master/graph/badge.svg?token=7rvkUNLyNO)](https://codecov.io/gh/PrivateGER/hydrus-nextbooru)
+
 A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update or with shit randomly breaking.
 
 A live demo filled with random Touhou images is running at https://nextbooru-demo.lattemacchiato.dev/.
@@ -61,11 +63,7 @@ Supports:
    npm start
    ```
 
-## Syncing from Hydrus
-
-1. Enable the Client API in Hydrus (services > manage services > client api)
-2. Create an API key with "search for and fetch files" and "see local file paths" permissions
-3. Start a sync in the admin panel
+See documentation contained within for usage guidance. No screenshots yet, still developing actively.
 
 ## Performance
 
