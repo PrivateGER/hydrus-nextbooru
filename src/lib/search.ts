@@ -233,7 +233,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
           UNION
 
-          -- Match in group title (original)
+          -- Match in group title
           SELECT DISTINCT ON (g.id)
             g.id,
             'group' AS result_type,
@@ -241,7 +241,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             'Group Title' AS name,
             g.title AS content,
             g."titleHash" AS "contentHash",
-            ts_rank_cd(to_tsvector('simple', g.title), q.q) AS rank,
+            ts_rank_cd(g."titleTsv", q.q) AS rank,
             ts_headline('simple', g.title, q.q,
               'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
             first_post.id AS post_id,
@@ -255,8 +255,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           CROSS JOIN query q
           JOIN "PostGroup" pg ON g.id = pg."groupId"
           JOIN "Post" first_post ON pg."postId" = first_post.id AND pg.position = 0
-          WHERE g.title IS NOT NULL
-            AND to_tsvector('simple', g.title) @@ q.q
+          WHERE g."titleTsv" @@ q.q
             AND ${groupPostHidingCondition}
 
           UNION
