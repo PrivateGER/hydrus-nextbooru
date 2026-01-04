@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { OpenRouterClient } from "./client";
+import { OpenRouterClient, OpenRouterConfigError } from "./client";
 import { SETTINGS_KEYS, type OpenRouterSettings } from "./types";
 
 /**
@@ -88,7 +88,7 @@ export async function getOpenRouterClient(): Promise<OpenRouterClient> {
   const settings = await getOpenRouterSettings();
 
   if (!settings.apiKey) {
-    throw new Error(
+    throw new OpenRouterConfigError(
       "OpenRouter API key not configured. Set it in Admin Settings or OPENROUTER_API_KEY environment variable."
     );
   }

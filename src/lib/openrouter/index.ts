@@ -1,4 +1,4 @@
-export { OpenRouterClient, OpenRouterApiError } from "./client";
+export { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "./client";
 export {
   getOpenRouterSettings,
   getOpenRouterClient,

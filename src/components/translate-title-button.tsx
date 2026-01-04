@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 interface TranslateTitleButtonProps {
   groupId: number;
@@ -138,14 +137,6 @@ export function TranslateTitleButton({
       {error && (
         <div className="mt-2 rounded-md border border-red-500/20 bg-red-500/10 p-2">
           <p className="text-xs text-red-400">{error.message}</p>
-          {error.code === "MODEL_NO_VISION" && (
-            <Link
-              href="/admin"
-              className="mt-1 inline-flex items-center gap-1 text-xs text-red-300 underline hover:text-red-200"
-            >
-              Go to Admin Settings →
-            </Link>
-          )}
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
+import { getOpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 
 interface TranslateRequestBody {
@@ -104,21 +104,18 @@ export async function POST(
   } catch (error) {
     aiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Error translating group title');
 
+    if (error instanceof OpenRouterConfigError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 401 }
+      );
+    }
+
     if (error instanceof OpenRouterApiError) {
       return NextResponse.json(
         { error: `Translation failed: ${error.message}` },
         { status: error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500 }
       );
-    }
-
-    if (error instanceof Error) {
-      // Handle configuration errors
-      if (error.message.includes("API key")) {
-        return NextResponse.json(
-          { error: error.message },
-          { status: 401 }
-        );
-      }
     }
 
     return NextResponse.json(
