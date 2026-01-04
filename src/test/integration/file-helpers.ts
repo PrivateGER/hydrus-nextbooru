@@ -1,64 +1,51 @@
-import { mkdir, writeFile, rm } from 'fs/promises';
-import { join } from 'path';
-import { tmpdir } from 'os';
-
-let testFilesPath: string | null = null;
+import { vi } from 'vitest';
+import { vol } from 'memfs';
 
 /**
- * Set up a temporary directory for test files.
- * Sets HYDRUS_FILES_PATH environment variable.
+ * Test helpers for memfs (in-memory filesystem) testing.
  */
-export async function setupTestFiles(): Promise<string> {
-  testFilesPath = join(tmpdir(), `booru-test-${Date.now()}`);
-  await mkdir(testFilesPath, { recursive: true });
-  process.env.HYDRUS_FILES_PATH = testFilesPath;
-  return testFilesPath;
+
+/**
+ * Set up memfs mocks for node:fs and node:fs/promises.
+ * Call this in beforeAll BEFORE importing route handlers.
+ *
+ * Note: We mock 'node:fs' (not 'fs') because Node.js treats them as equivalent,
+ * and this ensures the mock works regardless of which import style the source uses.
+ */
+export async function setupFsMock(): Promise<void> {
+  vi.doMock('node:fs', async () => (await import('memfs')).fs);
+  vi.doMock('node:fs/promises', async () => (await import('memfs')).fs.promises);
 }
 
 /**
- * Create a test file in the Hydrus file structure.
- * Path: {HYDRUS_FILES_PATH}/f{hash[0:2]}/{hash}{extension}
+ * Tear down memfs mocks.
+ * Call this in afterAll.
  */
-export async function createTestFile(
-  hash: string,
-  extension: string,
-  content: Buffer = Buffer.from('test content')
-): Promise<string> {
-  if (!testFilesPath) {
-    throw new Error('Test files not set up. Call setupTestFiles() first.');
+export function teardownFsMock(): void {
+  vi.doUnmock('node:fs');
+  vi.doUnmock('node:fs/promises');
+}
+
+/**
+ * Reset the in-memory filesystem.
+ * Call this in beforeEach for test isolation.
+ */
+export function resetFsVolume(): void {
+  vol.reset();
+}
+
+/**
+ * Create a file in the memfs virtual filesystem.
+ */
+export function createMemfsFile(path: string, content: Buffer | string): void {
+  const dirPath = path.substring(0, path.lastIndexOf('/'));
+  if (dirPath) {
+    vol.mkdirSync(dirPath, { recursive: true });
   }
-
-  const prefix = hash.substring(0, 2).toLowerCase();
-  const dirPath = join(testFilesPath, `f${prefix}`);
-  await mkdir(dirPath, { recursive: true });
-
-  const filePath = join(dirPath, `${hash}${extension}`);
-  await writeFile(filePath, content);
-
-  return filePath;
+  vol.writeFileSync(path, content);
 }
 
-/**
- * Create a test thumbnail in the Hydrus thumbnail structure.
- * Path: {HYDRUS_FILES_PATH}/t{hash[0:2]}/{hash}.thumbnail
- */
-export async function createTestThumbnail(
-  hash: string,
-  content: Buffer = Buffer.from('thumbnail content')
-): Promise<string> {
-  if (!testFilesPath) {
-    throw new Error('Test files not set up. Call setupTestFiles() first.');
-  }
-
-  const prefix = hash.substring(0, 2).toLowerCase();
-  const dirPath = join(testFilesPath, `t${prefix}`);
-  await mkdir(dirPath, { recursive: true });
-
-  const filePath = join(dirPath, `${hash}.thumbnail`);
-  await writeFile(filePath, content);
-
-  return filePath;
-}
+// Buffer helpers
 
 /**
  * Create a simple PNG file buffer for testing.
@@ -130,22 +117,4 @@ export function createJpegBuffer(): Buffer {
     0xfb, 0xd5, 0xdb, 0x20, 0xa8, 0xf1, 0x4e, 0xa8,
     0xeb, 0xb7, 0x5a, 0x8e, 0xb5, 0x7d, 0xff, 0xd9,
   ]);
-}
-
-/**
- * Get the current test files path.
- */
-export function getTestFilesPath(): string | null {
-  return testFilesPath;
-}
-
-/**
- * Clean up the temporary test files directory.
- * Call this in afterAll.
- */
-export async function cleanupTestFiles(): Promise<void> {
-  if (testFilesPath) {
-    await rm(testFilesPath, { recursive: true, force: true });
-    testFilesPath = null;
-  }
 }

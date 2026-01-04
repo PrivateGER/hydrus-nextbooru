@@ -3,16 +3,21 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPost, createPostWithTags, createGroup, createPostInGroup, randomHash } from '../factories';
-import { setupTestFiles, createTestFile, cleanupTestFiles, createPngBuffer } from '../file-helpers';
+import { setupFsMock, teardownFsMock, resetFsVolume, createMemfsFile, createPngBuffer } from '../file-helpers';
 import { TagCategory, SourceType } from '@/generated/prisma/client';
 
 let GET: typeof import('@/app/api/download/[filename]/route').GET;
 
 describe('GET /api/download/[filename] (Integration)', () => {
   beforeAll(async () => {
-    await setupTestFiles();
+    // Set up database FIRST before any fs mocking
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
+
+    process.env.HYDRUS_FILES_PATH = '/hydrus/files';
+
+    // Mock fs modules and import the route handler
+    await setupFsMock();
     const module = await import('@/app/api/download/[filename]/route');
     GET = module.GET;
   });
@@ -20,12 +25,22 @@ describe('GET /api/download/[filename] (Integration)', () => {
   afterAll(async () => {
     setTestPrisma(null);
     await teardownTestDatabase();
-    await cleanupTestFiles();
+    teardownFsMock();
   });
 
   beforeEach(async () => {
     await cleanDatabase();
+    resetFsVolume();
   });
+
+  /**
+   * Helper to create a test file in the memfs virtual filesystem.
+   * Path: {HYDRUS_FILES_PATH}/f{hash[0:2]}/{hash}{extension}
+   */
+  function createTestFile(hash: string, extension: string, content: Buffer = Buffer.from('test content')): void {
+    const prefix = hash.substring(0, 2).toLowerCase();
+    createMemfsFile(`/hydrus/files/f${prefix}/${hash}${extension}`, content);
+  }
 
   describe('validation', () => {
     it('should return 400 for invalid filename format', async () => {
@@ -59,7 +74,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       const prisma = getTestPrisma();
       const hash = randomHash();
       await createPost(prisma, { hash, extension: '.png' });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.jpg`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.jpg` }) });
@@ -76,7 +91,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       const hash = randomHash();
       const content = createPngBuffer();
       await createPost(prisma, { hash, extension: '.png', mimeType: 'image/png', fileSize: content.length });
-      await createTestFile(hash, '.png', content);
+      createTestFile(hash, '.png', content);
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -109,7 +124,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       const prisma = getTestPrisma();
       const hash = randomHash();
       await createPost(prisma, { hash, extension: '.png' });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -126,7 +141,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
         hash,
         extension: '.png',
       });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -142,7 +157,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
         hash,
         extension: '.png',
       });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -162,7 +177,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
         ],
         { hash, extension: '.png' }
       );
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -180,7 +195,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       await createPostInGroup(prisma, group, 1, { extension: '.png' });
       await createPostInGroup(prisma, group, 2, { extension: '.png' });
       await createPostInGroup(prisma, group, 3, { hash, extension: '.png' });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -193,7 +208,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       const prisma = getTestPrisma();
       const hash = randomHash();
       await createPost(prisma, { hash, extension: '.png' });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -209,7 +224,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
         hash,
         extension: '.png',
       });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -245,7 +260,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
         ],
       });
 
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
@@ -260,7 +275,7 @@ describe('GET /api/download/[filename] (Integration)', () => {
       const group = await createGroup(prisma, SourceType.PIXIV, '12345');
       // Only one post in the group
       await createPostInGroup(prisma, group, 0, { hash, extension: '.png' });
-      await createTestFile(hash, '.png', createPngBuffer());
+      createTestFile(hash, '.png', createPngBuffer());
 
       const request = new NextRequest(`http://localhost/api/download/${hash}.png`);
       const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.png` }) });
