@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Markdown } from "./markdown";
 
-interface NoteTranslation {
+interface ContentTranslation {
   translatedContent: string;
   sourceLanguage: string | null;
   targetLanguage: string | null;
@@ -14,7 +14,7 @@ interface Note {
   id: number;
   name: string;
   content: string;
-  translation: NoteTranslation | null;
+  translation: ContentTranslation | null;
 }
 
 interface NoteCardProps {

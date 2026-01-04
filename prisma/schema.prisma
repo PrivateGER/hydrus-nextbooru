@@ -35,21 +35,21 @@ enum SourceType {
   DEVIANTART
   DANBOORU
   GELBOORU
-  TITLE     // Grouped by normalized filename/title
+  TITLE // Grouped by normalized filename/title
   OTHER
 }
 
 enum ThumbnailSize {
-  GRID     // 300px - for gallery grid
-  PREVIEW  // 600px - for hover/detail view
+  GRID // 300px - for gallery grid
+  PREVIEW // 600px - for hover/detail view
   ANIMATED // Animated preview for videos/GIFs
 }
 
 enum ThumbnailStatus {
-  PENDING     // Not yet generated
-  PROCESSING  // Currently generating
-  COMPLETE    // All sizes ready
-  FAILED      // Use Hydrus fallback
+  PENDING // Not yet generated
+  PROCESSING // Currently generating
+  COMPLETE // All sizes ready
+  FAILED // Use Hydrus fallback
   UNSUPPORTED // Non-media file, cannot generate thumbnails
 }
 
@@ -64,20 +64,20 @@ enum Orientation {
 // ============================================
 
 model Post {
-  id           Int      @id @default(autoincrement())
-  hydrusFileId Int      @unique
-  hash         String   @unique @db.Char(64)
+  id           Int    @id @default(autoincrement())
+  hydrusFileId Int    @unique
+  hash         String @unique @db.Char(64)
 
   // File info (paths computed at runtime from hash + extension + HYDRUS_FILES_PATH)
-  mimeType      String
-  extension     String
-  fileSize      Int
-  width         Int?
-  height        Int?
-  orientation   Orientation? // Computed column: GENERATED ALWAYS AS (CASE width/height)
-  duration      Int? // milliseconds for video/audio
-  hasAudio      Boolean  @default(false)
-  blurhash      String?
+  mimeType    String
+  extension   String
+  fileSize    Int
+  width       Int?
+  height      Int?
+  orientation Orientation? // Computed column: GENERATED ALWAYS AS (CASE width/height)
+  duration    Int? // milliseconds for video/audio
+  hasAudio    Boolean      @default(false)
+  blurhash    String?
 
   // Metadata
   rating     Rating   @default(UNRATED)
@@ -141,13 +141,20 @@ model PostTag {
 model Group {
   id         Int        @id @default(autoincrement())
   sourceType SourceType // PIXIV, TWITTER, etc.
-  sourceId   String     // The pixiv/twitter post ID or title hash
-  title      String?    // Human-readable title (mainly for TITLE groups)
+  sourceId   String // The pixiv/twitter post ID or title hash
+  title      String? // Human-readable title (mainly for TITLE groups)
+
+  // Generated column for title hash (SHA256, like Note.contentHash)
+  titleHash String? @default(dbgenerated("CASE WHEN title IS NOT NULL THEN encode(digest(title, 'sha256'::text), 'hex'::text) ELSE NULL END")) @db.Char(64)
+
+  // Relation to shared translation (same table as notes)
+  translation ContentTranslation? @relation(fields: [titleHash], references: [contentHash])
 
   posts PostGroup[]
 
   @@unique([sourceType, sourceId])
   @@index([sourceType])
+  @@index([titleHash])
 }
 
 model PostGroup {
@@ -172,22 +179,24 @@ model Note {
   contentHash String @default(dbgenerated("encode(digest(content, 'sha256'::text), 'hex'::text)")) @db.Char(64)
 
   // Relation to shared translation (via contentHash)
-  translation NoteTranslation? @relation(fields: [contentHash], references: [contentHash])
+  translation ContentTranslation? @relation(fields: [contentHash], references: [contentHash])
 
   @@unique([postId, name])
   @@index([postId])
   @@index([contentHash])
 }
 
-model NoteTranslation {
+// Shared translation table for notes and group titles (keyed by content hash)
+model ContentTranslation {
   contentHash       String   @id @db.Char(64)
   translatedContent String
   sourceLanguage    String?
   targetLanguage    String?
   translatedAt      DateTime @default(now())
 
-  // Back-relation to notes with this content
-  notes Note[]
+  // Back-relations
+  notes  Note[]
+  groups Group[]
 }
 
 // ============================================
@@ -224,7 +233,7 @@ model Thumbnail {
   format   String // "webp"
   width    Int
   height   Int
-  fileSize Int    // bytes
+  fileSize Int // bytes
   path     String // Relative path from THUMBNAIL_PATH
 
   generatedAt DateTime @default(now())
@@ -253,7 +262,7 @@ model PostRecommendation {
   id            Int      @id @default(autoincrement())
   postId        Int
   recommendedId Int
-  score         Float    // IDF-weighted tag similarity score
+  score         Float // IDF-weighted tag similarity score
   computedAt    DateTime @default(now()) // When this recommendation was computed (for cache TTL)
 
   post        Post @relation("PostRecommendations", fields: [postId], references: [id], onDelete: Cascade)

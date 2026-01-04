@@ -162,7 +162,7 @@ describe('Notes Integration', () => {
       expect(response.status).toBe(200);
 
       // Verify translation was stored
-      const translation = await prisma.noteTranslation.findUnique({
+      const translation = await prisma.contentTranslation.findUnique({
         where: { contentHash: note!.contentHash },
       });
       expect(translation).not.toBeNull();
@@ -215,7 +215,7 @@ describe('Notes Integration', () => {
       expect(notesWithTranslation[1].translation!.translatedContent).toBe('Shared English translation');
 
       // Should only have one translation record in the database
-      const translations = await prisma.noteTranslation.findMany();
+      const translations = await prisma.contentTranslation.findMany();
       expect(translations).toHaveLength(1);
     });
 
@@ -302,7 +302,7 @@ describe('Notes Integration', () => {
       );
 
       // Should only have one translation record (upserted)
-      const translations = await prisma.noteTranslation.findMany();
+      const translations = await prisma.contentTranslation.findMany();
       expect(translations).toHaveLength(1);
       expect(translations[0].translatedContent).toBe('Updated translation');
     });
@@ -424,7 +424,7 @@ describe('Notes Integration', () => {
       expect(response.status).toBe(200);
 
       // Verify the full response was stored as fallback
-      const translation = await prisma.noteTranslation.findUnique({
+      const translation = await prisma.contentTranslation.findUnique({
         where: { contentHash: note!.contentHash },
       });
       expect(translation).not.toBeNull();

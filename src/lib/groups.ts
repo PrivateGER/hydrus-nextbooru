@@ -18,6 +18,7 @@ export interface MergedGroup {
     sourceType: SourceType;
     sourceId: string;
     title: string | null;
+    translatedTitle: string | null;
   }>;
   postCount: number;
   creators: string[];
@@ -112,6 +113,7 @@ export async function searchGroups(
     sourceTypes: string[];
     sourceIds: string[];
     titles: (string | null)[];
+    translatedTitles: (string | null)[];
     postCount: bigint;
   }[]>`
     WITH group_content AS (
@@ -120,12 +122,14 @@ export async function searchGroups(
         g."sourceType",
         g."sourceId",
         g."title",
+        ct."translatedContent" as translated_title,
         MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash,
         COUNT(pg."postId")::bigint as post_count
       FROM "Group" g
       JOIN "PostGroup" pg ON pg."groupId" = g.id
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
       ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
-      GROUP BY g.id
+      GROUP BY g.id, ct."translatedContent"
       HAVING COUNT(pg."postId") >= 2
     )
     SELECT
@@ -134,6 +138,7 @@ export async function searchGroups(
       ARRAY_AGG("sourceType"::text ORDER BY group_id) as "sourceTypes",
       ARRAY_AGG("sourceId" ORDER BY group_id) as "sourceIds",
       ARRAY_AGG("title" ORDER BY group_id) as "titles",
+      ARRAY_AGG(translated_title ORDER BY group_id) as "translatedTitles",
       MAX(post_count) as "postCount",
       MIN(group_id) as min_group_id,
       MAX(post_count) as max_post_count
@@ -212,6 +217,7 @@ export async function searchGroups(
         sourceType: g.sourceTypes[i] as SourceType,
         sourceId: g.sourceIds[i],
         title: g.titles[i],
+        translatedTitle: g.translatedTitles[i],
       })),
       postCount: Number(g.postCount),
       creators: [...creatorSet].slice(0, 3),

@@ -5,6 +5,7 @@ import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { isValidCreatorName } from "@/lib/groups";
 import { SourceBadge } from "@/components/source-badge";
 import { PostCard } from "@/components/post-card";
+import { TranslateTitleButton } from "@/components/translate-title-button";
 import { SourceType, TagCategory } from "@/generated/prisma/client";
 import {
   ArrowLeftIcon,
@@ -21,6 +22,7 @@ async function getGroup(id: number) {
   const group = await prisma.group.findUnique({
     where: { id },
     include: {
+      translation: true,
       posts: {
         include: {
           post: {
@@ -102,9 +104,25 @@ export default async function GroupPage({ params }: GroupPageProps) {
               <div className="flex items-center gap-2">
                 <SourceBadge sourceType={group.sourceType} />
                 {group.sourceType === SourceType.TITLE ? (
-                  <h1 className="text-lg font-bold truncate max-w-md" title={group.title || group.sourceId}>
-                    {group.title || group.sourceId}
-                  </h1>
+                  <div className="flex flex-col">
+                    <h1
+                      className="text-lg font-bold truncate max-w-md"
+                      title={group.translation?.translatedContent || group.title || group.sourceId}
+                    >
+                      {group.translation?.translatedContent || group.title || group.sourceId}
+                    </h1>
+                    {group.title && (
+                      <TranslateTitleButton
+                        groupId={group.id}
+                        title={group.title}
+                        existingTranslation={group.translation ? {
+                          translatedTitle: group.translation.translatedContent,
+                          sourceLanguage: group.translation.sourceLanguage,
+                          targetLanguage: group.translation.targetLanguage,
+                        } : null}
+                      />
+                    )}
+                  </div>
                 ) : (
                   <span className="font-mono text-sm text-zinc-400">{group.sourceId}</span>
                 )}

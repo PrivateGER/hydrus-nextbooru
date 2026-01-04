@@ -325,7 +325,7 @@ function computeContentHash(content: string): string {
 
 /**
  * Create a note attached to a post.
- * If translation fields are provided, a NoteTranslation record is also created.
+ * If translation fields are provided, a ContentTranslation record is also created.
  */
 export async function createNote(
   prisma: PrismaClient,
@@ -349,10 +349,10 @@ export async function createNote(
     },
   });
 
-  // If translation is provided, create/upsert the NoteTranslation record
+  // If translation is provided, create/upsert the ContentTranslation record
   if (overrides.translatedContent) {
     const contentHash = computeContentHash(content);
-    await prisma.noteTranslation.upsert({
+    await prisma.contentTranslation.upsert({
       where: { contentHash },
       create: {
         contentHash,
