@@ -39,6 +39,9 @@ export interface PostResult {
   mimeType: string;
 }
 
+/** Type of search result - either a note or a group title */
+export type NoteResultType = "note" | "group";
+
 /**
  * Note search result with associated post data.
  * Notes with identical content share the same `contentHash`,
@@ -55,6 +58,8 @@ export interface NoteResult {
   contentHash: string;
   /** Search result snippet with <mark> tags highlighting matches */
   headline: string | null;
+  /** Type of result - 'note' for actual notes, 'group' for group title matches */
+  resultType: NoteResultType;
   post: PostResult;
 }
 
@@ -178,6 +183,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           -- Match in note content (uses Note_contentTsv_idx GIN index)
           SELECT DISTINCT ON (n.id)
             n.id,
+            'note' AS result_type,
             n."postId",
             n.name,
             n.content,
@@ -203,6 +209,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           -- Match in note translation content (uses ContentTranslation_translatedTsv_idx GIN index)
           SELECT DISTINCT ON (n.id)
             n.id,
+            'note' AS result_type,
             n."postId",
             n.name,
             n.content,
@@ -228,7 +235,8 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
           -- Match in group title (original)
           SELECT DISTINCT ON (g.id)
-            -g.id AS id,
+            g.id,
+            'group' AS result_type,
             first_post.id AS "postId",
             'Group Title' AS name,
             g.title AS content,
@@ -255,7 +263,8 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
           -- Match in group title translation
           SELECT DISTINCT ON (g.id)
-            -g.id AS id,
+            g.id,
+            'group' AS result_type,
             first_post.id AS "postId",
             'Group Title' AS name,
             g.title AS content,
@@ -279,13 +288,13 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             AND ${groupPostHidingCondition}
         ),
         deduplicated AS (
-          -- Deduplicate matches, keeping highest rank
-          SELECT DISTINCT ON (id)
-            id, "postId", name, content, "contentHash", headline,
+          -- Deduplicate matches, keeping highest rank (per result_type + id combination)
+          SELECT DISTINCT ON (result_type, id)
+            id, result_type, "postId", name, content, "contentHash", headline,
             post_id, post_hash, post_width, post_height, post_blurhash, post_mime,
             rank, imported_at
           FROM matches
-          ORDER BY id, rank DESC
+          ORDER BY result_type, id, rank DESC
         ),
         counted AS (
           SELECT *, COUNT(*) OVER() AS total_count
@@ -295,6 +304,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         )
       SELECT
         id,
+        result_type AS "resultType",
         "postId",
         name,
         content,
@@ -318,6 +328,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         content: n.content,
         contentHash: n.contentHash,
         headline: adjustPrefixHighlighting(sanitizeHeadline(n.headline), query),
+        resultType: n.resultType as NoteResultType,
         post: n.post as PostResult,
       })),
       totalCount,

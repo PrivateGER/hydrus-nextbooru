@@ -168,8 +168,10 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
       "Starting bulk title translation"
     );
 
-    // Track if we should abort due to auth error
-    let authError: OpenRouterApiError | null = null;
+    // Result types for batch processing
+    type TranslationResult =
+      | { success: true; titleHash: string }
+      | { success: false; titleHash: string; error: Error };
 
     // Process in batches with concurrency limit
     for (let i = 0; i < untranslatedTitles.length; i += MAX_CONCURRENT) {
@@ -179,19 +181,10 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
         return;
       }
 
-      // Check for auth error from previous batch
-      if (authError) {
-        translationProgress.status = "error";
-        translationProgress.completedAt = new Date().toISOString();
-        translationProgress.errors.push(`Authentication failed: ${authError.message}`);
-        aiLog.error({ error: authError.message }, "Bulk translation aborted due to auth error");
-        return;
-      }
-
       const batch = untranslatedTitles.slice(i, i + MAX_CONCURRENT);
 
       const results = await Promise.allSettled(
-        batch.map(async ({ titleHash, title }) => {
+        batch.map(async ({ titleHash, title }): Promise<TranslationResult> => {
           try {
             // Translate the title
             const result = await client.translate({
@@ -219,27 +212,34 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
 
             return { success: true, titleHash };
           } catch (error) {
-            // Check for auth errors (401) to abort early
-            if (error instanceof OpenRouterApiError && error.statusCode === 401) {
-              authError = error;
-            }
-            const message =
-              error instanceof Error ? error.message : String(error);
-            return { success: false, titleHash, error: message };
+            return {
+              success: false,
+              titleHash,
+              error: error instanceof Error ? error : new Error(String(error)),
+            };
           }
         })
       );
 
-      // Update progress
+      // Update progress and check for auth errors
+      let authError: OpenRouterApiError | null = null;
+
       for (const result of results) {
         if (result.status === "fulfilled") {
           if (result.value.success) {
             translationProgress.completed++;
           } else {
             translationProgress.failed++;
+            const error = result.value.error;
+
+            // Track auth errors to abort early
+            if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+              authError = error;
+            }
+
             if (translationProgress.errors.length < 10) {
               translationProgress.errors.push(
-                `${result.value.titleHash.slice(0, 8)}...: ${result.value.error}`
+                `${result.value.titleHash.slice(0, 8)}...: ${error.message}`
               );
             }
           }
@@ -249,6 +249,15 @@ async function runBulkTranslation(targetLang?: string): Promise<void> {
             translationProgress.errors.push(result.reason?.message || "Unknown error");
           }
         }
+      }
+
+      // Abort if auth error encountered
+      if (authError) {
+        translationProgress.status = "error";
+        translationProgress.completedAt = new Date().toISOString();
+        translationProgress.errors.push(`Authentication failed: ${authError.message}`);
+        aiLog.error({ error: authError.message }, "Bulk translation aborted due to auth error");
+        return;
       }
 
       // Delay between batches to avoid rate limiting
