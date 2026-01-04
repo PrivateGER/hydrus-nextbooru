@@ -15,12 +15,15 @@ export interface MockOpenRouterState {
   delayMs?: number;
   /** Set to true to simulate OpenRouter returning empty/malformed translation */
   emptyTranslation?: boolean;
+  /** Tracks the number of API calls made */
+  callCount: number;
 }
 
 export function createMockOpenRouterState(): MockOpenRouterState {
   return {
     translationResponse: 'This is a mock translation',
     sourceLang: 'Japanese',
+    callCount: 0,
   };
 }
 
@@ -131,6 +134,9 @@ export function createOpenRouterHandlers(state: MockOpenRouterState): RequestHan
       const messages = (body as { messages: Array<{ role?: string; content?: unknown }> }).messages;
       const userMessage = messages.find((m) => m.role === 'user');
 
+      // Increment call count for successful requests
+      state.callCount++;
+
       // Check if it's an image translation (content is an array with image_url)
       const isImageTranslation = Array.isArray(userMessage?.content);
 
@@ -185,4 +191,11 @@ export function clearOpenRouterError(state: MockOpenRouterState): void {
  */
 export function setEmptyTranslation(state: MockOpenRouterState, empty = true): void {
   state.emptyTranslation = empty;
+}
+
+/**
+ * Helper to reset the API call count
+ */
+export function resetCallCount(state: MockOpenRouterState): void {
+  state.callCount = 0;
 }
