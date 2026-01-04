@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createGroup } from '../factories';
@@ -6,6 +6,9 @@ import { SETTINGS_KEYS } from '@/lib/openrouter/types';
 import { SourceType } from '@/generated/prisma/client';
 import { NextRequest } from 'next/server';
 import { resetTranslationProgress } from '@/app/api/admin/translations/route';
+import { createOpenRouterHandlers, createMockOpenRouterState, setTranslationResponse, type MockOpenRouterState } from '@/test/mocks/openrouter-server';
+import { setupServer, type SetupServer } from 'msw/node';
+import { invalidateAllCaches } from '@/lib/cache';
 
 // Mock admin session verification to bypass auth in tests
 vi.mock('@/lib/auth', () => ({
@@ -255,6 +258,147 @@ describe('Bulk Translation API', () => {
       const errors = status.errors as unknown[];
       expect(errors.every((e) => typeof e === 'string')).toBe(true);
       expect(errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Duplicate title deduplication', () => {
+    let server: SetupServer;
+    let openRouterState: MockOpenRouterState;
+
+    beforeEach(async () => {
+      invalidateAllCaches();
+
+      // Set up OpenRouter mock server
+      openRouterState = createMockOpenRouterState();
+      server = setupServer(...createOpenRouterHandlers(openRouterState));
+      server.listen({ onUnhandledRequest: 'error' });
+    });
+
+    afterEach(() => {
+      server.close();
+    });
+
+    it('should only make one API call for multiple groups with the same title', async () => {
+      const prisma = getTestPrisma();
+      await waitForTranslationComplete(); // Ensure clean state
+
+      // Configure API key
+      await prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.API_KEY },
+        update: { value: 'test-api-key' },
+        create: { key: SETTINGS_KEYS.API_KEY, value: 'test-api-key' },
+      });
+
+      const sharedTitle = '共有タイトル';
+
+      // Create 3 groups with the same title
+      const group1 = await createGroup(prisma, SourceType.TITLE, 'hash1', sharedTitle);
+      const group2 = await createGroup(prisma, SourceType.TITLE, 'hash2', sharedTitle);
+      const group3 = await createGroup(prisma, SourceType.TITLE, 'hash3', sharedTitle);
+
+      // Verify all groups have the same titleHash
+      expect(group1.titleHash).toBe(group2.titleHash);
+      expect(group2.titleHash).toBe(group3.titleHash);
+
+      // Set up mock response
+      setTranslationResponse(openRouterState, 'Shared Title', 'Japanese');
+
+      // Run bulk translation
+      const { POST } = await import('@/app/api/admin/translations/route');
+      const request = new NextRequest('http://localhost/api/admin/translations', {
+        method: 'POST',
+      });
+      await POST(request);
+
+      const status = await waitForTranslationComplete();
+      expect(status.status).toBe('completed');
+
+      // Verify only 1 API call was made (not 3)
+      expect(openRouterState.callCount).toBe(1);
+
+      // Verify only 1 translation record exists
+      const translations = await prisma.contentTranslation.findMany();
+      expect(translations).toHaveLength(1);
+      expect(translations[0].translatedContent).toBe('Shared Title');
+
+      // Verify all groups share the same translation via the relationship
+      const groupsWithTranslation = await prisma.group.findMany({
+        where: { title: sharedTitle },
+        include: { translation: true },
+      });
+
+      expect(groupsWithTranslation).toHaveLength(3);
+      for (const group of groupsWithTranslation) {
+        expect(group.translation).not.toBeNull();
+        expect(group.translation!.translatedContent).toBe('Shared Title');
+      }
+    });
+
+    it('should make separate API calls for groups with different titles', async () => {
+      const prisma = getTestPrisma();
+      await waitForTranslationComplete(); // Ensure clean state
+
+      // Configure API key
+      await prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.API_KEY },
+        update: { value: 'test-api-key' },
+        create: { key: SETTINGS_KEYS.API_KEY, value: 'test-api-key' },
+      });
+
+      // Create 3 groups with different titles
+      await createGroup(prisma, SourceType.TITLE, 'hash1', '日本語タイトル1');
+      await createGroup(prisma, SourceType.TITLE, 'hash2', '日本語タイトル2');
+      await createGroup(prisma, SourceType.TITLE, 'hash3', '日本語タイトル3');
+
+      // Set up mock response
+      setTranslationResponse(openRouterState, 'Translated Title', 'Japanese');
+
+      // Run bulk translation
+      const { POST } = await import('@/app/api/admin/translations/route');
+      const request = new NextRequest('http://localhost/api/admin/translations', {
+        method: 'POST',
+      });
+      await POST(request);
+
+      const status = await waitForTranslationComplete();
+      expect(status.status).toBe('completed');
+
+      // Verify 3 API calls were made (one per unique title)
+      expect(openRouterState.callCount).toBe(3);
+
+      // Verify 3 translation records exist
+      const translations = await prisma.contentTranslation.findMany();
+      expect(translations).toHaveLength(3);
+    });
+
+    it('should count unique titles correctly in estimate when duplicates exist', async () => {
+      const prisma = getTestPrisma();
+
+      // Configure API key
+      await prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.API_KEY },
+        update: { value: 'test-api-key' },
+        create: { key: SETTINGS_KEYS.API_KEY, value: 'test-api-key' },
+      });
+
+      const sharedTitle = '同じタイトル';
+
+      // Create 5 groups with the same title and 2 groups with unique titles
+      await createGroup(prisma, SourceType.TITLE, 'hash1', sharedTitle);
+      await createGroup(prisma, SourceType.TITLE, 'hash2', sharedTitle);
+      await createGroup(prisma, SourceType.TITLE, 'hash3', sharedTitle);
+      await createGroup(prisma, SourceType.TITLE, 'hash4', sharedTitle);
+      await createGroup(prisma, SourceType.TITLE, 'hash5', sharedTitle);
+      await createGroup(prisma, SourceType.TITLE, 'hash6', '別のタイトル');
+      await createGroup(prisma, SourceType.TITLE, 'hash7', 'Another Title');
+
+      const { GET } = await import('@/app/api/admin/translations/estimate/route');
+      const response = await GET();
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      // Should count 3 unique titles (sharedTitle, 別のタイトル, Another Title), not 7
+      expect(data.untranslatedCount).toBe(3);
     });
   });
 });
