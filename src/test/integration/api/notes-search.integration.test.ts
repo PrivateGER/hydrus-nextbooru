@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPost, createNote, createPostWithNote, createPostWithTagsAndNote } from '../factories';
+import { createPost, createNote, createPostWithNote, createPostWithTagsAndNote, createGroup, createPostInGroup } from '../factories';
 import { searchNotes } from '@/lib/search';
 import { clearPatternCache } from '@/lib/tag-blacklist';
+import { SourceType } from '@/generated/prisma/client';
 
 describe('searchNotes (Integration)', () => {
   beforeAll(async () => {
@@ -395,6 +396,167 @@ describe('searchNotes (Integration)', () => {
 
       expect(result.notes).toHaveLength(1);
       expect(result.notes[0].content).toContain('Visible');
+    });
+  });
+
+  describe('group title search', () => {
+    it('should find groups by original title', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'unique-id-1', 'Searchable Group Title');
+      await createPostInGroup(prisma, group, 0);
+
+      const result = await searchNotes('searchable', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toBe('Searchable Group Title');
+      expect(result.notes[0].name).toBe('Group Title');
+    });
+
+    it('should find groups by translated title', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'unique-id-2', '日本語のタイトル');
+      await createPostInGroup(prisma, group, 0);
+
+      // Add translation for the group title
+      await prisma.contentTranslation.create({
+        data: {
+          contentHash: group.titleHash!,
+          translatedContent: 'Japanese Title Translated',
+          sourceLanguage: 'ja',
+          targetLanguage: 'en',
+        },
+      });
+
+      const result = await searchNotes('translated', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toBe('日本語のタイトル');
+    });
+
+    it('should return resultType "group" for group title matches', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'unique-id-3', 'Group Result Type Test');
+      await createPostInGroup(prisma, group, 0);
+
+      const result = await searchNotes('result type', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].resultType).toBe('group');
+    });
+
+    it('should return resultType "note" for note matches', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithNote(prisma, { content: 'Note Result Type Test' });
+
+      const result = await searchNotes('result type', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].resultType).toBe('note');
+    });
+
+    it('should return mixed results with correct resultType', async () => {
+      const prisma = getTestPrisma();
+      // Create a note
+      await createPostWithNote(prisma, { content: 'Keyword in note content' });
+      // Create a group with title
+      const group = await createGroup(prisma, SourceType.TITLE, 'unique-id-4', 'Keyword in group title');
+      await createPostInGroup(prisma, group, 0);
+
+      const result = await searchNotes('keyword', 1);
+
+      expect(result.notes).toHaveLength(2);
+      const noteResult = result.notes.find(n => n.resultType === 'note');
+      const groupResult = result.notes.find(n => n.resultType === 'group');
+      expect(noteResult).toBeDefined();
+      expect(groupResult).toBeDefined();
+      expect(noteResult!.content).toContain('note content');
+      expect(groupResult!.content).toContain('group title');
+    });
+
+    it('should deduplicate when search matches both original and translated title', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'unique-id-5', 'Unique keyword here');
+      await createPostInGroup(prisma, group, 0);
+
+      // Add translation that also contains the keyword
+      await prisma.contentTranslation.create({
+        data: {
+          contentHash: group.titleHash!,
+          translatedContent: 'Translation with unique keyword too',
+          sourceLanguage: 'en',
+          targetLanguage: 'es',
+        },
+      });
+
+      const result = await searchNotes('unique', 1);
+
+      // Should only return one result despite matching in both
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].resultType).toBe('group');
+    });
+
+    it('should not return groups without posts', async () => {
+      const prisma = getTestPrisma();
+      // Create group with title but no posts
+      await createGroup(prisma, SourceType.TITLE, 'orphan-group', 'Orphan Group Title');
+
+      const result = await searchNotes('orphan', 1);
+
+      expect(result.notes).toHaveLength(0);
+    });
+
+    it('should use first post (position 0) for group results', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'multi-post-group', 'Multi Post Group');
+      const firstPost = await createPostInGroup(prisma, group, 0, { hash: 'first-post-hash' });
+      await createPostInGroup(prisma, group, 1, { hash: 'second-post-hash' });
+
+      const result = await searchNotes('multi post', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].post.hash).toBe(firstPost.hash);
+      expect(result.notes[0].postId).toBe(firstPost.id);
+    });
+
+    it('should include headline with highlighting for group titles', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.TITLE, 'highlight-group', 'A title with highlighted word');
+      await createPostInGroup(prisma, group, 0);
+
+      const result = await searchNotes('highlighted', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].headline).toContain('<mark>');
+      expect(result.notes[0].headline).toContain('highlight');
+    });
+
+    it('should respect post hiding for group title search', async () => {
+      const prisma = getTestPrisma();
+      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
+      clearPatternCache();
+
+      // Create group with hidden post
+      const hiddenGroup = await createGroup(prisma, SourceType.TITLE, 'hidden-group', 'Hidden searchterm title');
+      const hiddenPost = await createPostInGroup(prisma, hiddenGroup, 0);
+      await prisma.postTag.create({
+        data: {
+          postId: hiddenPost.id,
+          tagId: (await prisma.tag.create({ data: { name: 'nsfw', category: 'GENERAL' } })).id,
+        },
+      });
+
+      // Create group with visible post
+      const visibleGroup = await createGroup(prisma, SourceType.TITLE, 'visible-group', 'Visible searchterm title');
+      await createPostInGroup(prisma, visibleGroup, 0);
+
+      const result = await searchNotes('searchterm', 1);
+
+      expect(result.notes).toHaveLength(1);
+      expect(result.notes[0].content).toContain('Visible');
+
+      // Cleanup
+      delete process.env.HIDE_POSTS_WITH_TAGS;
+      clearPatternCache();
     });
   });
 });
