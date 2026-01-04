@@ -89,7 +89,9 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
       cacheTimestamp = now;
       return pricingCache.get(modelId) ?? DEFAULT_PRICING;
     }
-  } catch {
+  } catch (error) {
+    // Log for debugging but don't fail - fallback to cache/default
+    console.debug?.("Failed to refresh pricing cache:", error);
     // If fetch fails, use cached data if available, otherwise default
     if (pricingCache) {
       return pricingCache.get(modelId) ?? DEFAULT_PRICING;
@@ -117,8 +119,9 @@ export async function warmPricingCache(): Promise<void> {
       pricingCache = await fetchModelPricing(settings.apiKey);
       cacheTimestamp = Date.now();
     }
-  } catch {
-    // Ignore errors during warmup
+  } catch (error) {
+    // Log for debugging but don't fail during warmup
+    console.debug?.("Failed to warm pricing cache:", error);
   }
 }
 
