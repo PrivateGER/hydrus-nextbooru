@@ -38,7 +38,7 @@ export function GroupFilmstrip({
   useEffect(() => {
     if (currentRef.current) {
       currentRef.current.scrollIntoView({
-        behavior: "smooth",
+        behavior: "instant",
         block: "nearest",
         inline: "center",
       });
