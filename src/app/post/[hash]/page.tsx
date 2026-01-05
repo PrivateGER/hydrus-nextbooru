@@ -38,7 +38,7 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
         where: { tag: { category: { in: ["ARTIST", "CHARACTER", "COPYRIGHT"] } } },
       },
       groups: {
-        include: { group: { select: { title: true } } },
+        include: { group: { include: { translation: true }, select: { title: true, translation: true } } },
         take: 1,
       },
     },
@@ -51,7 +51,8 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
   const artists = post.tags.filter(t => t.tag.category === "ARTIST").map(t => t.tag.name);
   const characters = post.tags.filter(t => t.tag.category === "CHARACTER").map(t => t.tag.name);
   const copyrights = post.tags.filter(t => t.tag.category === "COPYRIGHT").map(t => t.tag.name);
-  const groupTitle = post.groups[0]?.group.title;
+  const group = post.groups[0]?.group;
+  const groupTitle = group?.translation?.translatedContent || group?.title;
 
   // Build title: prefer group title, then artist, then hash
   const title = groupTitle
