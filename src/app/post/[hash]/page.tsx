@@ -113,6 +113,7 @@ async function getPost(hash: string) {
         include: {
           group: {
             include: {
+              translation: true,
               posts: {
                 include: {
                   post: {
@@ -323,9 +324,9 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
                   <Link
                     href={`/groups/${group.id}`}
                     className="text-sm text-zinc-300 truncate max-w-xs hover:text-white transition-colors"
-                    title={group.sourceId}
+                    title={group.translation?.translatedContent || group.title || group.sourceId}
                   >
-                    {group.sourceId}
+                    {group.translation?.translatedContent || group.title || group.sourceId}
                   </Link>
                 ) : null}
                 <Link
