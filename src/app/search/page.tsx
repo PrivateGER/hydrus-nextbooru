@@ -216,9 +216,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
       )}
 
       {!isNotesSearch && posts.length > 0 && (
-        <Suspense fallback={<PostGridSkeleton count={24} />}>
-          <PostGrid posts={posts} />
-        </Suspense>
+        <PostGrid posts={posts} />
       )}
 
       {totalPages > 1 && (
