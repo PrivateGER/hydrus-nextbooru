@@ -209,15 +209,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
       )}
 
       {!isNotesSearch && posts.length > 0 && (
-        <Suspense
-          fallback={
-            <div className="columns-2 gap-3 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6">
-              {Array.from({ length: 24 }).map((_, i) => (
-                <div key={i} className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800" style={{ aspectRatio: [1, 0.75, 1.33, 0.8, 1.2][i % 5] }} />
-              ))}
-            </div>
-          }
-        >
+        <Suspense fallback={<PostGridSkeleton count={24} />}>
           <PostGrid posts={posts} />
         </Suspense>
       )}

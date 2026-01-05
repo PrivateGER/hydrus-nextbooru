@@ -8,8 +8,8 @@ interface SkeletonProps {
 }
 
 /** Base skeleton block with pulse animation */
-export function Skeleton({ className = "" }: SkeletonProps) {
-  return <div className={`animate-pulse bg-zinc-800 ${className}`} />;
+export function Skeleton({ className }: SkeletonProps) {
+  return <div className={`animate-pulse bg-zinc-800${className ? ` ${className}` : ""}`} />;
 }
 
 /** Masonry-style post grid skeleton with varied aspect ratios */
