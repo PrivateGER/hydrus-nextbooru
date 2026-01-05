@@ -16,12 +16,7 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
       include: ['src/lib/**/*.ts', 'src/app/api/**/*.ts'],
       exclude: ['src/generated/**', 'src/test/**'],
-    },
-    poolOptions: {
-      threads: {
-        singleThread: true, // Required for Prisma mock singleton
-      },
-    },
+    }
   },
   resolve: {
     alias: {
