@@ -1,9 +1,12 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
+
 import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
+import { PageHeaderSkeleton, FiltersSkeleton, TagsSkeleton, Skeleton } from "@/components/skeletons";
 import { withBlacklistFilter } from "@/lib/tag-blacklist";
 import {
   tagsCategoryCountsCache,
@@ -12,7 +15,25 @@ import {
   type TagsPageEntry,
 } from "@/lib/cache";
 
+export const metadata: Metadata = {
+  title: "Tags - Booru",
+  description: "Browse all tags by category",
+};
+
 const TAGS_PER_PAGE = 100;
+
+function TagsPageSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading tags">
+      <PageHeaderSkeleton />
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-full rounded-lg" />
+        <FiltersSkeleton count={6} />
+      </div>
+      <TagsSkeleton count={50} />
+    </div>
+  );
+}
 
 const CATEGORY_ORDER: (TagCategory | "ALL")[] = [
   "ALL",
@@ -168,13 +189,7 @@ async function getCategoryCounts(): Promise<TagsCategoryCounts> {
   return result;
 }
 
-/**
- * Renders the Tags page with search, category filters, sorting controls, and paginated tag results.
- *
- * @param searchParams - Object providing query parameters (`q`, `category`, `sort`, `page`)
- * @returns The rendered page JSX for browsing and filtering tags
- */
-export default async function TagsPage({ searchParams }: TagsPageProps) {
+async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: string; category?: string; sort?: string; page?: string }> }) {
   const params = await searchParams;
 
   const query = params.q?.trim() || "";
@@ -278,9 +293,7 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
 
       {/* Top pagination */}
       {totalPages > 1 && (
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
       )}
 
       {/* Tags grid */}
@@ -310,10 +323,22 @@ export default async function TagsPage({ searchParams }: TagsPageProps) {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
       )}
     </div>
+  );
+}
+
+/**
+ * Renders the Tags page with search, category filters, sorting controls, and paginated tag results.
+ *
+ * @param searchParams - Object providing query parameters (`q`, `category`, `sort`, `page`)
+ * @returns The rendered page JSX for browsing and filtering tags
+ */
+export default function TagsPage({ searchParams }: TagsPageProps) {
+  return (
+    <Suspense fallback={<TagsPageSkeleton />}>
+      <TagsPageContent searchParams={searchParams} />
+    </Suspense>
   );
 }

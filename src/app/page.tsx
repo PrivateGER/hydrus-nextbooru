@@ -9,6 +9,7 @@ import { SearchBar } from "@/components/search-bar";
 import { StatsCards } from "@/components/home/stats-cards";
 import { PopularTags } from "@/components/home/popular-tags";
 import { RandomHighlights } from "@/components/home/random-highlights";
+import { SearchBarSkeleton, PostGridSkeleton, Skeleton } from "@/components/skeletons";
 import {
   getHomeStats,
   getPopularTags,
@@ -23,6 +24,18 @@ type SortOption = "newest" | "oldest" | "random";
 
 interface HomePageProps {
   searchParams: Promise<{ page?: string; sort?: string; seed?: string }>;
+}
+
+function HomePageSkeleton() {
+  return (
+    <div className="space-y-8" aria-busy="true" aria-label="Loading gallery">
+      <SearchBarSkeleton />
+      <div className="space-y-6">
+        <Skeleton className="h-8 w-48 rounded" />
+        <PostGridSkeleton />
+      </div>
+    </div>
+  );
 }
 
 async function getPosts(page: number, sort: SortOption, seed: string) {
@@ -100,13 +113,7 @@ async function getHomeData() {
   return { stats, popularTags, randomPosts, recentImports };
 }
 
-/**
- * Render the gallery home page with search, sorting, stable-random ordering, and paginated post results.
- *
- * @param searchParams - A promise resolving to URL query parameters (e.g., `page`, `sort`, `seed`) used to determine pagination, sort mode, and random seed.
- * @returns The page's React element containing the search bar, optional homepage sections on the first page (stats, popular tags, random highlights), gallery header and sort controls, a grid of posts for the current page, and pagination controls.
- */
-export default async function HomePage({ searchParams }: HomePageProps) {
+async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?: string; sort?: string; seed?: string }> }) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page || "1", 10));
   const validSorts: SortOption[] = ["newest", "oldest", "random"];
@@ -241,9 +248,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </div>
 
         {/* Top pagination */}
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
 
         {/* Posts grid */}
         <Suspense
@@ -263,10 +268,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </Suspense>
 
         {/* Pagination */}
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Render the gallery home page with search, sorting, stable-random ordering, and paginated post results.
+ *
+ * @param searchParams - A promise resolving to URL query parameters (e.g., `page`, `sort`, `seed`) used to determine pagination, sort mode, and random seed.
+ * @returns The page's React element containing the search bar, optional homepage sections on the first page (stats, popular tags, random highlights), gallery header and sort controls, a grid of posts for the current page, and pagination controls.
+ */
+export default function HomePage({ searchParams }: HomePageProps) {
+  return (
+    <Suspense fallback={<HomePageSkeleton />}>
+      <HomePageContent searchParams={searchParams} />
+    </Suspense>
   );
 }
