@@ -33,6 +33,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # You can use pgtune (https://pgtune.leopard.in.ua/) to optimize this Postgres server for your personal hardware configuration.
+    # Select "Web Application" as DB type, enter the other details and add the resulting configuration in the following format:
+    #command:
+    #  - "postgres"
+    #  - "-c"
+    #  - "max_connections=200"
+    # ...
 
 volumes:
   postgres_data:
