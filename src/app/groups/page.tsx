@@ -5,10 +5,27 @@ import { SourceType } from "@/generated/prisma/client";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { Pagination } from "@/components/pagination";
 import { SourceBadge } from "@/components/source-badge";
+import { PageHeaderSkeleton, FiltersSkeleton, GroupCardSkeleton } from "@/components/skeletons";
 import { searchGroups, OrderOption } from "@/lib/groups";
 
 interface GroupsPageProps {
   searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }>;
+}
+
+function GroupsPageSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading groups">
+      <PageHeaderSkeleton />
+      <div className="flex flex-wrap items-center gap-4">
+        <FiltersSkeleton count={5} />
+      </div>
+      <div className="space-y-4">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <GroupCardSkeleton key={i} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
@@ -23,18 +40,7 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
 
 const PAGE_SIZE = 50;
 
-/**
- * Render the Groups listing page with filters, ordering, thumbnails, and pagination.
- *
- * When the selected order is "random" and no `seed` is supplied, redirects to a URL that
- * includes a generated seed so random ordering remains stable across pagination.
- *
- * @param searchParams - A promise resolving to query parameters `{ type?, page?, order?, seed? }`
- *   where `type` filters by source type, `page` selects the pagination page, `order` selects
- *   the sort mode (`"random" | "newest" | "oldest" | "largest"`), and `seed` stabilizes random order.
- * @returns A React element containing the groups listing UI.
- */
-export default async function GroupsPage({ searchParams }: GroupsPageProps) {
+async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }> }) {
   const params = await searchParams;
   const typeFilter = params.type as SourceType | undefined;
   const order = (params.order as OrderOption) || "random";
@@ -155,9 +161,7 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
       </div>
 
       {/* Top pagination */}
-      <Suspense fallback={null}>
-        <Pagination currentPage={page} totalPages={totalPages} />
-      </Suspense>
+      <Pagination currentPage={page} totalPages={totalPages} />
 
       {/* Groups list */}
       <div className="space-y-4">
@@ -288,9 +292,26 @@ export default async function GroupsPage({ searchParams }: GroupsPageProps) {
       </div>
 
       {/* Pagination */}
-      <Suspense fallback={null}>
-        <Pagination currentPage={page} totalPages={totalPages} />
-      </Suspense>
+      <Pagination currentPage={page} totalPages={totalPages} />
     </div>
+  );
+}
+
+/**
+ * Render the Groups listing page with filters, ordering, thumbnails, and pagination.
+ *
+ * When the selected order is "random" and no `seed` is supplied, redirects to a URL that
+ * includes a generated seed so random ordering remains stable across pagination.
+ *
+ * @param searchParams - A promise resolving to query parameters `{ type?, page?, order?, seed? }`
+ *   where `type` filters by source type, `page` selects the pagination page, `order` selects
+ *   the sort mode (`"random" | "newest" | "oldest" | "largest"`), and `seed` stabilizes random order.
+ * @returns A React element containing the groups listing UI.
+ */
+export default function GroupsPage({ searchParams }: GroupsPageProps) {
+  return (
+    <Suspense fallback={<GroupsPageSkeleton />}>
+      <GroupsPageContent searchParams={searchParams} />
+    </Suspense>
   );
 }

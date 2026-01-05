@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchNotes } from "@/lib/search";
 
-export const revalidate = 300; // Cache for 5 minutes
+// MIGRATED: Removed export const revalidate = 300 (incompatible with Cache Components)
+// Route Handler is dynamic by default - uses request.nextUrl.searchParams
 
 const MAX_PAGE = 10000;
 

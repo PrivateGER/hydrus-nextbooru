@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
@@ -6,6 +7,7 @@ import { isValidCreatorName } from "@/lib/groups";
 import { SourceBadge } from "@/components/source-badge";
 import { PostCard } from "@/components/post-card";
 import { TranslateTitleButton } from "@/components/translate-title-button";
+import { GridSkeleton, Skeleton } from "@/components/skeletons";
 import { SourceType, TagCategory } from "@/generated/prisma/client";
 import {
   ArrowLeftIcon,
@@ -16,6 +18,23 @@ import {
 
 interface GroupPageProps {
   params: Promise<{ id: string }>;
+}
+
+function GroupPageSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading group">
+      <div className="rounded-xl bg-zinc-800/80 border border-zinc-700/50 p-4 sm:p-5">
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-10 w-10 rounded-lg" />
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-48 rounded" />
+            <Skeleton className="h-4 w-32 rounded" />
+          </div>
+        </div>
+      </div>
+      <GridSkeleton count={12} />
+    </div>
+  );
 }
 
 async function getGroup(id: number) {
@@ -67,7 +86,7 @@ async function getGroupCreators(postIds: number[]): Promise<string[]> {
     .slice(0, 5);
 }
 
-export default async function GroupPage({ params }: GroupPageProps) {
+async function GroupPageContent({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const groupId = parseInt(id, 10);
 
@@ -200,5 +219,19 @@ export default async function GroupPage({ params }: GroupPageProps) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Render the group detail page showing all posts in a group.
+ *
+ * @param params - A promise resolving to route parameters containing `id`, the group identifier.
+ * @returns The React element representing the group detail page.
+ */
+export default function GroupPage({ params }: GroupPageProps) {
+  return (
+    <Suspense fallback={<GroupPageSkeleton />}>
+      <GroupPageContent params={params} />
+    </Suspense>
   );
 }

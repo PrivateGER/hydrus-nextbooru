@@ -4,6 +4,7 @@ import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
 import { NoteSearchResult } from "@/components/note-search-result";
+import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
 import { searchPosts, searchNotes } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
@@ -21,6 +22,16 @@ const getCachedNoteSearch = unstable_cache(
   { revalidate: 300 }
 );
 
+function SearchPageSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading search results">
+      <SearchBarSkeleton />
+      <PageHeaderSkeleton />
+      <PostGridSkeleton />
+    </div>
+  );
+}
+
 const CATEGORY_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
   [TagCategory.COPYRIGHT]: "bg-purple-900/50 text-purple-300 border-purple-700",
@@ -33,17 +44,7 @@ interface SearchPageProps {
   searchParams: Promise<{ tags?: string; notes?: string; page?: string }>;
 }
 
-/**
- * Render the search results page, handling tag-based and note-content searches with pagination.
- *
- * Processes search parameters (tags, notes, page), performs a cached search, groups duplicate notes,
- * and renders the search bar, wildcard expansions, result counts, results list (posts or notes),
- * pagination, and any error or empty-state messages.
- *
- * @param searchParams - A promise resolving to query parameters: `tags` (comma-separated string), `notes` (note query string), and `page` (page number string)
- * @returns The React element for the search page containing the search UI and results
- */
-export default async function SearchPage({ searchParams }: SearchPageProps) {
+async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; page?: string }> }) {
   const params = await searchParams;
   const tagsParam = params.tags || "";
   const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
@@ -198,9 +199,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
       {/* Top pagination */}
       {totalPages > 1 && (
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
       )}
 
       {isNotesSearch && notes.length > 0 && (
@@ -224,10 +223,26 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       )}
 
       {totalPages > 1 && (
-        <Suspense fallback={null}>
-          <Pagination currentPage={page} totalPages={totalPages} />
-        </Suspense>
+        <Pagination currentPage={page} totalPages={totalPages} />
       )}
     </div>
+  );
+}
+
+/**
+ * Render the search results page, handling tag-based and note-content searches with pagination.
+ *
+ * Processes search parameters (tags, notes, page), performs a cached search, groups duplicate notes,
+ * and renders the search bar, wildcard expansions, result counts, results list (posts or notes),
+ * pagination, and any error or empty-state messages.
+ *
+ * @param searchParams - A promise resolving to query parameters: `tags` (comma-separated string), `notes` (note query string), and `page` (page number string)
+ * @returns The React element for the search page containing the search UI and results
+ */
+export default function SearchPage({ searchParams }: SearchPageProps) {
+  return (
+    <Suspense fallback={<SearchPageSkeleton />}>
+      <SearchPageContent searchParams={searchParams} />
+    </Suspense>
   );
 }
