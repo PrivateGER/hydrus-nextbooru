@@ -1,12 +1,19 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SourceType } from "@/generated/prisma/client";
+
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { Pagination } from "@/components/pagination";
 import { SourceBadge } from "@/components/source-badge";
 import { PageHeaderSkeleton, FiltersSkeleton, GroupCardSkeleton } from "@/components/skeletons";
 import { searchGroups, OrderOption } from "@/lib/groups";
+
+export const metadata: Metadata = {
+  title: "Groups - Booru",
+  description: "Browse grouped posts by source",
+};
 
 interface GroupsPageProps {
   searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }>;

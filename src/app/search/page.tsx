@@ -1,6 +1,8 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { unstable_cache } from "next/cache";
 import { PostGrid } from "@/components/post-grid";
+
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
 import { NoteSearchResult } from "@/components/note-search-result";
@@ -8,6 +10,11 @@ import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/compo
 import { searchPosts, searchNotes } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
+
+export const metadata: Metadata = {
+  title: "Search - Booru",
+  description: "Search posts by tags",
+};
 
 // Cache search results for 5 minutes, keyed by search parameters
 const getCachedPostSearch = unstable_cache(

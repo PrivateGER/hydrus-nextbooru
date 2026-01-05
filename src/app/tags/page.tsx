@@ -1,7 +1,9 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
+
 import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
 import { PageHeaderSkeleton, FiltersSkeleton, TagsSkeleton, Skeleton } from "@/components/skeletons";
@@ -12,6 +14,11 @@ import {
   type TagsCategoryCounts,
   type TagsPageEntry,
 } from "@/lib/cache";
+
+export const metadata: Metadata = {
+  title: "Tags - Booru",
+  description: "Browse all tags by category",
+};
 
 const TAGS_PER_PAGE = 100;
 

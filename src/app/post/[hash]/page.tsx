@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
@@ -19,6 +20,65 @@ import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
+}
+
+export async function generateMetadata({ params }: PostPageProps): Promise<Metadata> {
+  const { hash } = await params;
+
+  if (!/^[a-fA-F0-9]{64}$/i.test(hash)) {
+    return { title: "Not Found - Booru" };
+  }
+
+  const post = await prisma.post.findFirst({
+    where: { hash: hash.toLowerCase() },
+    select: {
+      hash: true,
+      tags: {
+        include: { tag: { select: { name: true, category: true } } },
+        where: { tag: { category: { in: ["ARTIST", "CHARACTER", "COPYRIGHT"] } } },
+      },
+      groups: {
+        include: { group: { select: { title: true } } },
+        take: 1,
+      },
+    },
+  });
+
+  if (!post) {
+    return { title: "Not Found - Booru" };
+  }
+
+  const artists = post.tags.filter(t => t.tag.category === "ARTIST").map(t => t.tag.name);
+  const characters = post.tags.filter(t => t.tag.category === "CHARACTER").map(t => t.tag.name);
+  const copyrights = post.tags.filter(t => t.tag.category === "COPYRIGHT").map(t => t.tag.name);
+  const groupTitle = post.groups[0]?.group.title;
+
+  // Build title: prefer group title, then artist, then hash
+  const title = groupTitle
+    || (artists.length > 0 ? `Art by ${artists.slice(0, 2).join(", ")}` : null)
+    || `Post ${hash.slice(0, 8)}`;
+
+  // Build description from characters and copyrights
+  const parts: string[] = [];
+  if (characters.length > 0) parts.push(characters.slice(0, 3).join(", "));
+  if (copyrights.length > 0) parts.push(`(${copyrights.slice(0, 2).join(", ")})`);
+  const description = parts.length > 0 ? parts.join(" ") : "View post on Booru";
+
+  return {
+    title: `${title} - Booru`,
+    description,
+    openGraph: {
+      title,
+      description,
+      images: [`/api/thumbnails/${post.hash}.webp?size=preview`],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [`/api/thumbnails/${post.hash}.webp?size=preview`],
+    },
+  };
 }
 
 function PostPageSkeleton() {
