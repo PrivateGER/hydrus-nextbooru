@@ -92,30 +92,43 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     loadedRef.current = loaded;
   }, [loaded]);
 
+  // Check if image is already cached (for bfcache restoration and fast loads)
+  const checkCached = () => {
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0 && mountedRef.current) {
+      setLoaded(true);
+    }
+  };
+
+  // Handle bfcache restoration - browser fires pageshow with persisted=true
+  useEffect(() => {
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) checkCached();
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
   // Use IntersectionObserver to detect when image enters viewport
   // Only then check for cached images and start timeout
   useEffect(() => {
+    let observer: IntersectionObserver | null = null;
+
+    // Check cache after DOM update via microtask
+    queueMicrotask(checkCached);
+
     const img = imgRef.current;
-    if (!img) {
-      return;
-    }
+    if (!img) return;
 
-    // Check immediately if image is already cached (important for browser back/forward cache)
-    if (img.complete && img.naturalWidth > 0) {
-      if (mountedRef.current) setLoaded(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
+    observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
-
         if (!entry.isIntersecting) return;
 
         // Image is now visible - check if already cached
         if (img.complete && img.naturalWidth > 0) {
           if (mountedRef.current) setLoaded(true);
-          observer.disconnect();
+          observer?.disconnect();
           return;
         }
 
@@ -130,7 +143,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
           }, LOAD_TIMEOUT_MS);
         }
 
-        observer.disconnect();
+        observer?.disconnect();
       },
       { rootMargin: "50px" } // Start slightly before visible
     );
@@ -138,7 +151,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     observer.observe(img);
 
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = undefined;

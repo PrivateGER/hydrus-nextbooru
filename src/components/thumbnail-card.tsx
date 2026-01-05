@@ -40,17 +40,28 @@ export function ThumbnailCard({
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
 
-  // Check if already cached on mount
-  useEffect(() => {
+  // Check if image is already cached
+  const checkCached = () => {
     const img = imgRef.current;
     if (img?.complete && img.naturalWidth > 0) {
       setLoaded(true);
     }
-  }, [hash]);
+  };
 
-  // Reset loaded state when hash changes
+  // Handle bfcache restoration - browser fires pageshow with persisted=true
+  useEffect(() => {
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) checkCached();
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
+  // Reset and check cache when hash changes
   useEffect(() => {
     setLoaded(false);
+    // Check cache after DOM update via microtask
+    queueMicrotask(checkCached);
   }, [hash]);
 
   const aspectRatio = width && height ? `${width} / ${height}` : "1";
