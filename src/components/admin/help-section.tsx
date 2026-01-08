@@ -58,7 +58,7 @@ export function HelpSection() {
           ].map(({ name, desc }) => (
             <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-300/30 dark:bg-zinc-700/30 p-2.5">
               <code className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-400">{name}</code>
-              <p className="text-xs text-zinc-500">{desc}</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</p>
             </div>
           ))}
         </div>
@@ -73,7 +73,7 @@ export function HelpSection() {
           ].map(({ name, desc }) => (
             <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-300/30 dark:bg-zinc-700/30 p-2.5">
               <code className="shrink-0 text-xs font-medium text-zinc-600 dark:text-zinc-400">{name}</code>
-              <p className="text-xs text-zinc-500">{desc}</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</p>
             </div>
           ))}
         </div>
@@ -95,7 +95,7 @@ export function HelpSection() {
           ].map(({ tag, desc }) => (
             <div key={tag} className="flex items-start gap-2 rounded bg-zinc-300/30 dark:bg-zinc-700/30 p-2">
               <code className="shrink-0 rounded bg-zinc-300 dark:bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">{tag}</code>
-              <span className="text-xs text-zinc-500">{desc}</span>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</span>
             </div>
           ))}
         </div>
@@ -129,7 +129,7 @@ export function HelpSection() {
           ].map(({ q, a }) => (
             <div key={q}>
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{q}</p>
-              <p className="mt-1 text-xs text-zinc-500">{a}</p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{a}</p>
             </div>
           ))}
         </div>

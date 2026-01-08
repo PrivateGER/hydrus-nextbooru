@@ -38,7 +38,7 @@ export function Select({
         {children}
       </select>
       {hint && (
-        <p id={hintId} className="text-xs text-zinc-500">
+        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-400">
           {hint}
         </p>
       )}

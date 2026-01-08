@@ -19,7 +19,7 @@ function StatCard({ label, value, icon, subtitle }: StatCardProps) {
             {value.toLocaleString()}
           </p>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">{label}</p>
-          {subtitle && <p className="text-xs text-zinc-400 dark:text-zinc-500">{subtitle}</p>}
+          {subtitle && <p className="text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>}
         </div>
       </div>
     </div>

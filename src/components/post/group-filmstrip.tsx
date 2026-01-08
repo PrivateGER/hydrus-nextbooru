@@ -70,7 +70,7 @@ export function GroupFilmstrip({
           <span className="font-medium text-zinc-800 dark:text-zinc-200">
             {currentIndex + 1} / {totalPosts}
           </span>
-          <span className="text-zinc-500">in group</span>
+          <span className="text-zinc-500 dark:text-zinc-400">in group</span>
         </div>
       )}
 

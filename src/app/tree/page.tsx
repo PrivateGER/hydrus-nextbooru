@@ -140,7 +140,7 @@ function TagTreeContent() {
           {selectedTags.length === 0 && (
             <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-8 text-center">
               <svg
-                className="mx-auto mb-4 h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                className="mx-auto mb-4 h-12 w-12 text-zinc-400 dark:text-zinc-500"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -153,7 +153,7 @@ function TagTreeContent() {
                 />
               </svg>
               <p className="text-lg text-zinc-500 dark:text-zinc-400">Select a tag to start</p>
-              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-400">
                 Choose tags from the left to filter posts
               </p>
             </div>
@@ -181,7 +181,7 @@ function TagTreeContent() {
           {!isLoadingPosts && selectedTags.length > 0 && posts.length === 0 && (
             <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-8 text-center">
               <p className="text-lg text-zinc-500 dark:text-zinc-400">No posts found</p>
-              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-400">
                 Try removing some tags
               </p>
             </div>

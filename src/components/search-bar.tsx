@@ -457,7 +457,7 @@ export function SearchBar({
               <button
                 type="button"
                 onClick={() => searchMode === "tags" && toggleNegation(tag)}
-                className={`px-2 py-0.5 rounded-l ${searchMode === "tags" ? "hover:bg-white/10" : "cursor-default"}`}
+                className={`px-2 py-0.5 rounded-l ${searchMode === "tags" ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
                 title={searchMode === "tags" ? (negated ? "Click to include" : "Click to exclude") : "Tag filter"}
               >
                 {negated && <span className="text-red-400 font-bold">-</span>}
@@ -539,7 +539,7 @@ export function SearchBar({
             >
               <span className="flex-1">
                 {suggestion.isMeta && (
-                  <span className="text-cyan-600 text-xs mr-1.5 font-medium">system:</span>
+                  <span className="text-cyan-600 dark:text-cyan-400 text-xs mr-1.5 font-medium">system:</span>
                 )}
                 <span className={CATEGORY_COLORS[suggestion.isMeta ? "VIRTUAL_META" : suggestion.category]}>
                   {suggestion.name.replace(/_/g, " ")}

@@ -20,12 +20,12 @@ export function RelatedPostsClient({ recommendations }: RelatedPostsClientProps)
   }
 
   return (
-    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4">
+    <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
       {/* Header */}
       <div className="mb-3 flex items-center gap-2">
         <SparklesIcon className="h-5 w-5 text-amber-400" />
         <h2 className="text-lg font-semibold">Similar Posts</h2>
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">
           {recommendations.length} {recommendations.length === 1 ? "image" : "images"}
         </span>
       </div>

@@ -81,7 +81,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
 
         return (
           <div key={category}>
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               {CATEGORY_LABELS[category]}
             </h3>
             <ul className="space-y-1">
@@ -100,7 +100,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                       {tag.name.replace(/_/g, " ")}
                     </Link>
                     <span
-                      className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0"
+                      className="text-xs text-zinc-500 dark:text-zinc-400 shrink-0"
                       title={`${tag.postCount.toLocaleString()} posts`}
                       aria-label={`${tag.postCount.toLocaleString()} posts`}
                     >

@@ -75,7 +75,7 @@ export function Filmstrip({
           style={{ background: `linear-gradient(to right, ${gradientColorLight}, transparent)` }}
         />
         <div
-          className="h-full w-full hidden dark:block absolute inset-0"
+          className="h-full w-full hidden dark:block"
           style={{ background: `linear-gradient(to right, ${gradientColorDark}, transparent)` }}
         />
       </div>
@@ -91,7 +91,7 @@ export function Filmstrip({
           style={{ background: `linear-gradient(to left, ${gradientColorLight}, transparent)` }}
         />
         <div
-          className="h-full w-full hidden dark:block absolute inset-0"
+          className="h-full w-full hidden dark:block"
           style={{ background: `linear-gradient(to left, ${gradientColorDark}, transparent)` }}
         />
       </div>
