@@ -40,17 +40,22 @@ export function ThumbnailCard({
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
 
-  // Check if already cached on mount
+  // Handle hash changes and check for cached images
+  // When hash changes: reset state, then check if new image is already cached
+  const prevHashRef = useRef(hash);
   useEffect(() => {
     const img = imgRef.current;
+
+    // If hash changed, reset first
+    if (prevHashRef.current !== hash) {
+      prevHashRef.current = hash;
+      setLoaded(false);
+    }
+
+    // Then check if image is already cached (handles bfcache/back navigation)
     if (img?.complete && img.naturalWidth > 0) {
       setLoaded(true);
     }
-  }, [hash]);
-
-  // Reset loaded state when hash changes
-  useEffect(() => {
-    setLoaded(false);
   }, [hash]);
 
   const aspectRatio = width && height ? `${width} / ${height}` : "1";
