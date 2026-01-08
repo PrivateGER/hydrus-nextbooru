@@ -20,7 +20,7 @@ export function RelatedPostsClient({ recommendations }: RelatedPostsClientProps)
   }
 
   return (
-    <div className="rounded-lg bg-zinc-800 p-4">
+    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4">
       {/* Header */}
       <div className="mb-3 flex items-center gap-2">
         <SparklesIcon className="h-5 w-5 text-amber-400" />
@@ -36,7 +36,7 @@ export function RelatedPostsClient({ recommendations }: RelatedPostsClientProps)
           <Link
             key={rec.hash}
             href={`/post/${rec.hash}`}
-            className="shrink-0 rounded-lg bg-zinc-700 shadow-md snap-start transition-all duration-200 hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 hover:shadow-lg"
+            className="shrink-0 rounded-lg bg-zinc-300 dark:bg-zinc-700 shadow-md snap-start transition-all duration-200 hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 hover:shadow-lg"
           >
             <ThumbnailCard
               hash={rec.hash}

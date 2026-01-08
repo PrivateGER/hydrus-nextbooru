@@ -36,7 +36,7 @@ export function MobileNav() {
     <div className="md:hidden" ref={menuRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex h-10 w-10 items-center justify-center rounded-md text-zinc-300 hover:bg-zinc-800 hover:text-white"
+        className="flex h-10 w-10 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
         aria-label="Toggle menu"
         aria-expanded={isOpen}
       >
@@ -75,13 +75,13 @@ export function MobileNav() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-4 top-14 z-50 min-w-[160px] rounded-md border border-zinc-700 bg-zinc-800 py-2 shadow-lg">
+        <div className="absolute right-4 top-14 z-50 min-w-[160px] rounded-md border border-zinc-200 bg-white py-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
           {navLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
               onClick={() => setIsOpen(false)}
-              className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white"
+              className="block px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
             >
               {link.label}
             </Link>

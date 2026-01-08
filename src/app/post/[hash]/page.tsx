@@ -241,7 +241,7 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
 
         {/* Notes */}
         {post.notes.length > 0 && (
-          <div className="rounded-lg bg-zinc-800 p-4">
+          <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
             <h2 className="mb-3 text-lg font-semibold">Notes</h2>
             <div className="space-y-3">
               {post.notes.map((note) => (
@@ -271,7 +271,7 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
           const sources = getDisplaySources(post.sourceUrls);
           if (sources.length === 0) return null;
           return (
-            <div className="rounded-lg bg-zinc-800 p-4">
+            <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
               <h2 className="mb-3 text-lg font-semibold">Sources</h2>
               <ul className="space-y-2 text-sm">
                 {sources.map((source, i) => (
@@ -305,7 +305,7 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
 
           return (
-            <div key={group.id} className="rounded-lg bg-zinc-800 p-4">
+            <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
               <div className="mb-3 flex items-center gap-2">
                 <Link href={`/groups/${group.id}`} className="hover:opacity-80 transition-opacity">
                   <SourceBadge sourceType={group.sourceType} />
@@ -315,14 +315,14 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
                     href={sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-blue-400 hover:underline"
+                    className="text-sm text-blue-600 hover:underline dark:text-blue-400"
                   >
                     View source
                   </a>
                 ) : group.sourceType === "TITLE" ? (
                   <Link
                     href={`/groups/${group.id}`}
-                    className="text-sm text-zinc-300 truncate max-w-xs hover:text-white transition-colors"
+                    className="text-sm text-zinc-700 truncate max-w-xs hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white transition-colors"
                     title={group.sourceId}
                   >
                     {group.sourceId}
@@ -330,7 +330,7 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
                 ) : null}
                 <Link
                   href={`/groups/${group.id}`}
-                  className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+                  className="text-sm text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
                 >
                   {group.posts.length} images
                 </Link>
@@ -347,17 +347,17 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">
-          <Link href="/" className="text-blue-400 hover:underline">
+          <Link href="/" className="text-blue-600 hover:underline dark:text-blue-400">
             &larr; Back to gallery
           </Link>
-          <div className="flex items-center gap-4 text-zinc-500">
+          <div className="flex items-center gap-4 text-zinc-400 dark:text-zinc-500">
             {prevPostHash && (
-              <Link href={`/post/${prevPostHash}`} className="hover:text-zinc-300">
+              <Link href={`/post/${prevPostHash}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
                 &larr; Prev
               </Link>
             )}
             {nextPostHash && (
-              <Link href={`/post/${nextPostHash}`} className="hover:text-zinc-300">
+              <Link href={`/post/${nextPostHash}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
                 Next &rarr;
               </Link>
             )}

@@ -24,15 +24,15 @@ function LoginFormSkeleton() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="w-full max-w-sm">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
-          <div className="mb-2 h-7 w-32 animate-pulse rounded bg-zinc-800" />
-          <div className="mb-6 h-5 w-48 animate-pulse rounded bg-zinc-800" />
+        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-xl">
+          <div className="mb-2 h-7 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+          <div className="mb-6 h-5 w-48 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
           <div className="space-y-4">
             <div>
-              <div className="mb-1 h-4 w-20 animate-pulse rounded bg-zinc-800" />
-              <div className="h-10 w-full animate-pulse rounded bg-zinc-800" />
+              <div className="mb-1 h-4 w-20 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              <div className="h-10 w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
             </div>
-            <div className="h-10 w-full animate-pulse rounded bg-zinc-800" />
+            <div className="h-10 w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
           </div>
         </div>
       </div>
@@ -78,11 +78,11 @@ function LoginForm() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="w-full max-w-sm">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
-          <h1 className="mb-2 text-xl font-semibold text-zinc-100">
+        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-xl">
+          <h1 className="mb-2 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             Admin Login
           </h1>
-          <p className="mb-6 text-sm text-zinc-400">
+          <p className="mb-6 text-sm text-zinc-500 dark:text-zinc-400">
             Enter the admin password to access admin features.
           </p>
 
@@ -90,7 +90,7 @@ function LoginForm() {
             <div>
               <label
                 htmlFor="password"
-                className="mb-1 block text-sm font-medium text-zinc-300"
+                className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
               >
                 Password
               </label>
@@ -99,7 +99,7 @@ function LoginForm() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500"
                 placeholder="Enter password"
                 autoFocus
                 required
@@ -107,7 +107,7 @@ function LoginForm() {
             </div>
 
             {error && (
-              <div className="rounded-md bg-red-900/50 px-3 py-2 text-sm text-red-300">
+              <div className="rounded-md bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-900/50 dark:text-red-300">
                 {error}
               </div>
             )}
@@ -115,7 +115,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={isLoading || !password}
-              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isLoading ? "Signing in..." : "Sign In"}
             </button>

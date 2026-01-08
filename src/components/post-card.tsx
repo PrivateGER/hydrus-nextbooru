@@ -173,7 +173,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   return (
     <Link
       href={`/post/${hash}`}
-      className={`group relative block overflow-hidden rounded-lg bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 ${
+      className={`group relative block overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 ${
         isMasonry ? "mb-3 break-inside-avoid" : ""
       }`}
       onMouseEnter={() => setIsHovering(true)}
@@ -193,7 +193,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
               />
             ) : (
               <div
-                className="aspect-square w-full bg-zinc-700"
+                className="aspect-square w-full bg-zinc-300 dark:bg-zinc-700"
                 style={
                   width && height
                     ? { aspectRatio: `${width} / ${height}` }
@@ -219,7 +219,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               ) : (
-                <div className="absolute inset-0 bg-zinc-700" />
+                <div className="absolute inset-0 bg-zinc-300 dark:bg-zinc-700" />
               )}
               <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-500 border-t-white" />
@@ -262,7 +262,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
           )}
         </>
       ) : (
-        <div className={`flex items-center justify-center bg-zinc-700 text-zinc-400 ${
+        <div className={`flex items-center justify-center bg-zinc-300 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400 ${
           isMasonry ? "aspect-square" : "absolute inset-0"
         }`}>
           <svg

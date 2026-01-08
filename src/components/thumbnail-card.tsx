@@ -75,10 +75,10 @@ export function ThumbnailCard({
       {/* Fallback placeholder (no blurhash) */}
       {!loaded && (!blurhash || !width || !height) && (
         <div
-          className={`flex items-center justify-center bg-zinc-700 ${heightClass} w-auto`}
+          className={`flex items-center justify-center bg-zinc-300 dark:bg-zinc-700 ${heightClass} w-auto`}
           style={{ aspectRatio }}
         >
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-500 border-t-white" />
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-400 dark:border-zinc-500 border-t-zinc-700 dark:border-t-white" />
         </div>
       )}
 

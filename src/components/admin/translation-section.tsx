@@ -60,8 +60,8 @@ export function TranslationSection({
   return (
     <div className="space-y-5">
       <Card>
-        <h3 className="mb-1 font-medium text-zinc-200">Translation Settings</h3>
-        <p className="mb-4 text-sm text-zinc-400">
+        <h3 className="mb-1 font-medium text-zinc-800 dark:text-zinc-200">Translation Settings</h3>
+        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
           Use a model from OpenRouter to translate notes and images.{" "}
           <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
             Get API key
@@ -70,7 +70,7 @@ export function TranslationSection({
 
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">API Key</label>
+            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key</label>
             <Input
               type="password"
               value={apiKey}
@@ -81,7 +81,7 @@ export function TranslationSection({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">Model</label>
+            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
             <ModelSelect
               value={model}
               onChange={onModelChange}
@@ -106,7 +106,7 @@ export function TranslationSection({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-300">Target Language</label>
+            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Target Language</label>
             <Select value={targetLang} onChange={(e) => onTargetLangChange(e.target.value)}>
               {(settings?.supportedLanguages ?? []).map((lang) => (
                 <option key={lang.code} value={lang.code}>{lang.name}</option>
@@ -126,8 +126,8 @@ export function TranslationSection({
         <Card>
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h3 className="font-medium text-zinc-200">Bulk Title Translation</h3>
-              <p className="mt-0.5 text-sm text-zinc-400">
+              <h3 className="font-medium text-zinc-800 dark:text-zinc-200">Bulk Title Translation</h3>
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
                 Translate all group titles at once
               </p>
             </div>
@@ -140,7 +140,7 @@ export function TranslationSection({
 
           {/* Stats */}
           <div className="mb-4 grid grid-cols-3 gap-3">
-            <div className="rounded-lg bg-zinc-700/50 p-3 text-center">
+            <div className="rounded-lg bg-zinc-300/50 dark:bg-zinc-700/50 p-3 text-center">
               <p className="text-xl font-bold tabular-nums">{estimate.totalUniqueTitles.toLocaleString()}</p>
               <p className="text-xs text-zinc-500">Total</p>
             </div>
@@ -156,10 +156,10 @@ export function TranslationSection({
 
           {/* Cost Estimate */}
           {estimate.untranslatedCount > 0 && (
-            <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+            <div className="mb-4 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 p-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-400">Estimated cost</span>
-                <span className="text-lg font-semibold text-zinc-200">{estimate.estimatedCost}</span>
+                <span className="text-sm text-zinc-500 dark:text-zinc-400">Estimated cost</span>
+                <span className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">{estimate.estimatedCost}</span>
               </div>
               <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
                 <span>~{estimate.estimatedInputTokens.toLocaleString()} input + ~{estimate.estimatedOutputTokens.toLocaleString()} output tokens</span>

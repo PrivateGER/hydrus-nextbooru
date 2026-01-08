@@ -77,12 +77,12 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
       {currentPage > 1 ? (
         <Link
           href={buildPageUrl(currentPage - 1)}
-          className="rounded px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-700"
+          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
           Previous
         </Link>
       ) : (
-        <span className="rounded px-3 py-2 text-sm font-medium text-zinc-600">
+        <span className="rounded px-3 py-2 text-sm font-medium text-zinc-400 dark:text-zinc-600">
           Previous
         </span>
       )}
@@ -91,7 +91,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
       <div className="flex items-center gap-1">
         {pages.map((page, index) =>
           page === "..." ? (
-            <span key={`ellipsis-${index}`} className="px-2 text-zinc-500">
+            <span key={`ellipsis-${index}`} className="px-2 text-zinc-400 dark:text-zinc-500">
               ...
             </span>
           ) : (
@@ -101,7 +101,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
               className={`rounded px-3 py-2 text-sm font-medium transition-colors ${
                 page === currentPage
                   ? "bg-blue-600 text-white"
-                  : "text-zinc-300 hover:bg-zinc-700"
+                  : "text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
               }`}
             >
               {page}
@@ -114,12 +114,12 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
       {currentPage < totalPages ? (
         <Link
           href={buildPageUrl(currentPage + 1)}
-          className="rounded px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-700"
+          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
           Next
         </Link>
       ) : (
-        <span className="rounded px-3 py-2 text-sm font-medium text-zinc-600">
+        <span className="rounded px-3 py-2 text-sm font-medium text-zinc-400 dark:text-zinc-600">
           Next
         </span>
       )}

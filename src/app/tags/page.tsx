@@ -45,11 +45,11 @@ const CATEGORY_ORDER: (TagCategory | "ALL")[] = [
 ];
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-400 hover:text-red-300",
-  [TagCategory.COPYRIGHT]: "text-purple-400 hover:text-purple-300",
-  [TagCategory.CHARACTER]: "text-green-400 hover:text-green-300",
-  [TagCategory.GENERAL]: "text-blue-400 hover:text-blue-300",
-  [TagCategory.META]: "text-orange-400 hover:text-orange-300",
+  [TagCategory.ARTIST]: "text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300",
+  [TagCategory.COPYRIGHT]: "text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300",
+  [TagCategory.CHARACTER]: "text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300",
+  [TagCategory.GENERAL]: "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
+  [TagCategory.META]: "text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300",
 };
 
 const CATEGORY_LABELS: Record<TagCategory | "ALL", string> = {
@@ -229,7 +229,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Tags</h1>
-        <span className="text-sm text-zinc-400">
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">
           {totalCount.toLocaleString()} {totalCount === 1 ? "tag" : "tags"}
           {query && " found"}
         </span>
@@ -253,7 +253,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
                 className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
                   isActive
                     ? "bg-blue-600 text-white"
-                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                    : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 hover:text-zinc-800 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
                 }`}
               >
                 {CATEGORY_LABELS[cat]}
@@ -267,7 +267,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
 
         {/* Sort options */}
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-zinc-500">Sort by:</span>
+          <span className="text-zinc-400 dark:text-zinc-500">Sort by:</span>
           <div className="flex gap-1">
             {[
               { value: "count", label: "Most used" },
@@ -280,8 +280,8 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
                 href={buildUrl({ sort: option.value, page: 1 })}
                 className={`rounded px-2 py-1 transition-colors ${
                   sort === option.value
-                    ? "bg-zinc-700 text-white"
-                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    ? "bg-zinc-300 text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                    : "text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                 }`}
               >
                 {option.label}
@@ -303,18 +303,18 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
             <Link
               key={tag.id}
               href={`/search?tags=${encodeURIComponent(tag.name)}`}
-              className={`rounded-lg bg-zinc-800 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-700 ${CATEGORY_COLORS[tag.category as TagCategory]}`}
+              className={`rounded-lg bg-white border border-zinc-200 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:bg-zinc-800 dark:border-transparent dark:hover:bg-zinc-700 ${CATEGORY_COLORS[tag.category as TagCategory]}`}
             >
               {tag.name.replace(/_/g, " ")}
-              <span className="ml-1.5 text-zinc-500">{tag.count.toLocaleString()}</span>
+              <span className="ml-1.5 text-zinc-400 dark:text-zinc-500">{tag.count.toLocaleString()}</span>
             </Link>
           ))}
         </div>
       ) : (
-        <div className="rounded-lg bg-zinc-800 p-8 text-center">
-          <p className="text-lg text-zinc-400">No tags found</p>
+        <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
+          <p className="text-lg text-zinc-500 dark:text-zinc-400">No tags found</p>
           {query && (
-            <p className="mt-2 text-sm text-zinc-500">
+            <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">
               Try a different search term
             </p>
           )}

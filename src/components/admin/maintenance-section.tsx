@@ -19,8 +19,8 @@ export function MaintenanceSection({
   return (
     <div className="space-y-5">
       <Card>
-        <h3 className="mb-1 font-medium text-zinc-200">Recalculate Statistics</h3>
-        <p className="mb-4 text-sm text-zinc-400">
+        <h3 className="mb-1 font-medium text-zinc-800 dark:text-zinc-200">Recalculate Statistics</h3>
+        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
           Update tag counts and homepage stats. Runs automatically after sync.
         </p>
         <Button

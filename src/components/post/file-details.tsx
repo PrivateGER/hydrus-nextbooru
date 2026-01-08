@@ -41,8 +41,8 @@ export function FileDetails({
   downloadFilename,
 }: FileDetailsProps) {
   return (
-    <details className="group rounded-lg bg-zinc-800">
-      <summary className="cursor-pointer p-4 text-lg font-semibold hover:bg-zinc-700/50 flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
+    <details className="group rounded-lg bg-zinc-200 dark:bg-zinc-800">
+      <summary className="cursor-pointer p-4 text-lg font-semibold hover:bg-zinc-300/50 dark:hover:bg-zinc-700/50 flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
         <svg
           className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90"
           fill="none"
@@ -57,37 +57,37 @@ export function FileDetails({
       </summary>
       <dl className="grid grid-cols-2 gap-2 px-4 pb-4 text-sm sm:grid-cols-3">
         <div>
-          <dt className="text-zinc-400">Type</dt>
+          <dt className="text-zinc-500 dark:text-zinc-400">Type</dt>
           <dd>{mimeType}</dd>
         </div>
         {width && height && (
           <div>
-            <dt className="text-zinc-400">Dimensions</dt>
+            <dt className="text-zinc-500 dark:text-zinc-400">Dimensions</dt>
             <dd>{width} x {height}</dd>
           </div>
         )}
         <div>
-          <dt className="text-zinc-400">Size</dt>
+          <dt className="text-zinc-500 dark:text-zinc-400">Size</dt>
           <dd>{formatFileSize(fileSize)}</dd>
         </div>
         {duration && (
           <div>
-            <dt className="text-zinc-400">Duration</dt>
+            <dt className="text-zinc-500 dark:text-zinc-400">Duration</dt>
             <dd>{formatDuration(duration)}</dd>
           </div>
         )}
         {hasAudio && (
           <div>
-            <dt className="text-zinc-400">Audio</dt>
+            <dt className="text-zinc-500 dark:text-zinc-400">Audio</dt>
             <dd>Yes</dd>
           </div>
         )}
         <div>
-          <dt className="text-zinc-400">Imported</dt>
+          <dt className="text-zinc-500 dark:text-zinc-400">Imported</dt>
           <dd>{importedAt.toLocaleDateString()}</dd>
         </div>
         <div className="col-span-2 sm:col-span-3">
-          <dt className="text-zinc-400">Hash</dt>
+          <dt className="text-zinc-500 dark:text-zinc-400">Hash</dt>
           <dd className="font-mono text-xs break-all">{hash}</dd>
         </div>
       </dl>

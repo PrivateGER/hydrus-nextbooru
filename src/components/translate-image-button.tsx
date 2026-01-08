@@ -86,7 +86,7 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
   };
 
   return (
-    <div className="rounded-lg bg-zinc-800 p-4">
+    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Image Text</h2>
         <button
@@ -143,7 +143,7 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
 
       {error && (
         <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3">
-          <p className="text-sm text-red-400">{error.message}</p>
+          <p className="text-sm text-red-600 dark:text-red-400">{error.message}</p>
           {error.code === "MODEL_NO_VISION" && (
             <Link
               href="/admin"
@@ -162,12 +162,12 @@ export function TranslateImageButton({ hash, mimeType, existingTranslation }: Tr
               <p className="mb-2 text-xs text-zinc-500">
                 Detected: {result.sourceLanguage.toUpperCase()} → {result.targetLanguage.toUpperCase()}
               </p>
-              <div className="rounded bg-zinc-700/50 p-3">
+              <div className="rounded bg-zinc-300/50 dark:bg-zinc-700/50 p-3">
                 <Markdown content={result.translatedText} className="text-sm" />
               </div>
             </>
           ) : (
-            <p className="text-sm text-zinc-400">No text found in this image.</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">No text found in this image.</p>
           )}
         </div>
       )}

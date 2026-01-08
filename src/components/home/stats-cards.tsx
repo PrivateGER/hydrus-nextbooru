@@ -9,17 +9,17 @@ interface StatCardProps {
 
 function StatCard({ label, value, icon, subtitle }: StatCardProps) {
   return (
-    <div className="rounded-lg bg-zinc-800 p-4">
+    <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-700 text-zinc-400">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
           {icon}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-2xl font-bold text-zinc-100">
+          <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
             {value.toLocaleString()}
           </p>
-          <p className="text-sm text-zinc-400">{label}</p>
-          {subtitle && <p className="text-xs text-zinc-500">{subtitle}</p>}
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{label}</p>
+          {subtitle && <p className="text-xs text-zinc-400 dark:text-zinc-500">{subtitle}</p>}
         </div>
       </div>
     </div>

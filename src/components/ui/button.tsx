@@ -26,7 +26,7 @@ export function Button({
 }: ButtonProps) {
   const variants = {
     primary: "bg-blue-600 text-white hover:bg-blue-500",
-    secondary: "bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700",
+    secondary: "bg-zinc-200 text-zinc-800 hover:bg-zinc-300 border border-zinc-300 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 dark:border-zinc-700",
     danger: "bg-red-600 text-white hover:bg-red-500",
   };
 

@@ -35,8 +35,8 @@ export function SyncSection({
       <Card>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className={`rounded-lg p-2 ${syncStatus?.status === "running" ? "bg-blue-500/10" : "bg-zinc-700"}`}>
-              <CloudArrowDownIcon className={`h-5 w-5 ${syncStatus?.status === "running" ? "text-blue-400" : "text-zinc-400"}`} />
+            <div className={`rounded-lg p-2 ${syncStatus?.status === "running" ? "bg-blue-500/10" : "bg-zinc-300 dark:bg-zinc-700"}`}>
+              <CloudArrowDownIcon className={`h-5 w-5 ${syncStatus?.status === "running" ? "text-blue-400" : "text-zinc-500 dark:text-zinc-400"}`} />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -45,7 +45,7 @@ export function SyncSection({
                   <span className="text-xs text-zinc-500">{formatDate(syncStatus.lastSyncedAt)}</span>
                 )}
               </div>
-              <p className="mt-0.5 text-sm text-zinc-400">
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
                 {syncStatus?.lastSyncCount ? `${syncStatus.lastSyncCount.toLocaleString()} files synced` : "No syncs yet"}
               </p>
             </div>
@@ -59,7 +59,7 @@ export function SyncSection({
         </div>
 
         {syncStatus?.status === "running" && syncStatus.totalFiles > 0 && (
-          <div className="mt-4 space-y-3 border-t border-zinc-700 pt-4">
+          <div className="mt-4 space-y-3 border-t border-zinc-300 dark:border-zinc-700 pt-4">
             <ProgressBar current={syncStatus.processedFiles} total={syncStatus.totalFiles} />
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-500">
@@ -82,7 +82,7 @@ export function SyncSection({
       </Card>
 
       <Card>
-        <h3 className="mb-3 font-medium text-zinc-200">Sync by Tags</h3>
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Sync by Tags</h3>
         <div className="flex flex-col gap-2 sm:flex-row">
           <div className="flex-1">
             <Input

@@ -34,7 +34,7 @@ export function PostGrid({ posts }: PostGridProps) {
 
   if (posts.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-zinc-400">
+      <div className="flex flex-col items-center justify-center py-20 text-zinc-500 dark:text-zinc-400">
         <svg
           className="mb-4 h-16 w-16"
           fill="none"
@@ -58,13 +58,13 @@ export function PostGrid({ posts }: PostGridProps) {
     <div>
       {/* Layout toggle */}
       <div className="mb-4 flex justify-end">
-        <div className="inline-flex rounded-lg bg-zinc-800 p-1">
+        <div className="inline-flex rounded-lg bg-zinc-200 dark:bg-zinc-800 p-1">
           <button
             onClick={() => handleLayoutChange("masonry")}
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               layout === "masonry"
-                ? "bg-zinc-700 text-white"
-                : "text-zinc-400 hover:text-white"
+                ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
             }`}
             title="Masonry layout"
           >
@@ -76,8 +76,8 @@ export function PostGrid({ posts }: PostGridProps) {
             onClick={() => handleLayoutChange("grid")}
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               layout === "grid"
-                ? "bg-zinc-700 text-white"
-                : "text-zinc-400 hover:text-white"
+                ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
             }`}
             title="Grid layout"
           >

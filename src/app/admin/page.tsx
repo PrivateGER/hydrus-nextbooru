@@ -147,8 +147,8 @@ export default function AdminPage() {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <ArrowPathIconSolid className="mx-auto h-8 w-8 animate-spin text-zinc-500" />
-          <p className="mt-3 text-sm text-zinc-500">Loading...</p>
+          <ArrowPathIconSolid className="mx-auto h-8 w-8 animate-spin text-zinc-400 dark:text-zinc-500" />
+          <p className="mt-3 text-sm text-zinc-400 dark:text-zinc-500">Loading...</p>
         </div>
       </div>
     );
@@ -246,7 +246,7 @@ export default function AdminPage() {
           <button
             onClick={handleLogout}
             disabled={isLoggingOut}
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 disabled:opacity-50"
           >
             <ArrowRightStartOnRectangleIcon className="h-4 w-4" />
             {isLoggingOut ? "..." : "Sign Out"}

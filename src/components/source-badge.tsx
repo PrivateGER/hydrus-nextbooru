@@ -71,7 +71,7 @@ export function SourceBadge({ sourceType }: SourceBadgeProps) {
 
   // Fallback for unknown source types
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-200">
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-300 dark:bg-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-800 dark:text-zinc-200">
       <svg
         viewBox="0 0 24 24"
         fill="none"

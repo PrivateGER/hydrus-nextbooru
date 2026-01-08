@@ -27,12 +27,12 @@ export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
  */
 export function RelatedPostsSkeleton() {
   return (
-    <div className="rounded-lg bg-zinc-800 p-4 animate-pulse">
+    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4 animate-pulse">
       {/* Header */}
       <div className="mb-3 flex items-center gap-2">
-        <SparklesIcon className="h-5 w-5 text-zinc-600" />
-        <div className="h-5 w-28 rounded bg-zinc-700" />
-        <div className="h-4 w-16 rounded bg-zinc-700" />
+        <SparklesIcon className="h-5 w-5 text-zinc-400 dark:text-zinc-600" />
+        <div className="h-5 w-28 rounded bg-zinc-300 dark:bg-zinc-700" />
+        <div className="h-4 w-16 rounded bg-zinc-300 dark:bg-zinc-700" />
       </div>
 
       {/* Skeleton thumbnails */}
@@ -40,7 +40,7 @@ export function RelatedPostsSkeleton() {
         {Array.from({ length: 6 }).map((_, i) => (
           <div
             key={i}
-            className="h-36 w-24 shrink-0 rounded-lg bg-zinc-700"
+            className="h-36 w-24 shrink-0 rounded-lg bg-zinc-300 dark:bg-zinc-700"
           />
         ))}
       </div>

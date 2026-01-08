@@ -24,11 +24,11 @@ const CATEGORY_ORDER: TagCategory[] = [
 ];
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-400 hover:text-red-300",
-  [TagCategory.COPYRIGHT]: "text-purple-400 hover:text-purple-300",
-  [TagCategory.CHARACTER]: "text-green-400 hover:text-green-300",
-  [TagCategory.GENERAL]: "text-blue-400 hover:text-blue-300",
-  [TagCategory.META]: "text-orange-400 hover:text-orange-300",
+  [TagCategory.ARTIST]: "text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300",
+  [TagCategory.COPYRIGHT]: "text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300",
+  [TagCategory.CHARACTER]: "text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300",
+  [TagCategory.GENERAL]: "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
+  [TagCategory.META]: "text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300",
 };
 
 const CATEGORY_LABELS: Record<TagCategory, string> = {
@@ -81,7 +81,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
 
         return (
           <div key={category}>
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-500">
+            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
               {CATEGORY_LABELS[category]}
             </h3>
             <ul className="space-y-1">
@@ -100,7 +100,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                       {tag.name.replace(/_/g, " ")}
                     </Link>
                     <span
-                      className="text-xs text-zinc-500 shrink-0"
+                      className="text-xs text-zinc-400 dark:text-zinc-500 shrink-0"
                       title={`${tag.postCount.toLocaleString()} posts`}
                       aria-label={`${tag.postCount.toLocaleString()} posts`}
                     >
@@ -115,7 +115,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
       })}
 
       {tags.length === 0 && (
-        <p className="text-sm text-zinc-500">No tags</p>
+        <p className="text-sm text-zinc-400 dark:text-zinc-500">No tags</p>
       )}
     </aside>
   );

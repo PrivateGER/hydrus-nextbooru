@@ -71,14 +71,14 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
     hasTranslation && !showOriginal ? note.translation!.translatedContent : note.content;
 
   return (
-    <div className="rounded bg-zinc-700/50 p-3">
+    <div className="rounded bg-zinc-300/50 dark:bg-zinc-700/50 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-zinc-300">{note.name}</h3>
+        <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{note.name}</h3>
         <div className="flex items-center gap-2">
           {hasTranslation && (
             <button
               onClick={() => setShowOriginal(!showOriginal)}
-              className="text-xs text-blue-400 hover:text-blue-300"
+              className="text-xs text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
             >
               {showOriginal ? "Show translation" : "Show original"}
             </button>
@@ -133,7 +133,7 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
         </div>
       </div>
 
-      {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
 
       <Markdown content={displayContent || ""} className="text-sm" />
 

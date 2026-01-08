@@ -201,14 +201,14 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
       <div className="space-y-6">
         {/* Header with sort options */}
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-xl font-semibold text-zinc-100">
+          <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             {isFirstPage ? "Browse Gallery" : "Gallery"}
           </h2>
 
           <div className="flex items-center gap-3">
             {/* Sort buttons */}
             <div className="flex items-center gap-2">
-              <span className="text-sm text-zinc-400">Sort:</span>
+              <span className="text-sm text-zinc-500 dark:text-zinc-400">Sort:</span>
               <div className="flex gap-1">
                 {(["newest", "oldest", "random"] as const).map((s) => (
                   <Link
@@ -221,7 +221,7 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
                     className={`rounded px-2 py-1 text-sm capitalize transition-colors ${
                       sort === s
                         ? "bg-blue-600 text-white"
-                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-300"
+                        : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 hover:text-zinc-800 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
                     }`}
                   >
                     {s}
@@ -232,7 +232,7 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
               {sort === "random" && (
                 <Link
                   href={buildUrl({ page: 1, newSeed: true })}
-                  className="rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-300"
+                  className="rounded bg-zinc-200 px-2 py-1 text-sm text-zinc-600 transition-colors hover:bg-zinc-300 hover:text-zinc-800 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
                   title="Shuffle again"
                 >
                   🎲
@@ -241,7 +241,7 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
             </div>
 
             {/* Post count */}
-            <span className="text-sm text-zinc-400">
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">
               {totalCount.toLocaleString()} posts
             </span>
           </div>
@@ -257,7 +257,7 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
               {Array.from({ length: 24 }).map((_, i) => (
                 <div
                   key={i}
-                  className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800"
+                  className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-200 dark:bg-zinc-800"
                   style={{ aspectRatio: [1, 0.75, 1.33, 0.8, 1.2][i % 5] }}
                 />
               ))}
