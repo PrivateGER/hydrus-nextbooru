@@ -152,7 +152,7 @@ export function MediaViewer({
 
   return (
     <div
-      className="group relative inline-block rounded-lg bg-zinc-800 touch-pan-y"
+      className="group relative inline-block rounded-lg bg-zinc-200 dark:bg-zinc-800 touch-pan-y"
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
@@ -243,7 +243,7 @@ export function MediaViewer({
           />
         </a>
       ) : (
-        <div className="flex h-64 items-center justify-center text-zinc-400">
+        <div className="flex h-64 items-center justify-center text-zinc-500 dark:text-zinc-400">
           <p>Preview not available for {mimeType}</p>
         </div>
       )}

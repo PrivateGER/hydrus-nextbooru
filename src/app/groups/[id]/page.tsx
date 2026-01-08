@@ -23,7 +23,7 @@ interface GroupPageProps {
 function GroupPageSkeleton() {
   return (
     <div className="space-y-6" aria-busy="true" aria-label="Loading group">
-      <div className="rounded-xl bg-zinc-800/80 border border-zinc-700/50 p-4 sm:p-5">
+      <div className="rounded-xl bg-white border border-zinc-200 dark:bg-zinc-800/80 dark:border-zinc-700/50 p-4 sm:p-5">
         <div className="flex items-center gap-4">
           <Skeleton className="h-10 w-10 rounded-lg" />
           <div className="space-y-2">
@@ -107,13 +107,13 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
   return (
     <div className="space-y-6">
       {/* Header card */}
-      <div className="rounded-xl bg-zinc-800/80 border border-zinc-700/50 p-4 sm:p-5">
+      <div className="rounded-xl bg-white border border-zinc-200 dark:bg-zinc-800/80 dark:border-zinc-700/50 p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           {/* Left section: Back button, source badge, and title */}
           <div className="flex items-center gap-4">
             <Link
               href="/groups"
-              className="flex items-center justify-center h-10 w-10 rounded-lg bg-zinc-700/50 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200"
+              className="flex items-center justify-center h-10 w-10 rounded-lg bg-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-300 hover:text-zinc-800 dark:bg-zinc-700/50 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
               aria-label="Back to groups"
             >
               <ArrowLeftIcon className="h-5 w-5" />
@@ -143,18 +143,18 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
                     )}
                   </div>
                 ) : (
-                  <span className="font-mono text-sm text-zinc-400">{group.sourceId}</span>
+                  <span className="font-mono text-sm text-zinc-500 dark:text-zinc-400">{group.sourceId}</span>
                 )}
               </div>
               {/* Image count and creator */}
-              <div className="flex items-center gap-3 text-sm text-zinc-500">
+              <div className="flex items-center gap-3 text-sm text-zinc-400 dark:text-zinc-500">
                 <div className="flex items-center gap-1.5">
                   <PhotoIcon className="h-4 w-4" />
                   <span>{group.posts.length} images</span>
                 </div>
                 {creators.length > 0 && (
                   <>
-                    <span className="text-zinc-600">•</span>
+                    <span className="text-zinc-300 dark:text-zinc-600">•</span>
                     <div className="flex items-center gap-1.5">
                       <UserIcon className="h-4 w-4" />
                       <span className="flex items-center gap-1">
@@ -162,11 +162,11 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
                           <span key={creator}>
                             <Link
                               href={`/search?tags=${encodeURIComponent(creator)}`}
-                              className="text-zinc-400 hover:text-zinc-200 transition-colors"
+                              className="text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
                             >
                               {creator}
                             </Link>
-                            {i < creators.length - 1 && <span className="text-zinc-600">, </span>}
+                            {i < creators.length - 1 && <span className="text-zinc-300 dark:text-zinc-600">, </span>}
                           </span>
                         ))}
                       </span>
@@ -213,9 +213,9 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
       </div>
 
       {group.posts.length === 0 && (
-        <div className="rounded-xl bg-zinc-800/80 border border-zinc-700/50 p-12 text-center">
-          <PhotoIcon className="mx-auto h-12 w-12 text-zinc-600" />
-          <p className="mt-3 text-zinc-400">No images in this group</p>
+        <div className="rounded-xl bg-zinc-100 border border-zinc-200 dark:bg-zinc-800/80 dark:border-zinc-700/50 p-12 text-center">
+          <PhotoIcon className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600" />
+          <p className="mt-3 text-zinc-500 dark:text-zinc-400">No images in this group</p>
         </div>
       )}
     </div>

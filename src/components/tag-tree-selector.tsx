@@ -17,19 +17,19 @@ interface TagTreeResponse {
 }
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-400",
-  [TagCategory.COPYRIGHT]: "text-purple-400",
-  [TagCategory.CHARACTER]: "text-green-400",
-  [TagCategory.GENERAL]: "text-blue-400",
-  [TagCategory.META]: "text-orange-400",
+  [TagCategory.ARTIST]: "text-red-600 dark:text-red-400",
+  [TagCategory.COPYRIGHT]: "text-purple-600 dark:text-purple-400",
+  [TagCategory.CHARACTER]: "text-green-600 dark:text-green-400",
+  [TagCategory.GENERAL]: "text-blue-600 dark:text-blue-400",
+  [TagCategory.META]: "text-orange-600 dark:text-orange-400",
 };
 
 const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "bg-red-900/30 border-red-800",
-  [TagCategory.COPYRIGHT]: "bg-purple-900/30 border-purple-800",
-  [TagCategory.CHARACTER]: "bg-green-900/30 border-green-800",
-  [TagCategory.GENERAL]: "bg-blue-900/30 border-blue-800",
-  [TagCategory.META]: "bg-orange-900/30 border-orange-800",
+  [TagCategory.ARTIST]: "bg-red-100 border-red-300 dark:bg-red-900/30 dark:border-red-800",
+  [TagCategory.COPYRIGHT]: "bg-purple-100 border-purple-300 dark:bg-purple-900/30 dark:border-purple-800",
+  [TagCategory.CHARACTER]: "bg-green-100 border-green-300 dark:bg-green-900/30 dark:border-green-800",
+  [TagCategory.GENERAL]: "bg-blue-100 border-blue-300 dark:bg-blue-900/30 dark:border-blue-800",
+  [TagCategory.META]: "bg-orange-100 border-orange-300 dark:bg-orange-900/30 dark:border-orange-800",
 };
 
 const CATEGORY_ORDER: TagCategory[] = [
@@ -131,14 +131,14 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
     <div className="space-y-4">
       {/* Selected tags breadcrumb */}
       {selectedTags.length > 0 && (
-        <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+        <div className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 p-3">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               Selected Tags ({selectedTags.length})
             </span>
             <button
               onClick={clearAll}
-              className="text-xs text-zinc-400 hover:text-white"
+              className="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
             >
               Clear all
             </button>
@@ -147,20 +147,20 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             {selectedTags.map((tag, index) => (
               <span
                 key={tag}
-                className="group flex items-center gap-1 rounded bg-blue-600/30 border border-blue-500/50 px-2 py-1 text-sm"
+                className="group flex items-center gap-1 rounded bg-blue-200 dark:bg-blue-600/30 border border-blue-400 dark:border-blue-500/50 px-2 py-1 text-sm"
               >
-                <span className="text-zinc-400 text-xs">{index + 1}.</span>
+                <span className="text-zinc-500 dark:text-zinc-400 text-xs">{index + 1}.</span>
                 <span>{tag.replace(/_/g, " ")}</span>
                 <button
                   onClick={() => removeTag(tag)}
-                  className="ml-1 text-zinc-400 hover:text-white"
+                  className="ml-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
                 >
                   &times;
                 </button>
               </span>
             ))}
           </div>
-          <div className="mt-2 text-sm text-zinc-400">
+          <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
             {postCount.toLocaleString()} {postCount === 1 ? "post" : "posts"} match
           </div>
         </div>
@@ -174,12 +174,12 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search tags..."
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
         />
         {searchQuery && (
           <button
             onClick={() => setSearchQuery("")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           >
             &times;
           </button>
@@ -193,7 +193,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
           className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
             categoryFilter === ""
               ? "bg-zinc-600 text-white"
-              : "bg-zinc-800 text-zinc-400 hover:text-white"
+              : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           }`}
         >
           All
@@ -205,7 +205,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
               categoryFilter === cat
                 ? "bg-zinc-600 text-white"
-                : "bg-zinc-800 text-zinc-400 hover:text-white"
+                : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
             } ${CATEGORY_COLORS[cat]}`}
           >
             {cat}
@@ -233,7 +233,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
                 </h3>
               )}
               {debouncedQuery && (
-                <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                   Search results ({categoryTags.length})
                 </h3>
               )}
@@ -242,7 +242,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
                   <button
                     key={tag.id}
                     onClick={() => addTag(tag.name)}
-                    className={`group flex items-center gap-1.5 rounded border px-2 py-1 text-sm transition-all hover:border-zinc-500 hover:bg-zinc-700 ${
+                    className={`group flex items-center gap-1.5 rounded border px-2 py-1 text-sm transition-all hover:border-zinc-400 dark:hover:border-zinc-500 hover:bg-zinc-300 dark:hover:bg-zinc-700 ${
                       CATEGORY_BG_COLORS[tag.category]
                     }`}
                   >
@@ -259,26 +259,26 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
           ))}
 
           {tags.length === 0 && debouncedQuery && (
-            <div className="rounded-lg bg-zinc-800 p-6 text-center">
-              <p className="text-zinc-400">No tags found for &quot;{debouncedQuery}&quot;</p>
-              <p className="mt-1 text-sm text-zinc-500">
+            <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-6 text-center">
+              <p className="text-zinc-500 dark:text-zinc-400">No tags found for &quot;{debouncedQuery}&quot;</p>
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">
                 Try a different search term
               </p>
             </div>
           )}
 
           {tags.length === 0 && !debouncedQuery && selectedTags.length > 0 && (
-            <div className="rounded-lg bg-zinc-800 p-6 text-center">
-              <p className="text-zinc-400">No more tags to filter by</p>
-              <p className="mt-1 text-sm text-zinc-500">
+            <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-6 text-center">
+              <p className="text-zinc-500 dark:text-zinc-400">No more tags to filter by</p>
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-500">
                 All remaining posts share the same tags
               </p>
             </div>
           )}
 
           {tags.length === 0 && !debouncedQuery && selectedTags.length === 0 && (
-            <div className="rounded-lg bg-zinc-800 p-6 text-center">
-              <p className="text-zinc-400">No tags found</p>
+            <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-6 text-center">
+              <p className="text-zinc-500 dark:text-zinc-400">No tags found</p>
             </div>
           )}
         </div>

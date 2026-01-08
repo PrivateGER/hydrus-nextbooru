@@ -5,8 +5,10 @@ import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 
 interface FilmstripProps {
   children: ReactNode;
-  /** CSS color for gradient (e.g., "rgb(39 39 42)" for zinc-800) */
-  gradientColor?: string;
+  /** CSS color for gradient - light mode (e.g., "rgb(228 228 231)" for zinc-200) */
+  gradientColorLight?: string;
+  /** CSS color for gradient - dark mode (e.g., "rgb(39 39 42)" for zinc-800) */
+  gradientColorDark?: string;
   className?: string;
   /** Show navigation buttons (default: true) */
   showButtons?: boolean;
@@ -20,7 +22,8 @@ interface FilmstripProps {
  */
 export function Filmstrip({
   children,
-  gradientColor = "rgb(39 39 42)", // zinc-800
+  gradientColorLight = "rgb(228 228 231)", // zinc-200
+  gradientColorDark = "rgb(39 39 42)", // zinc-800
   className = "",
   showButtons = true,
   scrollAmount = 300,
@@ -66,16 +69,32 @@ export function Filmstrip({
         className={`pointer-events-none absolute left-0 top-0 bottom-2 z-10 w-16 transition-opacity duration-200 ${
           canScrollLeft ? "opacity-100" : "opacity-0"
         }`}
-        style={{ background: `linear-gradient(to right, ${gradientColor}, transparent)` }}
-      />
+      >
+        <div
+          className="h-full w-full dark:hidden"
+          style={{ background: `linear-gradient(to right, ${gradientColorLight}, transparent)` }}
+        />
+        <div
+          className="h-full w-full hidden dark:block"
+          style={{ background: `linear-gradient(to right, ${gradientColorDark}, transparent)` }}
+        />
+      </div>
 
       {/* Right gradient fade */}
       <div
         className={`pointer-events-none absolute right-0 top-0 bottom-2 z-10 w-16 transition-opacity duration-200 ${
           canScrollRight ? "opacity-100" : "opacity-0"
         }`}
-        style={{ background: `linear-gradient(to left, ${gradientColor}, transparent)` }}
-      />
+      >
+        <div
+          className="h-full w-full dark:hidden"
+          style={{ background: `linear-gradient(to left, ${gradientColorLight}, transparent)` }}
+        />
+        <div
+          className="h-full w-full hidden dark:block"
+          style={{ background: `linear-gradient(to left, ${gradientColorDark}, transparent)` }}
+        />
+      </div>
 
       {/* Left scroll button */}
       {showButtons && canScrollLeft && (

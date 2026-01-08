@@ -34,9 +34,9 @@ function getMediaType(mimeType: string): string {
 }
 
 function getMediaTypeColor(mimeType: string): string {
-  if (mimeType.startsWith("video/")) return "bg-purple-900/50 text-purple-300";
-  if (mimeType === "image/gif") return "bg-green-900/50 text-green-300";
-  return "bg-zinc-700 text-zinc-300";
+  if (mimeType.startsWith("video/")) return "bg-purple-200 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300";
+  if (mimeType === "image/gif") return "bg-green-200 text-green-700 dark:bg-green-900/50 dark:text-green-300";
+  return "bg-zinc-300 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300";
 }
 
 export function QuickInfoBar({
@@ -53,7 +53,7 @@ export function QuickInfoBar({
   const mediaTypeColor = getMediaTypeColor(mimeType);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-zinc-800 p-3">
+    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 p-3">
       {/* Media type badge */}
       <span className={`rounded px-2 py-0.5 text-xs font-medium ${mediaTypeColor}`}>
         {mediaType}
@@ -61,19 +61,19 @@ export function QuickInfoBar({
 
       {/* Dimensions */}
       {width && height && (
-        <span className="rounded bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
+        <span className="rounded bg-zinc-300 dark:bg-zinc-700 px-2 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">
           {width} x {height}
         </span>
       )}
 
       {/* File size */}
-      <span className="rounded bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
+      <span className="rounded bg-zinc-300 dark:bg-zinc-700 px-2 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">
         {formatFileSize(fileSize)}
       </span>
 
       {/* Duration (for videos) */}
       {duration && (
-        <span className="rounded bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
+        <span className="rounded bg-zinc-300 dark:bg-zinc-700 px-2 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">
           {formatDuration(duration)}
         </span>
       )}

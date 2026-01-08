@@ -42,9 +42,9 @@ export function Tooltip({ children, content }: TooltipProps) {
       {children}
       {show && (
         <div className="absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-1 duration-150">
-          <div className="whitespace-nowrap rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 shadow-lg">
+          <div className="whitespace-nowrap rounded-lg bg-zinc-700 dark:bg-zinc-800 px-3 py-1.5 text-xs text-white dark:text-zinc-200 shadow-lg">
             {content}
-            <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-zinc-800" />
+            <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-zinc-700 dark:border-t-zinc-800" />
           </div>
         </div>
       )}

@@ -21,7 +21,7 @@ export function RandomHighlights({ posts }: RandomHighlightsProps) {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold text-zinc-100">Random Posts</h2>
+      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Random Posts</h2>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 md:grid-cols-4 lg:grid-cols-8">
         {posts.slice(0, 8).map((post) => (

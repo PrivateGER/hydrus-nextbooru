@@ -40,11 +40,11 @@ function SearchPageSkeleton() {
 }
 
 const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "bg-red-900/50 text-red-300 border-red-700",
-  [TagCategory.COPYRIGHT]: "bg-purple-900/50 text-purple-300 border-purple-700",
-  [TagCategory.CHARACTER]: "bg-green-900/50 text-green-300 border-green-700",
-  [TagCategory.GENERAL]: "bg-blue-900/50 text-blue-300 border-blue-700",
-  [TagCategory.META]: "bg-orange-900/50 text-orange-300 border-orange-700",
+  [TagCategory.ARTIST]: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900/50 dark:text-red-300 dark:border-red-700",
+  [TagCategory.COPYRIGHT]: "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/50 dark:text-purple-300 dark:border-purple-700",
+  [TagCategory.CHARACTER]: "bg-green-100 text-green-700 border-green-300 dark:bg-green-900/50 dark:text-green-300 dark:border-green-700",
+  [TagCategory.GENERAL]: "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700",
+  [TagCategory.META]: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/50 dark:text-orange-300 dark:border-orange-700",
 };
 
 interface SearchPageProps {
@@ -98,23 +98,23 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
       </div>
 
       {error && (
-        <div className="rounded-lg bg-red-900/50 border border-red-700 p-4 text-center">
-          <p className="text-red-300">{error}</p>
+        <div className="rounded-lg bg-red-100 border border-red-300 p-4 text-center dark:bg-red-900/50 dark:border-red-700">
+          <p className="text-red-700 dark:text-red-300">{error}</p>
         </div>
       )}
 
       {!isNotesSearch && resolvedWildcards.length > 0 && (
-        <div className="rounded-lg bg-zinc-800/50 border border-zinc-700 p-3 text-sm">
-          <div className="text-zinc-400 text-xs uppercase tracking-wide mb-2">Wildcard expansions</div>
+        <div className="rounded-lg bg-zinc-100 border border-zinc-300 p-3 text-sm dark:bg-zinc-800/50 dark:border-zinc-700">
+          <div className="text-zinc-500 text-xs uppercase tracking-wide mb-2 dark:text-zinc-400">Wildcard expansions</div>
           <div className="space-y-1">
             {resolvedWildcards.map((w) => (
               <details key={w.pattern} className="group">
-                <summary className="cursor-pointer list-none flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-700/50 transition-colors">
-                  <span className="text-zinc-500 group-open:rotate-90 transition-transform">▶</span>
-                  <span className={w.negated ? "text-red-400 line-through" : "text-purple-400"}>{w.pattern}</span>
-                  <span className="text-zinc-500">→</span>
-                  <span className="text-zinc-300 truncate flex-1">{w.tagNames.join(", ")}</span>
-                  <span className="text-zinc-500 text-xs whitespace-nowrap">
+                <summary className="cursor-pointer list-none flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 transition-colors">
+                  <span className="text-zinc-400 dark:text-zinc-500 group-open:rotate-90 transition-transform">▶</span>
+                  <span className={w.negated ? "text-red-600 dark:text-red-400 line-through" : "text-purple-600 dark:text-purple-400"}>{w.pattern}</span>
+                  <span className="text-zinc-400 dark:text-zinc-500">→</span>
+                  <span className="text-zinc-700 dark:text-zinc-300 truncate flex-1">{w.tagNames.join(", ")}</span>
+                  <span className="text-zinc-400 dark:text-zinc-500 text-xs whitespace-nowrap">
                     ({w.tagIds.length}{w.truncated ? "+" : ""} {w.tagIds.length === 1 ? "tag" : "tags"})
                   </span>
                 </summary>
@@ -122,18 +122,18 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
                   {w.tagNames.length > 0 ? (
                     <div className="flex flex-wrap gap-1.5">
                       {w.tagNames.map((name, idx) => (
-                        <span key={name} className={`px-2 py-0.5 rounded border text-xs ${CATEGORY_COLORS[w.tagCategories[idx] as TagCategory] || "bg-zinc-700 text-zinc-300"}`}>
+                        <span key={name} className={`px-2 py-0.5 rounded border text-xs ${CATEGORY_COLORS[w.tagCategories[idx] as TagCategory] || "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"}`}>
                           {name.replace(/_/g, " ")}
                         </span>
                       ))}
                       {w.truncated && (
-                        <span className="px-2 py-0.5 rounded bg-zinc-600 text-zinc-400 text-xs italic border border-zinc-500">
+                        <span className="px-2 py-0.5 rounded bg-zinc-200 text-zinc-500 text-xs italic border border-zinc-300 dark:bg-zinc-600 dark:text-zinc-400 dark:border-zinc-500">
                           +more (limit {w.tagIds.length})
                         </span>
                       )}
                     </div>
                   ) : (
-                    <span className="text-zinc-500 italic">No matching tags found</span>
+                    <span className="text-zinc-400 dark:text-zinc-500 italic">No matching tags found</span>
                   )}
                 </div>
               </details>
@@ -176,10 +176,10 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
             "Search"
           )}
         </h1>
-        <span className="text-sm text-zinc-400">
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">
           {totalCount.toLocaleString()} {totalCount === 1 ? "result" : "results"}
           {hasQuery && (
-            <span className="ml-2 text-zinc-500">
+            <span className="ml-2 text-zinc-400 dark:text-zinc-500">
               ({queryTimeMs < 1000 ? `${Math.round(queryTimeMs)}ms` : `${(queryTimeMs / 1000).toFixed(2)}s`})
             </span>
           )}
@@ -187,18 +187,18 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
       </div>
 
       {!hasQuery && (
-        <div className="rounded-lg bg-zinc-800 p-8 text-center">
-          <p className="text-lg text-zinc-400">Enter tags or note content to search</p>
-          <p className="mt-2 text-sm text-zinc-500">Use the &ldquo;Tags&rdquo; tab to search by tags, or &ldquo;Notes&rdquo; tab to search note content</p>
+        <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
+          <p className="text-lg text-zinc-500 dark:text-zinc-400">Enter tags or note content to search</p>
+          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">Use the &ldquo;Tags&rdquo; tab to search by tags, or &ldquo;Notes&rdquo; tab to search note content</p>
         </div>
       )}
 
       {hasQuery && !hasResults && !error && (
-        <div className="rounded-lg bg-zinc-800 p-8 text-center">
-          <p className="text-lg text-zinc-400">
+        <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
+          <p className="text-lg text-zinc-500 dark:text-zinc-400">
             {isNotesSearch ? `No notes found containing "${notesQuery}"` : "No posts found matching all tags"}
           </p>
-          <p className="mt-2 text-sm text-zinc-500">
+          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">
             {isNotesSearch ? "Try different search terms or check your spelling" : "Try removing some tags or using different search terms"}
           </p>
         </div>

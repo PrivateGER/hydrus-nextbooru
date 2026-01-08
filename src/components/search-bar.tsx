@@ -18,12 +18,12 @@ interface TagSuggestion {
 }
 
 const CATEGORY_COLORS: Record<TagCategory | "VIRTUAL_META", string> = {
-  [TagCategory.ARTIST]: "text-red-400",
-  [TagCategory.COPYRIGHT]: "text-purple-400",
-  [TagCategory.CHARACTER]: "text-green-400",
-  [TagCategory.GENERAL]: "text-blue-400",
-  [TagCategory.META]: "text-orange-400",
-  VIRTUAL_META: "text-cyan-400", // Virtual meta tags (video, portrait, etc.)
+  [TagCategory.ARTIST]: "text-red-600 dark:text-red-400",
+  [TagCategory.COPYRIGHT]: "text-purple-600 dark:text-purple-400",
+  [TagCategory.CHARACTER]: "text-green-600 dark:text-green-400",
+  [TagCategory.GENERAL]: "text-blue-600 dark:text-blue-400",
+  [TagCategory.META]: "text-orange-600 dark:text-orange-400",
+  VIRTUAL_META: "text-cyan-600 dark:text-cyan-400", // Virtual meta tags (video, portrait, etc.)
 };
 
 /**
@@ -396,14 +396,14 @@ export function SearchBar({
     <div className="relative w-full max-w-2xl">
       {/* Mode toggle */}
       <div className="flex items-center gap-2 mb-2">
-        <div className="inline-flex rounded-lg bg-zinc-800 p-1">
+        <div className="inline-flex rounded-lg bg-zinc-200 dark:bg-zinc-800 p-1">
           <button
             type="button"
             onClick={() => switchMode("tags")}
             className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               searchMode === "tags"
-                ? "bg-zinc-700 text-white"
-                : "text-zinc-400 hover:text-white"
+                ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
             }`}
             title="Search by tags"
           >
@@ -417,8 +417,8 @@ export function SearchBar({
             onClick={() => switchMode("notes")}
             className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               searchMode === "notes"
-                ? "bg-zinc-700 text-white"
-                : "text-zinc-400 hover:text-white"
+                ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
             }`}
             title="Full-text search in notes"
           >
@@ -431,7 +431,7 @@ export function SearchBar({
       </div>
 
       {/* Input container */}
-      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 focus-within:border-zinc-500 focus-within:ring-1 focus-within:ring-zinc-500">
+      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 focus-within:border-zinc-400 focus-within:ring-1 focus-within:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:focus-within:border-zinc-500 dark:focus-within:ring-zinc-500">
         {/* Selected tags (shown in both modes for context filtering) */}
         {selectedTags.map((tag) => {
           const negated = isNegatedTag(tag);
@@ -440,13 +440,13 @@ export function SearchBar({
           const isMeta = isMetaTag(displayName);
 
           // Determine tag chip styling
-          let chipClass = "bg-zinc-700";
+          let chipClass = "bg-zinc-200 dark:bg-zinc-700";
           if (negated) {
-            chipClass = "bg-red-900/50 text-red-300 border border-red-700";
+            chipClass = "bg-red-100 text-red-700 border border-red-300 dark:bg-red-900/50 dark:text-red-300 dark:border-red-700";
           } else if (isMeta) {
-            chipClass = "bg-cyan-900/50 text-cyan-300 border border-cyan-700";
+            chipClass = "bg-cyan-100 text-cyan-700 border border-cyan-300 dark:bg-cyan-900/50 dark:text-cyan-300 dark:border-cyan-700";
           } else if (wildcard) {
-            chipClass = "bg-purple-900/50 text-purple-300 border border-purple-700";
+            chipClass = "bg-purple-100 text-purple-700 border border-purple-300 dark:bg-purple-900/50 dark:text-purple-300 dark:border-purple-700";
           }
 
           return (
@@ -457,7 +457,7 @@ export function SearchBar({
               <button
                 type="button"
                 onClick={() => searchMode === "tags" && toggleNegation(tag)}
-                className={`px-2 py-0.5 rounded-l ${searchMode === "tags" ? "hover:bg-white/10" : "cursor-default"}`}
+                className={`px-2 py-0.5 rounded-l ${searchMode === "tags" ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
                 title={searchMode === "tags" ? (negated ? "Click to include" : "Click to exclude") : "Tag filter"}
               >
                 {negated && <span className="text-red-400 font-bold">-</span>}
@@ -470,7 +470,7 @@ export function SearchBar({
               <button
                 type="button"
                 onClick={() => removeTag(tag)}
-                className="px-1.5 py-0.5 text-zinc-400 hover:text-white hover:bg-white/10 rounded-r"
+                className="px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 hover:bg-black/10 dark:text-zinc-400 dark:hover:text-white dark:hover:bg-white/10 rounded-r"
               >
                 &times;
               </button>
@@ -502,14 +502,14 @@ export function SearchBar({
               ? placeholder
               : ""
           }
-          className="min-w-[100px] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-500"
+          className="min-w-[100px] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
         />
 
         {/* Search button */}
         <button
           type="button"
           onClick={performSearch}
-          className="rounded bg-zinc-700 px-3 py-1 text-sm font-medium hover:bg-zinc-600"
+          className="rounded bg-zinc-200 px-3 py-1 text-sm font-medium hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600"
         >
           Search
         </button>
@@ -517,7 +517,7 @@ export function SearchBar({
 
       {/* Notes mode hint */}
       {searchMode === "notes" && inputValue.length > 0 && inputValue.length < 2 && (
-        <div className="mt-1 text-xs text-zinc-500">
+        <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
           Enter at least 2 characters to search
         </div>
       )}
@@ -526,31 +526,31 @@ export function SearchBar({
       {searchMode === "tags" && showSuggestions && displaySuggestions.length > 0 && (
         <div
           ref={suggestionsRef}
-          className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-auto rounded-lg border ${isExcludeMode ? "border-red-700" : "border-zinc-700"} bg-zinc-800 shadow-lg`}
+          className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-auto rounded-lg border ${isExcludeMode ? "border-red-400 dark:border-red-700" : "border-zinc-300 dark:border-zinc-700"} bg-white dark:bg-zinc-800 shadow-lg`}
         >
           {displaySuggestions.map((suggestion, index) => (
             <button
               key={suggestion.id}
               type="button"
               onClick={() => addTag(suggestion.name, isExcludeMode)}
-              className={`flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-zinc-700 cursor-pointer ${
-                index === highlightedIndex ? "bg-zinc-700" : ""
+              className={`flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer ${
+                index === highlightedIndex ? "bg-zinc-100 dark:bg-zinc-700" : ""
               }`}
             >
               <span className="flex-1">
                 {suggestion.isMeta && (
-                  <span className="text-cyan-600 text-xs mr-1.5 font-medium">system:</span>
+                  <span className="text-cyan-600 dark:text-cyan-400 text-xs mr-1.5 font-medium">system:</span>
                 )}
                 <span className={CATEGORY_COLORS[suggestion.isMeta ? "VIRTUAL_META" : suggestion.category]}>
                   {suggestion.name.replace(/_/g, " ")}
                 </span>
                 {suggestion.isMeta && suggestion.description && (
-                  <span className="text-zinc-500 text-xs ml-2">
+                  <span className="text-zinc-400 dark:text-zinc-500 text-xs ml-2">
                     {suggestion.description}
                   </span>
                 )}
               </span>
-              <span className={`text-xs ${isExcludeMode ? "text-red-400" : "text-zinc-500"}`}>
+              <span className={`text-xs ${isExcludeMode ? "text-red-600 dark:text-red-400" : "text-zinc-400 dark:text-zinc-500"}`}>
                 {isExcludeMode ? `-${suggestion.count ?? 0}` : (suggestion.count ?? 0)}
               </span>
             </button>

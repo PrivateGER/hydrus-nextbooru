@@ -31,7 +31,7 @@ export function ThumbnailsSection({
       {thumbStats && (
         <Card>
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-medium text-zinc-200">Overview</h3>
+            <h3 className="font-medium text-zinc-800 dark:text-zinc-200">Overview</h3>
             {allComplete && (
               <span className="flex items-center gap-1 text-xs text-emerald-400">
                 <CheckCircleIcon className="h-4 w-4" /> All ready
@@ -39,7 +39,7 @@ export function ThumbnailsSection({
             )}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <div className="rounded-lg bg-zinc-700/50 p-3 text-center">
+            <div className="rounded-lg bg-zinc-300/50 dark:bg-zinc-700/50 p-3 text-center">
               <p className="text-xl font-bold tabular-nums">{thumbStats.total.toLocaleString()}</p>
               <p className="text-xs text-zinc-500">Total</p>
             </div>
@@ -55,14 +55,14 @@ export function ThumbnailsSection({
               <p className="text-xl font-bold tabular-nums text-red-400">{thumbStats.failed.toLocaleString()}</p>
               <p className="text-xs text-red-400/60">Failed</p>
             </div>
-            <div className="rounded-lg bg-zinc-700/50 p-3 text-center">
-              <p className="text-xl font-bold tabular-nums text-zinc-400">{thumbStats.unsupported.toLocaleString()}</p>
+            <div className="rounded-lg bg-zinc-300/50 dark:bg-zinc-700/50 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums text-zinc-500 dark:text-zinc-400">{thumbStats.unsupported.toLocaleString()}</p>
               <p className="text-xs text-zinc-500">Unsupported</p>
             </div>
           </div>
 
           {thumbStats.batchRunning && thumbStats.batchProgress && (
-            <div className="mt-4 border-t border-zinc-700 pt-4">
+            <div className="mt-4 border-t border-zinc-300 dark:border-zinc-700 pt-4">
               <ProgressBar current={thumbStats.batchProgress.processed} total={thumbStats.batchProgress.total} color="purple" />
             </div>
           )}
@@ -70,8 +70,8 @@ export function ThumbnailsSection({
       )}
 
       <Card>
-        <h3 className="mb-3 font-medium text-zinc-200">Generate Thumbnails</h3>
-        <p className="mb-4 text-sm text-zinc-400">
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Generate Thumbnails</h3>
+        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
           Pre-generate thumbnails for faster browsing. They&apos;re also created on-demand.
         </p>
         <div className="flex flex-wrap gap-2">
@@ -95,8 +95,8 @@ export function ThumbnailsSection({
 
       {(thumbStats?.complete ?? 0) > 0 && (
         <Card className="border-red-500/20">
-          <h3 className="mb-2 font-medium text-red-400">Danger Zone</h3>
-          <p className="mb-3 text-sm text-zinc-400">Delete all thumbnails. They&apos;ll need to be regenerated.</p>
+          <h3 className="mb-2 font-medium text-red-500 dark:text-red-400">Danger Zone</h3>
+          <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">Delete all thumbnails. They&apos;ll need to be regenerated.</p>
           <Button
             onClick={() =>
               openConfirmModal({

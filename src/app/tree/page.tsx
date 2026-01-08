@@ -110,7 +110,7 @@ function TagTreeContent() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Tag Tree</h1>
-        <p className="mt-1 text-sm text-zinc-400">
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           Select tags progressively to narrow down results
         </p>
       </div>
@@ -130,7 +130,7 @@ function TagTreeContent() {
           {/* Results header */}
           {selectedTags.length > 0 && (
             <div className="mb-4 flex items-center justify-between">
-              <span className="text-sm text-zinc-400">
+              <span className="text-sm text-zinc-500 dark:text-zinc-400">
                 {totalCount.toLocaleString()} {totalCount === 1 ? "result" : "results"}
               </span>
             </div>
@@ -138,9 +138,9 @@ function TagTreeContent() {
 
           {/* Empty state */}
           {selectedTags.length === 0 && (
-            <div className="rounded-lg bg-zinc-800 p-8 text-center">
+            <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-8 text-center">
               <svg
-                className="mx-auto mb-4 h-12 w-12 text-zinc-600"
+                className="mx-auto mb-4 h-12 w-12 text-zinc-400 dark:text-zinc-500"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -152,8 +152,8 @@ function TagTreeContent() {
                   d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
                 />
               </svg>
-              <p className="text-lg text-zinc-400">Select a tag to start</p>
-              <p className="mt-1 text-sm text-zinc-500">
+              <p className="text-lg text-zinc-500 dark:text-zinc-400">Select a tag to start</p>
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-400">
                 Choose tags from the left to filter posts
               </p>
             </div>
@@ -165,7 +165,7 @@ function TagTreeContent() {
               {Array.from({ length: 24 }).map((_, i) => (
                 <div
                   key={i}
-                  className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800"
+                  className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-200 dark:bg-zinc-800"
                   style={{ aspectRatio: [1, 0.75, 1.33, 0.8, 1.2][i % 5] }}
                 />
               ))}
@@ -179,9 +179,9 @@ function TagTreeContent() {
 
           {/* No results */}
           {!isLoadingPosts && selectedTags.length > 0 && posts.length === 0 && (
-            <div className="rounded-lg bg-zinc-800 p-8 text-center">
-              <p className="text-lg text-zinc-400">No posts found</p>
-              <p className="mt-1 text-sm text-zinc-500">
+            <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-8 text-center">
+              <p className="text-lg text-zinc-500 dark:text-zinc-400">No posts found</p>
+              <p className="mt-1 text-sm text-zinc-400 dark:text-zinc-400">
                 Try removing some tags
               </p>
             </div>
@@ -203,15 +203,15 @@ function TagTreeLoading() {
   return (
     <div className="space-y-6">
       <div>
-        <div className="h-8 w-32 animate-pulse rounded bg-zinc-800" />
-        <div className="mt-1 h-4 w-64 animate-pulse rounded bg-zinc-800" />
+        <div className="h-8 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+        <div className="mt-1 h-4 w-64 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
       </div>
       <div className="grid gap-6 lg:grid-cols-[350px_1fr]">
         <div className="space-y-4">
-          <div className="h-32 animate-pulse rounded-lg bg-zinc-800" />
-          <div className="h-64 animate-pulse rounded-lg bg-zinc-800" />
+          <div className="h-32 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+          <div className="h-64 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
         </div>
-        <div className="h-96 animate-pulse rounded-lg bg-zinc-800" />
+        <div className="h-96 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
       </div>
     </div>
   );

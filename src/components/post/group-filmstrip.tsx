@@ -34,14 +34,28 @@ export function GroupFilmstrip({
 }: GroupFilmstripProps) {
   const currentRef = useRef<HTMLAnchorElement>(null);
 
-  // Auto-scroll to current item on mount
+  // Auto-scroll to current item on mount (horizontal only, no page scroll)
   useEffect(() => {
-    if (currentRef.current) {
-      currentRef.current.scrollIntoView({
-        behavior: "instant",
-        block: "nearest",
-        inline: "center",
-      });
+    const el = currentRef.current;
+    if (!el) return;
+
+    // Find scrollable parent
+    let parent = el.parentElement;
+    while (parent) {
+      const overflow = getComputedStyle(parent).overflowX;
+      if (overflow === "auto" || overflow === "scroll") break;
+      parent = parent.parentElement;
+    }
+    if (parent) {
+      // Use getBoundingClientRect to get accurate position regardless of offsetParent
+      const elRect = el.getBoundingClientRect();
+      const parentRect = parent.getBoundingClientRect();
+      const offset = elRect.left - parentRect.left + parent.scrollLeft;
+      // Disable smooth scroll temporarily for instant jump
+      const prevBehavior = parent.style.scrollBehavior;
+      parent.style.scrollBehavior = "auto";
+      parent.scrollLeft = Math.max(0, offset - (parent.clientWidth - el.offsetWidth) / 2);
+      parent.style.scrollBehavior = prevBehavior;
     }
   }, [currentHash]);
 
@@ -52,11 +66,11 @@ export function GroupFilmstrip({
     <div className="space-y-2">
       {/* Position counter */}
       {currentIndex !== -1 && (
-        <div className="flex items-center gap-2 text-sm text-zinc-400">
-          <span className="font-medium text-zinc-200">
+        <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <span className="font-medium text-zinc-800 dark:text-zinc-200">
             {currentIndex + 1} / {totalPosts}
           </span>
-          <span className="text-zinc-500">in group</span>
+          <span className="text-zinc-500 dark:text-zinc-400">in group</span>
         </div>
       )}
 
@@ -68,7 +82,7 @@ export function GroupFilmstrip({
               key={pg.post.hash}
               ref={isCurrent ? currentRef : null}
               href={`/post/${pg.post.hash}`}
-              className={`relative shrink-0 rounded-lg bg-zinc-700 snap-start transition-all duration-200 ${
+              className={`relative shrink-0 rounded-lg bg-zinc-300 dark:bg-zinc-700 snap-start transition-all duration-200 ${
                 isCurrent
                   ? "ring-2 ring-blue-500 scale-[1.02]"
                   : "hover:ring-2 hover:ring-blue-400 hover:scale-[1.02] opacity-80 hover:opacity-100"

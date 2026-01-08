@@ -36,13 +36,13 @@ function GroupsPageSkeleton() {
 }
 
 const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
-  [SourceType.PIXIV]: "bg-blue-500/20 text-blue-400",
-  [SourceType.TWITTER]: "bg-sky-500/20 text-sky-400",
-  [SourceType.DEVIANTART]: "bg-green-500/20 text-green-400",
-  [SourceType.DANBOORU]: "bg-yellow-500/20 text-yellow-400",
-  [SourceType.GELBOORU]: "bg-orange-500/20 text-orange-400",
-  [SourceType.TITLE]: "bg-purple-500/20 text-purple-400",
-  [SourceType.OTHER]: "bg-zinc-500/20 text-zinc-400",
+  [SourceType.PIXIV]: "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400",
+  [SourceType.TWITTER]: "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-400",
+  [SourceType.DEVIANTART]: "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400",
+  [SourceType.DANBOORU]: "bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400",
+  [SourceType.GELBOORU]: "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400",
+  [SourceType.TITLE]: "bg-purple-100 text-purple-700 dark:bg-purple-500/20 dark:text-purple-400",
+  [SourceType.OTHER]: "bg-zinc-200 text-zinc-600 dark:bg-zinc-500/20 dark:text-zinc-400",
 };
 
 const PAGE_SIZE = 50;
@@ -102,7 +102,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Groups</h1>
-        <span className="text-sm text-zinc-400">{totalGroups} total groups</span>
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">{totalGroups} total groups</span>
       </div>
 
       {/* Filters row */}
@@ -114,7 +114,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
             className={`rounded-full px-3 py-1 text-sm transition-colors ${
               !typeFilter
                 ? "bg-blue-500 text-white"
-                : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
             }`}
           >
             All
@@ -136,7 +136,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
 
         {/* Order selector */}
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-zinc-400">Sort:</span>
+          <span className="text-sm text-zinc-500 dark:text-zinc-400">Sort:</span>
           <div className="flex gap-1">
             {(["random", "newest", "oldest", "largest"] as const).map((o) => (
               <Link
@@ -144,8 +144,8 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                 href={buildUrl({ order: o, page: 1, newSeed: o === "random" && order !== "random" })}
                 className={`rounded px-2 py-1 text-sm transition-colors ${
                   order === o
-                    ? "bg-zinc-600 text-white"
-                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    ? "bg-zinc-300 text-zinc-900 dark:bg-zinc-600 dark:text-white"
+                    : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
                 }`}
               >
                 {o.charAt(0).toUpperCase() + o.slice(1)}
@@ -156,7 +156,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
           {order === "random" && (
             <Link
               href={buildUrl({ page: 1, newSeed: true })}
-              className="rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+              className="rounded bg-zinc-200 px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-300 hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-white transition-colors"
               title="Shuffle"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -179,7 +179,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
           return (
             <div
               key={mergedGroup.contentHash}
-              className="group/card rounded-xl bg-zinc-800/80 p-4 transition-all duration-200 hover:bg-zinc-800 hover:shadow-lg hover:shadow-black/20 border border-zinc-700/50 hover:border-zinc-600/50"
+              className="group/card rounded-xl bg-white p-4 transition-all duration-200 hover:bg-zinc-50 hover:shadow-lg hover:shadow-black/10 border border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 dark:hover:shadow-black/20 dark:border-zinc-700/50 dark:hover:border-zinc-600/50"
             >
               {/* Header with sources and post count */}
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -193,15 +193,15 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                       <div key={g.id} className="flex items-center gap-2">
                         <Link
                           href={`/groups/${g.id}`}
-                          className="flex items-center gap-2 rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors hover:bg-zinc-700/50"
+                          className="flex items-center gap-2 rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-700/50"
                         >
                           <SourceBadge sourceType={g.sourceType} />
                           {isTitleGroup ? (
-                            <span className="text-sm font-medium text-zinc-200 max-w-xs truncate" title={displayTitle!}>
+                            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200 max-w-xs truncate" title={displayTitle!}>
                               {displayTitle}
                             </span>
                           ) : g.sourceType !== SourceType.TITLE && (
-                            <span className="font-mono text-sm text-zinc-400">
+                            <span className="font-mono text-sm text-zinc-500 dark:text-zinc-400">
                               {g.sourceId}
                             </span>
                           )}
@@ -211,7 +211,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                             href={canonicalUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-700 hover:text-blue-400"
+                            className="rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-blue-600 dark:text-zinc-500 dark:hover:bg-zinc-700 dark:hover:text-blue-400"
                             title="View source"
                           >
                             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -225,22 +225,22 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                 </div>
                 {/* Post count and creators */}
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-700/80 px-3 py-1 text-sm font-medium text-zinc-300">
-                    <svg className="h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-200 px-3 py-1 text-sm font-medium text-zinc-700 dark:bg-zinc-700/80 dark:text-zinc-300">
+                    <svg className="h-4 w-4 text-zinc-400 dark:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
                     {postCount}
                   </span>
                   {mergedGroup.creators.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 text-sm text-zinc-400">
-                      <svg className="h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <span className="inline-flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400">
+                      <svg className="h-4 w-4 text-zinc-400 dark:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                       </svg>
                       {mergedGroup.creators.map((creator, i) => (
                         <span key={creator}>
                           <Link
                             href={`/search?tags=${encodeURIComponent(creator)}`}
-                            className="hover:text-zinc-200 transition-colors"
+                            className="hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
                           >
                             {creator}
                           </Link>
@@ -253,12 +253,12 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
               </div>
 
               {/* Post thumbnails - horizontal filmstrip */}
-              <div className="flex gap-2 overflow-x-auto pb-2 snap-x scrollbar-thin scrollbar-thumb-zinc-600 scrollbar-track-transparent">
+              <div className="flex gap-2 overflow-x-auto pb-2 snap-x scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-600 scrollbar-track-transparent">
                 {mergedGroup.posts.map((pg, index) => (
                   <Link
                     key={pg.post.hash}
                     href={`/post/${pg.post.hash}`}
-                    className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/30"
+                    className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/20 dark:hover:shadow-black/30"
                   >
                     <img
                       src={`/api/thumbnails/${pg.post.hash}.webp`}
@@ -272,7 +272,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                       }
                     />
                     {/* Position badge */}
-                    <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
+                    <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/60 dark:bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
                       {pg.position ?? index + 1}
                     </span>
                   </Link>
@@ -280,7 +280,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
                 {postCount > 10 && (
                   <Link
                     href={`/groups/${primaryGroup.id}`}
-                    className="flex h-44 w-28 shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-zinc-700/80 text-zinc-400 transition-all duration-200 hover:bg-zinc-600 hover:text-zinc-200"
+                    className="flex h-44 w-28 shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-zinc-200 text-zinc-500 dark:bg-zinc-700/80 dark:text-zinc-400 transition-all duration-200 hover:bg-zinc-300 hover:text-zinc-700 dark:hover:bg-zinc-600 dark:hover:text-zinc-200"
                   >
                     <span className="text-2xl font-bold">+{postCount - 10}</span>
                     <span className="text-xs">more</span>
@@ -292,7 +292,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
         })}
 
         {groupsWithPosts.length === 0 && (
-          <div className="rounded-lg bg-zinc-800 p-8 text-center text-zinc-400">
+          <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center text-zinc-500 dark:bg-zinc-800 dark:border-transparent dark:text-zinc-400">
             No groups found
           </div>
         )}

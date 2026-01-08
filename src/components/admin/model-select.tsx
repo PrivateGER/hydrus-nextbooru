@@ -59,25 +59,25 @@ export function ModelSelect({ value, onChange, models, allowCustom = false }: Mo
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         onKeyDown={handleKeyDown}
-        className="flex w-full items-center justify-between rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-left text-sm outline-none transition-colors hover:border-zinc-600 focus:border-zinc-500"
+        className="flex w-full items-center justify-between rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-left text-sm outline-none transition-colors hover:border-zinc-400 dark:hover:border-zinc-600 focus:border-zinc-400 dark:focus:border-zinc-500"
       >
         <span className="flex items-center gap-2 overflow-hidden">
           {isCustom ? (
-            <span className="text-zinc-400">Custom model</span>
+            <span className="text-zinc-500 dark:text-zinc-400">Custom model</span>
           ) : selectedModel ? (
             <>
               <span className="truncate">{selectedModel.name}</span>
               {renderTags(selectedModel)}
             </>
           ) : (
-            <span className="text-zinc-400">Select a model...</span>
+            <span className="text-zinc-500 dark:text-zinc-400">Select a model...</span>
           )}
         </span>
-        <ChevronDownIcon className={`h-4 w-4 flex-shrink-0 text-zinc-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDownIcon className={`h-4 w-4 flex-shrink-0 text-zinc-500 dark:text-zinc-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl animate-in fade-in slide-in-from-top-1 duration-150">
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 py-1 shadow-xl animate-in fade-in slide-in-from-top-1 duration-150">
           <div className="max-h-64 overflow-y-auto">
             {models.map((m) => (
               <button
@@ -87,8 +87,8 @@ export function ModelSelect({ value, onChange, models, allowCustom = false }: Mo
                   onChange(m.id);
                   setIsOpen(false);
                 }}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-zinc-700/50 ${
-                  value === m.id ? "bg-zinc-700/30 text-white" : "text-zinc-300"
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 ${
+                  value === m.id ? "bg-zinc-200/30 dark:bg-zinc-700/30 text-zinc-900 dark:text-white" : "text-zinc-700 dark:text-zinc-300"
                 }`}
               >
                 <span className="truncate">{m.name}</span>
@@ -102,8 +102,8 @@ export function ModelSelect({ value, onChange, models, allowCustom = false }: Mo
                   onChange("custom");
                   setIsOpen(false);
                 }}
-                className={`flex w-full items-center gap-2 border-t border-zinc-700 px-3 py-2 text-left text-sm transition-colors hover:bg-zinc-700/50 ${
-                  isCustom ? "bg-zinc-700/30 text-white" : "text-zinc-400"
+                className={`flex w-full items-center gap-2 border-t border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left text-sm transition-colors hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 ${
+                  isCustom ? "bg-zinc-200/30 dark:bg-zinc-700/30 text-zinc-900 dark:text-white" : "text-zinc-500 dark:text-zinc-400"
                 }`}
               >
                 Custom...

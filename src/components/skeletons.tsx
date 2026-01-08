@@ -9,7 +9,7 @@ interface SkeletonProps {
 
 /** Base skeleton block with pulse animation */
 export function Skeleton({ className }: SkeletonProps) {
-  return <div className={`animate-pulse bg-zinc-800${className ? ` ${className}` : ""}`} />;
+  return <div className={`animate-pulse bg-zinc-200 dark:bg-zinc-800${className ? ` ${className}` : ""}`} />;
 }
 
 /** Masonry-style post grid skeleton with varied aspect ratios */
@@ -24,7 +24,7 @@ export function PostGridSkeleton({ count = 24 }: { count?: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-800"
+          className="mb-3 animate-pulse break-inside-avoid rounded-lg bg-zinc-200 dark:bg-zinc-800"
           style={{ aspectRatio: aspectRatios[i % aspectRatios.length] }}
         />
       ))}
@@ -41,7 +41,7 @@ export function GridSkeleton({ count = 12 }: { count?: number }) {
       aria-label="Loading content"
     >
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="aspect-square bg-zinc-800 rounded-lg animate-pulse" />
+        <div key={i} className="aspect-square bg-zinc-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
       ))}
     </div>
   );
@@ -51,7 +51,7 @@ export function GridSkeleton({ count = 12 }: { count?: number }) {
 export function SearchBarSkeleton() {
   return (
     <div className="flex justify-center" aria-busy="true" aria-label="Loading search">
-      <div className="w-full max-w-2xl h-12 bg-zinc-800 rounded-lg animate-pulse" />
+      <div className="w-full max-w-2xl h-12 bg-zinc-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
     </div>
   );
 }
@@ -60,8 +60,8 @@ export function SearchBarSkeleton() {
 export function PageHeaderSkeleton() {
   return (
     <div className="flex items-center justify-between" aria-busy="true">
-      <div className="h-8 w-24 bg-zinc-800 rounded animate-pulse" />
-      <div className="h-6 w-32 bg-zinc-800 rounded animate-pulse" />
+      <div className="h-8 w-24 bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
+      <div className="h-6 w-32 bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
     </div>
   );
 }
@@ -71,7 +71,7 @@ export function FiltersSkeleton({ count = 5 }: { count?: number }) {
   return (
     <div className="flex flex-wrap gap-2" aria-busy="true" aria-label="Loading filters">
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="h-8 w-20 bg-zinc-800 rounded-full animate-pulse" />
+        <div key={i} className="h-8 w-20 bg-zinc-200 dark:bg-zinc-800 rounded-full animate-pulse" />
       ))}
     </div>
   );
@@ -82,7 +82,7 @@ export function TagsSkeleton({ count = 50 }: { count?: number }) {
   return (
     <div className="flex flex-wrap gap-2" aria-busy="true" aria-label="Loading tags">
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="h-8 w-32 bg-zinc-800 rounded-lg animate-pulse" />
+        <div key={i} className="h-8 w-32 bg-zinc-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
       ))}
     </div>
   );
@@ -91,11 +91,11 @@ export function TagsSkeleton({ count = 50 }: { count?: number }) {
 /** Group card skeleton with header and thumbnail strip */
 export function GroupCardSkeleton() {
   return (
-    <div className="rounded-xl bg-zinc-800/80 p-4 border border-zinc-700/50">
-      <div className="h-6 w-48 bg-zinc-700 rounded animate-pulse mb-4" />
+    <div className="rounded-xl bg-zinc-100 dark:bg-zinc-800/80 p-4 border border-zinc-200 dark:border-zinc-700/50">
+      <div className="h-6 w-48 bg-zinc-300 dark:bg-zinc-700 rounded animate-pulse mb-4" />
       <div className="flex gap-2">
         {Array.from({ length: 5 }).map((_, j) => (
-          <div key={j} className="h-44 w-32 bg-zinc-700 rounded-lg animate-pulse" />
+          <div key={j} className="h-44 w-32 bg-zinc-300 dark:bg-zinc-700 rounded-lg animate-pulse" />
         ))}
       </div>
     </div>
@@ -106,10 +106,10 @@ export function GroupCardSkeleton() {
 export function SidebarSkeleton({ count = 10 }: { count?: number }) {
   return (
     <div className="w-64 space-y-4" aria-busy="true" aria-label="Loading sidebar">
-      <div className="h-6 w-24 bg-zinc-800 rounded animate-pulse" />
+      <div className="h-6 w-24 bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
       <div className="space-y-2">
         {Array.from({ length: count }).map((_, i) => (
-          <div key={i} className="h-6 w-full bg-zinc-800 rounded animate-pulse" />
+          <div key={i} className="h-6 w-full bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
         ))}
       </div>
     </div>
@@ -120,7 +120,7 @@ export function SidebarSkeleton({ count = 10 }: { count?: number }) {
 export function MediaViewerSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading media">
-      <div className="aspect-video bg-zinc-800 rounded-lg animate-pulse" />
+      <div className="aspect-video bg-zinc-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
     </div>
   );
 }
@@ -128,6 +128,6 @@ export function MediaViewerSkeleton() {
 /** Details card skeleton */
 export function DetailsCardSkeleton() {
   return (
-    <div className="rounded-lg bg-zinc-800 p-4 h-32 animate-pulse" aria-busy="true" />
+    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4 h-32 animate-pulse" aria-busy="true" />
   );
 }

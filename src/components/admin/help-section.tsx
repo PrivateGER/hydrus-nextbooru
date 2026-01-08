@@ -6,7 +6,7 @@ export function HelpSection() {
     <div className="space-y-5">
       {/* Quick Start */}
       <Card>
-        <h3 className="mb-4 font-medium text-zinc-200">Quick Start</h3>
+        <h3 className="mb-4 font-medium text-zinc-800 dark:text-zinc-200">Quick Start</h3>
         <div className="space-y-4">
           {[
             {
@@ -31,12 +31,12 @@ export function HelpSection() {
             },
           ].map(({ step, title, desc }) => (
             <div key={step} className="flex gap-3">
-              <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-xs font-bold text-blue-400">
+              <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-xs font-bold text-blue-600 dark:text-blue-400">
                 {step}
               </div>
               <div>
-                <p className="text-sm font-medium text-zinc-200">{title}</p>
-                <p className="mt-0.5 text-xs text-zinc-400">{desc}</p>
+                <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{title}</p>
+                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{desc}</p>
               </div>
             </div>
           ))}
@@ -45,9 +45,9 @@ export function HelpSection() {
 
       {/* Environment Variables */}
       <Card>
-        <h3 className="mb-3 font-medium text-zinc-200">Environment Variables</h3>
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Environment Variables</h3>
 
-        <p className="mb-2 text-xs font-medium text-zinc-400">Required</p>
+        <p className="mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">Required</p>
         <div className="mb-4 space-y-2 text-sm">
           {[
             { name: "DATABASE_URL", desc: "PostgreSQL connection string" },
@@ -56,14 +56,14 @@ export function HelpSection() {
             { name: "HYDRUS_API_KEY", desc: "Access key from Hydrus Client API settings" },
             { name: "HYDRUS_FILES_PATH", desc: "Path to Hydrus client_files directory" },
           ].map(({ name, desc }) => (
-            <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-700/30 p-2.5">
-              <code className="shrink-0 text-xs font-medium text-blue-400">{name}</code>
-              <p className="text-xs text-zinc-500">{desc}</p>
+            <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-300/30 dark:bg-zinc-700/30 p-2.5">
+              <code className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-400">{name}</code>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</p>
             </div>
           ))}
         </div>
 
-        <p className="mb-2 text-xs font-medium text-zinc-400">Optional</p>
+        <p className="mb-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">Optional</p>
         <div className="space-y-2 text-sm">
           {[
             { name: "LOG_QUERIES", desc: "Log SQL queries with timing (true/false)" },
@@ -71,9 +71,9 @@ export function HelpSection() {
             { name: "TAG_BLACKLIST", desc: "Comma-separated tags to hide from display" },
             { name: "OPENROUTER_API_KEY", desc: "API key for translation (can also set in UI)" },
           ].map(({ name, desc }) => (
-            <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-700/30 p-2.5">
-              <code className="shrink-0 text-xs font-medium text-zinc-400">{name}</code>
-              <p className="text-xs text-zinc-500">{desc}</p>
+            <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-300/30 dark:bg-zinc-700/30 p-2.5">
+              <code className="shrink-0 text-xs font-medium text-zinc-600 dark:text-zinc-400">{name}</code>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</p>
             </div>
           ))}
         </div>
@@ -81,8 +81,8 @@ export function HelpSection() {
 
       {/* Tag Syntax */}
       <Card>
-        <h3 className="mb-3 font-medium text-zinc-200">Tag Syntax</h3>
-        <p className="mb-3 text-xs text-zinc-400">
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Tag Syntax</h3>
+        <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
           Use Hydrus tag format when filtering syncs. Tags are case-insensitive.
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -93,9 +93,9 @@ export function HelpSection() {
             { tag: "system:limit=1000", desc: "Limit to 1000 files" },
             { tag: "system:filetype=image/*", desc: "Filter by file type" },
           ].map(({ tag, desc }) => (
-            <div key={tag} className="flex items-start gap-2 rounded bg-zinc-700/30 p-2">
-              <code className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300">{tag}</code>
-              <span className="text-xs text-zinc-500">{desc}</span>
+            <div key={tag} className="flex items-start gap-2 rounded bg-zinc-300/30 dark:bg-zinc-700/30 p-2">
+              <code className="shrink-0 rounded bg-zinc-300 dark:bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">{tag}</code>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">{desc}</span>
             </div>
           ))}
         </div>
@@ -103,7 +103,7 @@ export function HelpSection() {
 
       {/* Troubleshooting */}
       <Card>
-        <h3 className="mb-3 font-medium text-zinc-200">Troubleshooting</h3>
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Troubleshooting</h3>
         <div className="space-y-4">
           {[
             {
@@ -128,8 +128,8 @@ export function HelpSection() {
             },
           ].map(({ q, a }) => (
             <div key={q}>
-              <p className="text-sm font-medium text-zinc-300">{q}</p>
-              <p className="mt-1 text-xs text-zinc-500">{a}</p>
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{q}</p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{a}</p>
             </div>
           ))}
         </div>

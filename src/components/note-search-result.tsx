@@ -41,11 +41,11 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
   const isAnimated = primaryPost.mimeType === "image/gif" || primaryPost.mimeType === "image/apng";
 
   return (
-    <div className="group flex gap-4 rounded-lg bg-zinc-800 p-3 hover:bg-zinc-700/80 transition-colors">
+    <div className="group flex gap-4 rounded-lg bg-zinc-200 dark:bg-zinc-800 p-3 hover:bg-zinc-300/80 dark:hover:bg-zinc-700/80 transition-colors">
       {/* Thumbnails */}
       <div className="flex shrink-0 gap-1.5">
         {/* Primary thumbnail */}
-        <Link href={postUrl} className="relative overflow-hidden rounded-md bg-zinc-700">
+        <Link href={postUrl} className="relative overflow-hidden rounded-md bg-zinc-300 dark:bg-zinc-700">
           <img
             src={thumbnailUrl}
             alt=""
@@ -71,7 +71,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
               <Link
                 key={post.hash}
                 href={`/post/${post.hash}`}
-                className="relative overflow-hidden rounded bg-zinc-700 hover:ring-2 hover:ring-amber-500 transition-all"
+                className="relative overflow-hidden rounded bg-zinc-300 dark:bg-zinc-700 hover:ring-2 hover:ring-amber-500 transition-all"
               >
                 <img
                   src={`/api/thumbnails/${post.hash}.webp?size=grid`}
@@ -87,7 +87,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
               </Link>
             ))}
             {additionalPosts.length > 3 && (
-              <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-600 text-xs text-zinc-400">
+              <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-400 dark:bg-zinc-600 text-xs text-zinc-600 dark:text-zinc-400">
                 +{additionalPosts.length - 3}
               </div>
             )}
@@ -98,7 +98,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
       {/* Note content */}
       <Link href={postUrl} className="flex-1 min-w-0 flex flex-col gap-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="font-medium text-zinc-200 truncate">
+          <h3 className="font-medium text-zinc-800 dark:text-zinc-200 truncate">
             {note.name}
           </h3>
           <span className="shrink-0 text-xs text-zinc-500">
@@ -111,7 +111,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
         </div>
 
         <div
-          className="text-sm text-zinc-400 line-clamp-4 [&_mark]:bg-amber-500/30 [&_mark]:text-amber-200 [&_mark]:px-0.5 [&_mark]:rounded"
+          className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-4 [&_mark]:bg-amber-500/30 [&_mark]:text-amber-700 dark:[&_mark]:text-amber-200 [&_mark]:px-0.5 [&_mark]:rounded"
           dangerouslySetInnerHTML={{ __html: displayContent }}
         />
 

@@ -74,7 +74,7 @@ function getSourceColor(type: SourceType | null): string {
     case SourceType.PIXIV:
       return "text-[#0096fa] hover:text-[#00b4ff]";
     case SourceType.TWITTER:
-      return "text-zinc-100 hover:text-white";
+      return "text-zinc-700 dark:text-zinc-100 hover:text-zinc-900 dark:hover:text-white";
     case SourceType.DEVIANTART:
       return "text-[#00e59b] hover:text-[#00ffab]";
     case SourceType.DANBOORU:
@@ -82,7 +82,7 @@ function getSourceColor(type: SourceType | null): string {
     case SourceType.GELBOORU:
       return "text-[#006ffa] hover:text-[#3d9bff]";
     default:
-      return "text-blue-400 hover:text-blue-300";
+      return "text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300";
   }
 }
 

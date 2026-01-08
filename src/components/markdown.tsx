@@ -29,7 +29,7 @@ export function Markdown({ content, className = "" }: MarkdownProps) {
 
   return (
     <div
-      className={`prose prose-sm prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${className}`}
+      className={`prose prose-sm prose-zinc dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

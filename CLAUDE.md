@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Next.js-based image gallery (booru) that syncs with Hydrus, a personal media management system. Users can browse, search by tags, and view images/videos synced from their Hydrus instance.
+Supports both a dark and light theme.
 
 ## Commands
 

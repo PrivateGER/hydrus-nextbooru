@@ -33,12 +33,12 @@ export function Select({
         onChange={onChange}
         disabled={disabled}
         aria-describedby={hintId}
-        className={`w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none transition-colors focus:border-zinc-500 disabled:opacity-50 ${className}`}
+        className={`w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm outline-none transition-colors focus:border-zinc-400 dark:focus:border-zinc-500 disabled:opacity-50 ${className}`}
       >
         {children}
       </select>
       {hint && (
-        <p id={hintId} className="text-xs text-zinc-500">
+        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-400">
           {hint}
         </p>
       )}

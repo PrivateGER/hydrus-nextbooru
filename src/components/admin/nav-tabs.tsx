@@ -24,7 +24,7 @@ export interface NavTabsProps {
 
 export function NavTabs({ activeSection, onSectionChange }: NavTabsProps) {
   return (
-    <div className="flex gap-1 overflow-x-auto rounded-xl bg-zinc-800/50 p-1">
+    <div className="flex gap-1 overflow-x-auto rounded-xl bg-zinc-200/50 dark:bg-zinc-800/50 p-1">
       {NAV_ITEMS.map((item) => {
         const isActive = activeSection === item.id;
         return (
@@ -34,11 +34,11 @@ export function NavTabs({ activeSection, onSectionChange }: NavTabsProps) {
             onClick={() => onSectionChange(item.id)}
             className={`flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all ${
               isActive
-                ? "bg-zinc-700 text-zinc-100"
-                : "text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-200"
+                ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                : "text-zinc-500 dark:text-zinc-400 hover:bg-zinc-300/50 dark:hover:bg-zinc-700/50 hover:text-zinc-700 dark:hover:text-zinc-200"
             }`}
           >
-            <item.icon className={`h-4 w-4 ${isActive ? "text-blue-400" : ""}`} />
+            <item.icon className={`h-4 w-4 ${isActive ? "text-blue-600 dark:text-blue-400" : ""}`} />
             <span className="hidden sm:inline">{item.label}</span>
           </button>
         );
