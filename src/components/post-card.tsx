@@ -32,15 +32,29 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
   const canHavePreview = isVideo || isAnimated;
 
-  // Reset state when hash changes (component reuse in virtualized lists)
+  // Handle hash changes and check for cached images.
+  // If we don't do this, we get stuck with a blurhash.
+  const prevHashRef = useRef(hash);
   useEffect(() => {
-    setLoaded(false);
-    setError(false);
-    setPreviewLoaded(false);
-    loadedRef.current = false;
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = undefined;
+    const img = imgRef.current;
+
+    // If hash changed, reset state first
+    if (prevHashRef.current !== hash) {
+      prevHashRef.current = hash;
+      setLoaded(false);
+      setError(false);
+      setPreviewLoaded(false);
+      loadedRef.current = false;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = undefined;
+      }
+    }
+
+    // Then check if image is already cached (precached or caused by bfcache navigation)
+    if (img?.complete && img.naturalWidth > 0) {
+      setLoaded(true);
+      loadedRef.current = true;
     }
   }, [hash]);
 
@@ -93,16 +107,15 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   }, [loaded]);
 
   // Use IntersectionObserver to detect when image enters viewport
-  // Only then check for cached images and start timeout
+  // Only then start timeout for load errors
   useEffect(() => {
     const img = imgRef.current;
     if (!img) {
       return;
     }
 
-    // Check immediately if image is already cached (important for browser back/forward cache)
-    if (img.complete && img.naturalWidth > 0) {
-      if (mountedRef.current) setLoaded(true);
+    // Already loaded (see above)
+    if (loadedRef.current) {
       return;
     }
 
@@ -115,6 +128,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         // Image is now visible - check if already cached
         if (img.complete && img.naturalWidth > 0) {
           if (mountedRef.current) setLoaded(true);
+          loadedRef.current = true;
           observer.disconnect();
           return;
         }
