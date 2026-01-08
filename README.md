@@ -2,28 +2,30 @@
 
 [![codecov](https://codecov.io/gh/PrivateGER/hydrus-nextbooru/branch/master/graph/badge.svg?token=7rvkUNLyNO)](https://codecov.io/gh/PrivateGER/hydrus-nextbooru)
 
-A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update or with shit randomly breaking.
+A Next.js-based image gallery that syncs with [Hydrus Network](https://hydrusnetwork.github.io/hydrus/). Still quite WIP, but it's usable. Don't use if you aren't okay with starting a fresh sync when you update. Things will break sometimes.
 
 A live demo filled with random Touhou images is running at https://nextbooru-demo.lattemacchiato.dev/.
 
-You can browse, search by tags, and view images/videos **without** depending on Hydrus once the sync is done. Only the location Hydrus stores the files is required to be accessible from the server.
+You can browse, search by tags, and view images/videos **without** depending on Hydrus once the sync is done. Only the location Hydrus stores the files is required to be accessible from the server, all metadata is locally saved after syncing.
 
 Supports:
-- Tag-based search with autocomplete and co-occurrence filtering + wildcards
+- Tag-based search with autocomplete and co-occurrence filtering + wildcard support + meta tags (file types)
 - Category-colored tags (artist, character, copyright, meta, general)
 - Automatic post grouping based on source URLs (Pixiv, Twitter, dA, Danbooru, Gelbooru) and titles (experimental!)
 - Lazy loading images with blurhash placeholders and thumbnail previews
-- Search query builder, with progressively narrowing down tags
+- Search query builder tree, with progressively narrowing down tags
 - Thumbnail generation of many file types
-- Stupidly fast server-side rendering
+- Very fast server-side rendering
 - Fast searches with optimized queries
-- Did I mention it's fast?
+- Incremental sync (to a point, Hydrus requires scanning everything but Nextbooru minimizes unneeded writes)
+- OpenRouter-based translations of post titles, bodies and images
+- Animated thumbnail support
 
 ## Requirements
 
 - Node.js 25+ (or Bun for faster execution, default in docker image)
 - PostgreSQL 18+ (lower probably works, but recommend 18+ for performance)
-- Hydrus Network with Client API enabled and available in network
+- Hydrus Network with Client API enabled and available in network for first sync
 
 ## Setup
 
@@ -63,7 +65,9 @@ Supports:
    npm start
    ```
 
-See documentation contained within for usage guidance. No screenshots yet, still developing actively.
+See documentation contained within for usage guidance. 
+
+No screenshots yet, still developing actively. Check the demo.
 
 ## Performance
 
