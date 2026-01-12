@@ -27,7 +27,11 @@ Supports:
 - PostgreSQL 18+ (lower probably works, but recommend 18+ for performance)
 - Hydrus Network with Client API enabled and available in network for first sync
 
-## Setup
+## Development Setup
+
+Use the docker compose stack for actual deployment! 
+
+Pre-built image available at `ghcr.io/privateger/hydrus-nextbooru:latest`.
 
 1. Clone the repository
 
