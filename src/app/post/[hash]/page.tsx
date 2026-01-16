@@ -134,9 +134,11 @@ async function getPost(hash: string) {
  * source links, file details (with a generated download filename), related-image filmstrips for groups,
  * and keyboard/prev-next navigation when available.
  *
- * Note: This page intentionally does not use a Suspense boundary with a skeleton fallback.
- * This keeps the previous post visible during navigation, providing a smoother experience
- * when browsing through posts in a gallery.
+ * Note: This page intentionally omits a top-level Suspense skeleton fallback to keep the previous
+ * post visible during navigation, providing a smoother experience when browsing through posts in
+ * a gallery. Component-level Suspense boundaries remain in place (e.g., RelatedPosts streams in
+ * with its own skeleton) to allow heavier queries to load independently without blocking the
+ * main content.
  *
  * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
  * @returns The React element representing the post detail page.

@@ -1,13 +1,13 @@
 /**
  * Loading state for post pages.
  *
- * Uses a minimal loading indicator instead of a full skeleton to reduce
- * visual disruption when navigating between posts in a gallery.
- * The previous post remains visible in the background while this loads.
+ * Intentionally renders nothing (returns null) to preserve the previous page
+ * during navigation and reduce visual disruption when browsing posts in a gallery.
+ * Next.js keeps the previous page mounted during transitions, so users see
+ * the current post until the new one is ready rather than a skeleton flash.
+ *
+ * We can't actually delete this file because Next.js fails the build otherwise lol
  */
 export default function PostLoading() {
-  // Return null to minimize visual disruption during navigation.
-  // The previous page content remains visible while the new page loads.
-  // This works because Next.js keeps the previous page mounted during transitions.
   return null;
 }
