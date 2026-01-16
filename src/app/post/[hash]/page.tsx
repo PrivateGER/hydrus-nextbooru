@@ -10,7 +10,6 @@ import { KeyboardNavigation } from "@/components/post/keyboard-navigation";
 import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parser";
 import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
-import { SidebarSkeleton, MediaViewerSkeleton, DetailsCardSkeleton } from "@/components/skeletons";
 import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { NoteCard } from "@/components/note-card";
@@ -81,19 +80,6 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
   };
 }
 
-function PostPageSkeleton() {
-  return (
-    <div className="flex flex-col lg:flex-row gap-6" aria-busy="true" aria-label="Loading post">
-      <div className="order-last lg:order-first">
-        <SidebarSkeleton />
-      </div>
-      <div className="flex-1 min-w-0 space-y-4">
-        <MediaViewerSkeleton />
-        <DetailsCardSkeleton />
-      </div>
-    </div>
-  );
-}
 
 async function getPost(hash: string) {
   // Use withPostHidingFilter to ensure hidden posts return null
@@ -139,7 +125,23 @@ async function getPost(hash: string) {
   return post;
 }
 
-async function PostPageContent({ params }: { params: Promise<{ hash: string }> }) {
+/**
+ * Render the post detail page for a given post hash.
+ *
+ * Validates the provided hash and loads the post from the database; if the hash is malformed
+ * or the post cannot be found, the route will trigger a notFound response. The rendered page
+ * includes the media viewer, tag sidebar, notes list (with NoteCard), an image translation button,
+ * source links, file details (with a generated download filename), related-image filmstrips for groups,
+ * and keyboard/prev-next navigation when available.
+ *
+ * Note: This page intentionally does not use a Suspense boundary with a skeleton fallback.
+ * This keeps the previous post visible during navigation, providing a smoother experience
+ * when browsing through posts in a gallery.
+ *
+ * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
+ * @returns The React element representing the post detail page.
+ */
+export default async function PostPage({ params }: PostPageProps) {
   const { hash } = await params;
 
   // Validate hash format (64 hex characters)
@@ -366,25 +368,5 @@ async function PostPageContent({ params }: { params: Promise<{ hash: string }> }
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * Render the post detail page for a given post hash.
- *
- * Validates the provided hash and loads the post from the database; if the hash is malformed
- * or the post cannot be found, the route will trigger a notFound response. The rendered page
- * includes the media viewer, tag sidebar, notes list (with NoteCard), an image translation button,
- * source links, file details (with a generated download filename), related-image filmstrips for groups,
- * and keyboard/prev-next navigation when available.
- *
- * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
- * @returns The React element representing the post detail page.
- */
-export default function PostPage({ params }: PostPageProps) {
-  return (
-    <Suspense fallback={<PostPageSkeleton />}>
-      <PostPageContent params={params} />
-    </Suspense>
   );
 }
