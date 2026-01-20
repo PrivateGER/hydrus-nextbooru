@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { TagCategory } from "@/generated/prisma/enums";
 import { isMetaTag } from "@/lib/meta-tags-shared";
+import { TAG_TEXT_COLORS_WITH_META } from "@/lib/tag-colors";
 
 type SearchMode = "tags" | "notes";
 
@@ -16,15 +17,6 @@ interface TagSuggestion {
   isMeta?: boolean;
   description?: string;
 }
-
-const CATEGORY_COLORS: Record<TagCategory | "VIRTUAL_META", string> = {
-  [TagCategory.ARTIST]: "text-red-600 dark:text-red-400",
-  [TagCategory.COPYRIGHT]: "text-purple-600 dark:text-purple-400",
-  [TagCategory.CHARACTER]: "text-green-600 dark:text-green-400",
-  [TagCategory.GENERAL]: "text-blue-600 dark:text-blue-400",
-  [TagCategory.META]: "text-orange-600 dark:text-orange-400",
-  VIRTUAL_META: "text-cyan-600 dark:text-cyan-400", // Virtual meta tags (video, portrait, etc.)
-};
 
 /**
  * Determine whether a tag string represents a negated tag.
@@ -541,7 +533,7 @@ export function SearchBar({
                 {suggestion.isMeta && (
                   <span className="text-cyan-600 dark:text-cyan-400 text-xs mr-1.5 font-medium">system:</span>
                 )}
-                <span className={CATEGORY_COLORS[suggestion.isMeta ? "VIRTUAL_META" : suggestion.category]}>
+                <span className={TAG_TEXT_COLORS_WITH_META[suggestion.isMeta ? "VIRTUAL_META" : suggestion.category]}>
                   {suggestion.name.replace(/_/g, " ")}
                 </span>
                 {suggestion.isMeta && suggestion.description && (

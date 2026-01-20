@@ -8,6 +8,8 @@ import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
 import { PageHeaderSkeleton, FiltersSkeleton, TagsSkeleton, Skeleton } from "@/components/skeletons";
 import { withBlacklistFilter } from "@/lib/tag-blacklist";
+import { TAG_LINK_COLORS } from "@/lib/tag-colors";
+import { TAGS_PER_PAGE } from "@/lib/pagination";
 import {
   tagsCategoryCountsCache,
   tagsPageCache,
@@ -19,8 +21,6 @@ export const metadata: Metadata = {
   title: "Tags - Booru",
   description: "Browse all tags by category",
 };
-
-const TAGS_PER_PAGE = 100;
 
 function TagsPageSkeleton() {
   return (
@@ -43,14 +43,6 @@ const CATEGORY_ORDER: (TagCategory | "ALL")[] = [
   TagCategory.GENERAL,
   TagCategory.META,
 ];
-
-const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300",
-  [TagCategory.COPYRIGHT]: "text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300",
-  [TagCategory.CHARACTER]: "text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300",
-  [TagCategory.GENERAL]: "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
-  [TagCategory.META]: "text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300",
-};
 
 const CATEGORY_LABELS: Record<TagCategory | "ALL", string> = {
   ALL: "All",
@@ -303,7 +295,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
             <Link
               key={tag.id}
               href={`/search?tags=${encodeURIComponent(tag.name)}`}
-              className={`rounded-lg bg-white border border-zinc-200 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:bg-zinc-800 dark:border-transparent dark:hover:bg-zinc-700 ${CATEGORY_COLORS[tag.category as TagCategory]}`}
+              className={`rounded-lg bg-white border border-zinc-200 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:bg-zinc-800 dark:border-transparent dark:hover:bg-zinc-700 ${TAG_LINK_COLORS[tag.category as TagCategory]}`}
             >
               {tag.name.replace(/_/g, " ")}
               <span className="ml-1.5 text-zinc-400 dark:text-zinc-500">{tag.count.toLocaleString()}</span>
