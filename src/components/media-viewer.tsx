@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 
@@ -46,7 +46,6 @@ export function MediaViewer({
   totalCount,
 }: MediaViewerProps) {
   const router = useRouter();
-  const pathname = usePathname();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
@@ -60,13 +59,36 @@ export function MediaViewer({
   const fullRef = useRef<HTMLImageElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Pause video on unmount, route change, or hash change
+  // Pause video on navigation (handles bfcache, tab switches, and unmount)
   useEffect(() => {
     const video = videoRef.current;
-    return () => {
-      video?.pause();
+    if (!video) return;
+
+    // Explicitly start playback - autoPlay attribute doesn't reliably trigger
+    // after pause() was called on the same element during cleanup
+    video.play().catch(() => {
+      // Autoplay blocked by browser policy (user hasn't interacted yet)
+    });
+
+    // pagehide fires BEFORE page enters bfcache - critical for back button
+    const handlePageHide = () => video.pause();
+
+    // visibilitychange catches tab switches and some navigations
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        video.pause();
+      }
     };
-  }, [hash, pathname]);
+
+    window.addEventListener("pagehide", handlePageHide);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      video.pause();
+    };
+  }, [hash]);
 
   // Handle swipe navigation for touch devices
   const handlePointerDown = (e: React.PointerEvent) => {
