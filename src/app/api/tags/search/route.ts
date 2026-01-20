@@ -3,6 +3,7 @@ import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { withBlacklistFilter, filterBlacklistedTags, isTagBlacklisted } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -16,6 +17,12 @@ import {
   separateMetaTags,
   getMetaTagSqlCondition,
 } from "@/lib/meta-tags";
+
+const RATE_LIMIT_CONFIG = {
+  prefix: "tags-search",
+  limit: 120,
+  windowMs: 60 * 1000,
+};
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -34,6 +41,10 @@ import {
  *   - `remainingCount`: number of matching posts that do not include this tag (zero or greater)
  */
 export async function GET(request: NextRequest) {
+  // Check rate limit
+  const rateLimitResponse = checkApiRateLimit(request, RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q") || "";
   const limit = Math.min(parseInt(searchParams.get("limit") || "20", 10), 50);
