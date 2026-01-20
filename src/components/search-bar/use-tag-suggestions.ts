@@ -8,6 +8,7 @@ interface UseTagSuggestionsOptions {
   searchQuery: string;
   isExcludeMode: boolean;
   enabled: boolean; // false when in notes mode
+  propsKey?: string; // changes when props change (navigation)
 }
 
 interface UseTagSuggestionsResult {
@@ -18,7 +19,7 @@ interface UseTagSuggestionsResult {
   isLoading: boolean;
   highlightedIndex: number;
   setHighlightedIndex: (index: number | ((prev: number) => number)) => void;
-  fetchPopularTags: (forceRefresh?: boolean) => Promise<void>;
+  fetchPopularTags: (options?: { forceRefresh?: boolean; showDropdown?: boolean }) => Promise<void>;
 }
 
 export function useTagSuggestions({
@@ -26,6 +27,7 @@ export function useTagSuggestions({
   searchQuery,
   isExcludeMode,
   enabled,
+  propsKey,
 }: UseTagSuggestionsOptions): UseTagSuggestionsResult {
   const [suggestions, setSuggestions] = useState<TagSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -33,9 +35,19 @@ export function useTagSuggestions({
   const [isLoading, setIsLoading] = useState(false);
 
   const prevSelectedTagsRef = useRef<string[]>([]);
+  const prevPropsKeyRef = useRef(propsKey);
+
+  // Close suggestions when props change (navigation)
+  useEffect(() => {
+    if (prevPropsKeyRef.current !== propsKey) {
+      setShowSuggestions(false);
+      prevPropsKeyRef.current = propsKey;
+    }
+  }, [propsKey]);
 
   // Fetch popular/narrowing tags on focus
-  const fetchPopularTags = useCallback(async (forceRefresh = false) => {
+  const fetchPopularTags = useCallback(async (options: { forceRefresh?: boolean; showDropdown?: boolean } = {}) => {
+    const { forceRefresh = false, showDropdown = true } = options;
     if (!enabled) return;
     if (!forceRefresh && (searchQuery.length > 0 || suggestions.length > 0)) return;
 
@@ -56,7 +68,9 @@ export function useTagSuggestions({
         : data.tags;
 
       setSuggestions(filtered);
-      setShowSuggestions(true);
+      if (showDropdown) {
+        setShowSuggestions(true);
+      }
     } catch (error) {
       console.error("Error fetching tags:", error);
     } finally {
@@ -65,6 +79,7 @@ export function useTagSuggestions({
   }, [searchQuery, selectedTags, suggestions.length, enabled]);
 
   // Refresh narrowing tags when selectedTags changes
+  // Keep dropdown open if it was already open (user interaction), otherwise don't open it (navigation)
   useEffect(() => {
     if (
       enabled &&
@@ -72,10 +87,11 @@ export function useTagSuggestions({
       selectedTags.length > 0 &&
       JSON.stringify(selectedTags) !== JSON.stringify(prevSelectedTagsRef.current)
     ) {
-      fetchPopularTags(true);
+      const wasOpen = showSuggestions;
+      fetchPopularTags({ forceRefresh: true, showDropdown: wasOpen });
     }
     prevSelectedTagsRef.current = selectedTags;
-  }, [selectedTags, enabled, searchQuery, fetchPopularTags]);
+  }, [selectedTags, enabled, searchQuery, fetchPopularTags, showSuggestions]);
 
   // Debounced tag search
   useEffect(() => {

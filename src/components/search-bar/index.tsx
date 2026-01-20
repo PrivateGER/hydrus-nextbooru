@@ -41,6 +41,9 @@ export function SearchBar({
   const isExcludeMode = inputValue.startsWith("-");
   const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
 
+  // Sync state when props change (e.g., navigation to different search)
+  const initialTagsKey = initialTags.join(",");
+
   // Use custom hook for tag suggestions
   const {
     displaySuggestions,
@@ -55,7 +58,15 @@ export function SearchBar({
     searchQuery,
     isExcludeMode,
     enabled: searchMode === "tags",
+    propsKey: `${initialTagsKey}:${initialNotesQuery}:${initialMode}`,
   });
+
+  // Sync state when props change (e.g., navigation to different search)
+  useEffect(() => {
+    setSearchMode(initialMode);
+    setInputValue(initialMode === "notes" ? initialNotesQuery : "");
+    setSelectedTags(initialTags);
+  }, [initialTagsKey, initialNotesQuery, initialMode]);
 
   // Close suggestions on click outside
   useEffect(() => {
@@ -108,7 +119,6 @@ export function SearchBar({
     }
 
     setInputValue("");
-    setShowSuggestions(false);
     inputRef.current?.focus();
   }, [selectedTags, setShowSuggestions]);
 
@@ -237,9 +247,8 @@ export function SearchBar({
           onPaste={handlePaste}
           onFocus={() => {
             if (searchMode === "tags") {
-              if (inputValue) {
-                setShowSuggestions(true);
-              } else {
+              setShowSuggestions(true);
+              if (!inputValue) {
                 fetchPopularTags();
               }
             }
