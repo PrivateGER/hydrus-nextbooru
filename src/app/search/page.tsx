@@ -10,6 +10,7 @@ import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/compo
 import { searchPosts, searchNotes } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
+import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
 
 export const metadata: Metadata = {
   title: "Search - Booru",
@@ -38,14 +39,6 @@ function SearchPageSkeleton() {
     </div>
   );
 }
-
-const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900/50 dark:text-red-300 dark:border-red-700",
-  [TagCategory.COPYRIGHT]: "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/50 dark:text-purple-300 dark:border-purple-700",
-  [TagCategory.CHARACTER]: "bg-green-100 text-green-700 border-green-300 dark:bg-green-900/50 dark:text-green-300 dark:border-green-700",
-  [TagCategory.GENERAL]: "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700",
-  [TagCategory.META]: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/50 dark:text-orange-300 dark:border-orange-700",
-};
 
 interface SearchPageProps {
   searchParams: Promise<{ tags?: string; notes?: string; page?: string }>;
@@ -122,7 +115,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
                   {w.tagNames.length > 0 ? (
                     <div className="flex flex-wrap gap-1.5">
                       {w.tagNames.map((name, idx) => (
-                        <span key={name} className={`px-2 py-0.5 rounded border text-xs ${CATEGORY_COLORS[w.tagCategories[idx] as TagCategory] || "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"}`}>
+                        <span key={name} className={`px-2 py-0.5 rounded border text-xs ${TAG_BADGE_COLORS[w.tagCategories[idx] as TagCategory] || "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"}`}>
                           {name.replace(/_/g, " ")}
                         </span>
                       ))}

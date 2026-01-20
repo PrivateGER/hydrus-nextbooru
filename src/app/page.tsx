@@ -17,8 +17,7 @@ import {
   getRecentImportCount,
 } from "@/lib/stats";
 import { withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
-
-const POSTS_PER_PAGE = 48;
+import { POSTS_PER_PAGE } from "@/lib/pagination";
 
 type SortOption = "newest" | "oldest" | "random";
 
