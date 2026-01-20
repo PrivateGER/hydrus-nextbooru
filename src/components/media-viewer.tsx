@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 
@@ -46,6 +46,7 @@ export function MediaViewer({
   totalCount,
 }: MediaViewerProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
   const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
@@ -57,6 +58,15 @@ export function MediaViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
   const fullRef = useRef<HTMLImageElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Pause video on unmount, route change, or hash change
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => {
+      video?.pause();
+    };
+  }, [hash, pathname]);
 
   // Handle swipe navigation for touch devices
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -185,6 +195,7 @@ export function MediaViewer({
       {/* Media content */}
       {isVideo ? (
         <video
+          ref={videoRef}
           src={`/api/files/${hash}${extension}`}
           controls
           autoPlay
