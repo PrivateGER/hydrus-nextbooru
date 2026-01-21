@@ -12,7 +12,10 @@ const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
   [TagCategory.META]: "bg-orange-50 border-orange-200 dark:bg-orange-900/30 dark:border-orange-800/50",
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
+/** Categories displayed in the popular tags section (excludes META) */
+type DisplayedCategory = "ARTIST" | "CHARACTER" | "COPYRIGHT" | "GENERAL";
+
+const CATEGORY_LABELS: Record<DisplayedCategory, string> = {
   ARTIST: "Artists",
   CHARACTER: "Characters",
   COPYRIGHT: "Series",
