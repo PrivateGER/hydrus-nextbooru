@@ -1,15 +1,9 @@
 import Link from "next/link";
 import { TagCategory } from "@/generated/prisma/client";
 import type { PopularTagsByCategory } from "@/lib/stats";
+import { TAG_LINK_COLORS } from "@/lib/tag-colors";
 
-const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300",
-  [TagCategory.COPYRIGHT]: "text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300",
-  [TagCategory.CHARACTER]: "text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300",
-  [TagCategory.GENERAL]: "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
-  [TagCategory.META]: "text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300",
-};
-
+/** Component-specific background colors with borders for category cards */
 const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-50 border-red-200 dark:bg-red-900/30 dark:border-red-800/50",
   [TagCategory.COPYRIGHT]: "bg-purple-50 border-purple-200 dark:bg-purple-900/30 dark:border-purple-800/50",
@@ -18,7 +12,10 @@ const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
   [TagCategory.META]: "bg-orange-50 border-orange-200 dark:bg-orange-900/30 dark:border-orange-800/50",
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
+/** Categories displayed in the popular tags section (excludes META) */
+type DisplayedCategory = "ARTIST" | "CHARACTER" | "COPYRIGHT" | "GENERAL";
+
+const CATEGORY_LABELS: Record<DisplayedCategory, string> = {
   ARTIST: "Artists",
   CHARACTER: "Characters",
   COPYRIGHT: "Series",
@@ -70,7 +67,7 @@ export function PopularTags({ tags }: PopularTagsProps) {
                   <li key={tag.id}>
                     <Link
                       href={`/search?tags=${encodeURIComponent(tag.name)}`}
-                      className={`group flex items-center justify-between text-sm ${CATEGORY_COLORS[category as TagCategory]}`}
+                      className={`group flex items-center justify-between text-sm ${TAG_LINK_COLORS[category as TagCategory]}`}
                     >
                       <span className="truncate">
                         {tag.name.replace(/_/g, " ")}

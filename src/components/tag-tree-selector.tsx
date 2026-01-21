@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { TagCategory } from "@/generated/prisma/enums";
+import { TAG_TEXT_COLORS } from "@/lib/tag-colors";
 
 interface TagSuggestion {
   id: number;
@@ -16,14 +17,7 @@ interface TagTreeResponse {
   selectedTags: string[];
 }
 
-const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-600 dark:text-red-400",
-  [TagCategory.COPYRIGHT]: "text-purple-600 dark:text-purple-400",
-  [TagCategory.CHARACTER]: "text-green-600 dark:text-green-400",
-  [TagCategory.GENERAL]: "text-blue-600 dark:text-blue-400",
-  [TagCategory.META]: "text-orange-600 dark:text-orange-400",
-};
-
+/** Component-specific background colors with borders for category tabs */
 const CATEGORY_BG_COLORS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "bg-red-100 border-red-300 dark:bg-red-900/30 dark:border-red-800",
   [TagCategory.COPYRIGHT]: "bg-purple-100 border-purple-300 dark:bg-purple-900/30 dark:border-purple-800",
@@ -205,8 +199,8 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
               categoryFilter === cat
                 ? "bg-zinc-600 text-white"
-                : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
-            } ${CATEGORY_COLORS[cat]}`}
+                : `bg-zinc-200 dark:bg-zinc-800 hover:text-zinc-900 dark:hover:text-white ${TAG_TEXT_COLORS[cat]}`
+            }`}
           >
             {cat}
           </button>
@@ -227,7 +221,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             <div key={category} className="space-y-2">
               {!debouncedQuery && (
                 <h3 className={`text-xs font-medium uppercase tracking-wide ${
-                  CATEGORY_COLORS[category as TagCategory] || "text-zinc-400"
+                  TAG_TEXT_COLORS[category as TagCategory] || "text-zinc-400"
                 }`}>
                   {category} ({categoryTags.length})
                 </h3>
@@ -246,7 +240,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
                       CATEGORY_BG_COLORS[tag.category]
                     }`}
                   >
-                    <span className={CATEGORY_COLORS[tag.category]}>
+                    <span className={TAG_TEXT_COLORS[tag.category]}>
                       {tag.name.replace(/_/g, " ")}
                     </span>
                     <span className="text-xs text-zinc-500 group-hover:text-zinc-400">

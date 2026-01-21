@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { TagCategory } from "@/generated/prisma/enums";
+import { TAG_LINK_COLORS } from "@/lib/tag-colors";
 
 interface Tag {
   id: number;
@@ -22,14 +23,6 @@ const CATEGORY_ORDER: TagCategory[] = [
   TagCategory.GENERAL,
   TagCategory.META,
 ];
-
-const CATEGORY_COLORS: Record<TagCategory, string> = {
-  [TagCategory.ARTIST]: "text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300",
-  [TagCategory.COPYRIGHT]: "text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300",
-  [TagCategory.CHARACTER]: "text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300",
-  [TagCategory.GENERAL]: "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
-  [TagCategory.META]: "text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300",
-};
 
 const CATEGORY_LABELS: Record<TagCategory, string> = {
   [TagCategory.ARTIST]: "Artists",
@@ -91,7 +84,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                   <li key={tag.id} className="flex items-baseline gap-1">
                     <Link
                       href={buildSearchUrl(tag.name)}
-                      className={`truncate text-sm ${CATEGORY_COLORS[category]} ${
+                      className={`truncate text-sm ${TAG_LINK_COLORS[category]} ${
                         isActive ? "font-bold" : ""
                       }`}
                       title={tag.name}

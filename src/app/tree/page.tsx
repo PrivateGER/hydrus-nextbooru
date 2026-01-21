@@ -5,8 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { TagTreeSelector } from "@/components/tag-tree-selector";
 import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
-
-const POSTS_PER_PAGE = 48;
+import { POSTS_PER_PAGE } from "@/lib/pagination";
 
 interface Post {
   hash: string;
