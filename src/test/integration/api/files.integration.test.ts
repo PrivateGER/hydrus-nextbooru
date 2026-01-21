@@ -138,6 +138,129 @@ describe('GET /api/files/[filename] (Integration)', () => {
 
       expect(response.headers.get('Accept-Ranges')).toBe('bytes');
     });
+
+    it('should handle suffix range request (bytes=-N)', async () => {
+      const hash = randomHash();
+      // Create content where we can verify the last 100 bytes
+      const content = Buffer.alloc(1000);
+      content.fill('a', 0, 900);
+      content.fill('b', 900, 1000); // Last 100 bytes are 'b'
+      createTestFile(hash, '.mp4', content);
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=-100' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('Content-Range')).toBe('bytes 900-999/1000');
+      expect(response.headers.get('Content-Length')).toBe('100');
+
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content.subarray(900, 1000));
+    });
+
+    it('should handle suffix range larger than file size', async () => {
+      const hash = randomHash();
+      const content = Buffer.from('small file');
+      createTestFile(hash, '.mp4', content);
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=-1000' }, // Request more than file size
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(206);
+      // Should return entire file when suffix exceeds file size
+      expect(response.headers.get('Content-Range')).toBe(`bytes 0-${content.length - 1}/${content.length}`);
+      expect(response.headers.get('Content-Length')).toBe(String(content.length));
+
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content);
+    });
+
+    it('should return 416 for invalid suffix range (zero)', async () => {
+      const hash = randomHash();
+      createTestFile(hash, '.mp4', Buffer.alloc(100));
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=-0' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get('Content-Range')).toBe('bytes */100');
+    });
+
+    it('should return 416 for invalid suffix range (negative)', async () => {
+      const hash = randomHash();
+      createTestFile(hash, '.mp4', Buffer.alloc(100));
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=--50' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(416);
+    });
+
+    it('should clamp end to file size when range exceeds bounds', async () => {
+      const hash = randomHash();
+      const content = Buffer.alloc(100, 'x');
+      createTestFile(hash, '.mp4', content);
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=50-999' }, // End exceeds file size
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('Content-Range')).toBe('bytes 50-99/100');
+      expect(response.headers.get('Content-Length')).toBe('50');
+
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      expect(responseBuffer).toEqual(content.subarray(50, 100));
+    });
+
+    it('should handle open-ended range (bytes=N-)', async () => {
+      const hash = randomHash();
+      const content = Buffer.alloc(100, 'x');
+      createTestFile(hash, '.mp4', content);
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=80-' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('Content-Range')).toBe('bytes 80-99/100');
+      expect(response.headers.get('Content-Length')).toBe('20');
+    });
+
+    it('should return 416 for start beyond file size', async () => {
+      const hash = randomHash();
+      createTestFile(hash, '.mp4', Buffer.alloc(100));
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=200-300' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get('Content-Range')).toBe('bytes */100');
+    });
+
+    it('should return 416 when start > end', async () => {
+      const hash = randomHash();
+      createTestFile(hash, '.mp4', Buffer.alloc(100));
+
+      const request = new NextRequest(`http://localhost/api/files/${hash}.mp4`, {
+        headers: { Range: 'bytes=50-20' },
+      });
+      const response = await GET(request, { params: Promise.resolve({ filename: `${hash}.mp4` }) });
+
+      expect(response.status).toBe(416);
+    });
   });
 
   describe('MIME types', () => {
