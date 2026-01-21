@@ -1,6 +1,8 @@
+import { NextRequest, NextResponse } from "next/server";
+
 /**
- * Simple in-memory rate limiter for login attempts.
- * Uses a sliding window approach with lazy cleanup of expired entries.
+ * Simple in-memory rate limiter.
+ * Sliding window with lazy cleanup.
  */
 
 interface RateLimitEntry {
@@ -74,4 +76,66 @@ export function checkRateLimit(
     remaining: limit - entry.count,
     resetIn: entry.resetAt - now,
   };
+}
+
+/**
+ * Extract client IP from request headers.
+ */
+function getClientIP(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  const realIP = request.headers.get("x-real-ip");
+  if (realIP) {
+    return realIP.trim();
+  }
+
+  // Fallback for direct connections (development)
+  return "unknown";
+}
+
+/** Rate limit configuration for an API endpoint */
+export interface ApiRateLimitConfig {
+  /** Prefix for the rate limit key (e.g., "posts-search") */
+  prefix: string;
+  /** Maximum requests allowed in the window */
+  limit: number;
+  /** Window duration in milliseconds */
+  windowMs: number;
+}
+
+/**
+ * Check rate limit for an API request and return a 429 response if exceeded.
+ *
+ * @param request - Next.js request object
+ * @param config - Rate limit configuration
+ * @returns NextResponse with 429 status if rate limited, null otherwise
+ */
+export function checkApiRateLimit(
+  request: NextRequest,
+  config: ApiRateLimitConfig
+): NextResponse | null {
+  const ip = getClientIP(request);
+  const key = `${config.prefix}:${ip}`;
+
+  const result = checkRateLimit(key, config.limit, config.windowMs);
+
+  if (!result.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil(result.resetIn / 1000)),
+          "X-RateLimit-Limit": String(config.limit),
+          "X-RateLimit-Remaining": "0",
+          "X-RateLimit-Reset": String(Math.ceil(result.resetIn / 1000)),
+        },
+      }
+    );
+  }
+
+  return null;
 }

@@ -80,11 +80,49 @@ export async function GET(
 
     if (rangeHeader) {
       const parts = rangeHeader.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-      const chunkSize = end - start + 1;
+      let start: number;
+      let end: number;
 
-      const stream = createReadStream(filePath, { start, end });
+      // Handle suffix range (e.g., "bytes=-1000" means last 1000 bytes)
+      if (parts[0] === "") {
+        const suffixLength = parseInt(parts[1], 10);
+        if (Number.isNaN(suffixLength) || suffixLength <= 0) {
+          return new NextResponse(null, {
+            status: 416, // Range Not Satisfiable
+            headers: {
+              "Content-Range": `bytes */${stats.size}`,
+            },
+          });
+        }
+        start = Math.max(stats.size - suffixLength, 0);
+        end = stats.size - 1;
+      } else {
+        // Standard range (e.g., "bytes=0-1023" or "bytes=500-")
+        start = parseInt(parts[0], 10);
+        end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+
+        // Validate range bounds
+        if (
+          Number.isNaN(start) ||
+          Number.isNaN(end) ||
+          start < 0 ||
+          start > end ||
+          start >= stats.size
+        ) {
+          return new NextResponse(null, {
+            status: 416, // Range Not Satisfiable
+            headers: {
+              "Content-Range": `bytes */${stats.size}`,
+            },
+          });
+        }
+      }
+
+      // Clamp end to file size (browsers may request beyond file size)
+      const clampedEnd = Math.min(end, stats.size - 1);
+      const chunkSize = clampedEnd - start + 1;
+
+      const stream = createReadStream(filePath, { start, end: clampedEnd });
       const webStream = Readable.toWeb(stream) as ReadableStream;
 
       return new NextResponse(webStream, {
@@ -92,7 +130,7 @@ export async function GET(
         headers: {
           "Content-Type": mimeType,
           "Content-Length": String(chunkSize),
-          "Content-Range": `bytes ${start}-${end}/${stats.size}`,
+          "Content-Range": `bytes ${start}-${clampedEnd}/${stats.size}`,
           "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=31536000, immutable",
           "ETag": etag,

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchPosts } from "@/lib/search";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 
 const MAX_PAGE = 10000;
+
+const RATE_LIMIT_CONFIG = {
+  prefix: "posts-search",
+  limit: 60,
+  windowMs: 60 * 1000,
+};
 
 /**
  * Search posts by included and excluded tags with pagination and support for wildcard patterns.
@@ -20,6 +27,9 @@ const MAX_PAGE = 10000;
  *   - `resolvedWildcards` (optional): array of resolved wildcard patterns with matched `tagIds`, `tagNames`, `tagCategories`, and `truncated` flag
  */
 export async function GET(request: NextRequest) {
+  const rateLimitResponse = checkApiRateLimit(request, RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
   const notesQuery = searchParams.get("notes")?.trim() || "";
