@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   isNegatedTag,
@@ -99,6 +106,10 @@ export function SearchBar({
 
     const isInputNegated = isNegatedTag(normalizedTag);
     const baseTag = getBaseTagName(normalizedTag);
+
+    // Ignore a lone "-" (empty base tag after stripping negation)
+    if (normalizedTag === "-" || baseTag === "") return;
+
     const shouldNegate = negated || isInputNegated;
     const finalTag = shouldNegate ? `-${baseTag}` : baseTag;
 
@@ -142,7 +153,7 @@ export function SearchBar({
     }
   }, [selectedTags, router]);
 
-  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLInputElement>) => {
     const pastedText = e.clipboardData.getData("text").trim();
     if (isValidSha256Hash(pastedText)) {
       e.preventDefault();
@@ -184,7 +195,7 @@ export function SearchBar({
     }
   }, [searchMode, inputValue, selectedTags, router]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
       if (searchMode === "notes") {

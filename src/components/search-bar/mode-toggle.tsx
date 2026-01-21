@@ -12,10 +12,15 @@ interface ModeToggleProps {
 export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
   return (
     <div className="flex items-center gap-2 mb-2">
-      <div className="inline-flex rounded-lg bg-zinc-200 dark:bg-zinc-800 p-1">
+      <div
+        role="group"
+        aria-label="Search mode"
+        className="inline-flex rounded-lg bg-zinc-200 dark:bg-zinc-800 p-1"
+      >
         <button
           type="button"
           onClick={() => onModeChange("tags")}
+          aria-pressed={mode === "tags"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
             mode === "tags"
               ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
@@ -29,6 +34,7 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
         <button
           type="button"
           onClick={() => onModeChange("notes")}
+          aria-pressed={mode === "notes"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
             mode === "notes"
               ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
