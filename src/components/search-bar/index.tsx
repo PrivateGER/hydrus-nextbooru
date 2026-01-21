@@ -8,10 +8,10 @@ import {
   toggleTagNegation,
   isValidSha256Hash,
 } from "@/lib/tag-utils";
-import { ModeToggle, type SearchMode } from "./mode-toggle";
-import { SelectedTagChip } from "./selected-tag-chip";
-import { SuggestionsDropdown } from "./suggestions-dropdown";
-import { useTagSuggestions } from "./use-tag-suggestions";
+import { ModeToggle, type SearchMode } from "@/components/search-bar/mode-toggle";
+import { SelectedTagChip } from "@/components/search-bar/selected-tag-chip";
+import { SuggestionsDropdown } from "@/components/search-bar/suggestions-dropdown";
+import { useTagSuggestions } from "@/components/search-bar/use-tag-suggestions";
 
 interface SearchBarProps {
   initialTags?: string[];

@@ -1,5 +1,6 @@
 "use client";
 
+import { XMarkIcon, Cog6ToothIcon, SparklesIcon, MinusIcon } from "@heroicons/react/24/outline";
 import { isNegatedTag, isWildcardTag, getBaseTagName } from "@/lib/tag-utils";
 import { isMetaTag } from "@/lib/meta-tags-shared";
 
@@ -31,22 +32,23 @@ export function SelectedTagChip({ tag, canToggle, onToggleNegation, onRemove }: 
       <button
         type="button"
         onClick={() => canToggle && onToggleNegation(tag)}
-        className={`px-2 py-0.5 rounded-l ${canToggle ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
+        className={`flex items-center px-2 py-0.5 rounded-l ${canToggle ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
         title={canToggle ? (negated ? "Click to include" : "Click to exclude") : "Tag filter"}
       >
-        {negated && <span className="text-red-400 font-bold">-</span>}
-        {isMeta && !negated && <span className="text-cyan-500 text-xs mr-1">⚙</span>}
+        {negated && <MinusIcon className="h-3 w-3 text-red-400 mr-0.5" aria-hidden="true" />}
+        {isMeta && !negated && <Cog6ToothIcon className="h-3 w-3 text-cyan-500 mr-1" aria-hidden="true" />}
         <span className={negated ? "line-through opacity-80" : ""}>
           {displayName}
-          {wildcard && <span className="text-purple-400 ml-0.5">✱</span>}
+          {wildcard && <SparklesIcon className="inline h-3 w-3 text-purple-400 ml-0.5" aria-hidden="true" />}
         </span>
       </button>
       <button
         type="button"
         onClick={() => onRemove(tag)}
-        className="px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 hover:bg-black/10 dark:text-zinc-400 dark:hover:text-white dark:hover:bg-white/10 rounded-r"
+        className="flex items-center px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 hover:bg-black/10 dark:text-zinc-400 dark:hover:text-white dark:hover:bg-white/10 rounded-r"
+        aria-label={`Remove ${displayName}`}
       >
-        &times;
+        <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
     </span>
   );

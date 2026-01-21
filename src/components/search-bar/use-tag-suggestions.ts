@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { TagSuggestion } from "./suggestions-dropdown";
+import type { TagSuggestion } from "@/components/search-bar/suggestions-dropdown";
 
 interface UseTagSuggestionsOptions {
   selectedTags: string[];
@@ -111,6 +111,8 @@ export function useTagSuggestions({
       return;
     }
 
+    const controller = new AbortController();
+
     const timer = setTimeout(async () => {
       setIsLoading(true);
       try {
@@ -120,19 +122,28 @@ export function useTagSuggestions({
         if (selectedTags.length > 0) {
           params.set("selected", selectedTags.join(","));
         }
-        const response = await fetch(`/api/tags/search?${params.toString()}`);
+        const response = await fetch(`/api/tags/search?${params.toString()}`, {
+          signal: controller.signal,
+        });
         const data = await response.json();
         setSuggestions(data.tags);
         setShowSuggestions(true);
         setHighlightedIndex(-1);
       } catch (error) {
+        // Ignore AbortError - request was intentionally cancelled
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
         console.error("Error fetching suggestions:", error);
       } finally {
         setIsLoading(false);
       }
     }, 200);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [searchQuery, selectedTags, isExcludeMode, enabled]);
 
   // Reset highlight when mode changes
