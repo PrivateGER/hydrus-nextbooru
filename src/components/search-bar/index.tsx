@@ -160,12 +160,25 @@ export function SearchBar({
         router.push(`/search?${params.toString()}`);
       }
     } else {
-      const allTags = inputValue.trim()
+      const rawTags = inputValue.trim()
         ? [...selectedTags, inputValue.trim().toLowerCase()]
         : selectedTags;
 
-      if (allTags.length > 0) {
-        params.set("tags", allTags.join(","));
+      // Normalize: filter out empty/invalid tags and dedupe by base tag name
+      const seenBaseTags = new Set<string>();
+      const normalizedTags = rawTags.filter((tag) => {
+        const trimmed = tag.trim();
+        // Filter out empty tags or lone "-"
+        if (!trimmed || trimmed === "-") return false;
+
+        const baseTag = getBaseTagName(trimmed);
+        if (seenBaseTags.has(baseTag)) return false;
+        seenBaseTags.add(baseTag);
+        return true;
+      });
+
+      if (normalizedTags.length > 0) {
+        params.set("tags", normalizedTags.join(","));
         router.push(`/search?${params.toString()}`);
       }
     }
