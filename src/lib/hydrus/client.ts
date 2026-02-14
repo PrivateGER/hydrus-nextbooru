@@ -7,6 +7,7 @@ import type {
   HydrusFileSortType,
 } from "./types";
 import { hydrusLog } from "@/lib/logger";
+import { withSpan } from "@/lib/tracing";
 
 export interface HydrusClientConfig {
   apiUrl: string;
@@ -27,45 +28,58 @@ export class HydrusClient {
   }
 
   private async request<T>(endpoint: string, params?: Record<string, unknown>): Promise<T> {
-    const url = new URL(endpoint, this.apiUrl);
+    return withSpan(
+      `hydrus.${endpoint.replace(/^\//, "").replace(/\//g, ".")}`,
+      async (span) => {
+        const url = new URL(endpoint, this.apiUrl);
 
-    // Add query params
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value !== undefined && value !== null) {
-          if (Array.isArray(value) || typeof value === "object") {
-            url.searchParams.set(key, JSON.stringify(value));
-          } else {
-            url.searchParams.set(key, String(value));
+        // Add query params
+        if (params) {
+          for (const [key, value] of Object.entries(params)) {
+            if (value !== undefined && value !== null) {
+              if (Array.isArray(value) || typeof value === "object") {
+                url.searchParams.set(key, JSON.stringify(value));
+              } else {
+                url.searchParams.set(key, String(value));
+              }
+            }
           }
         }
+
+        span.setAttributes({
+          "hydrus.endpoint": endpoint,
+          "http.method": "GET",
+          "http.url": url.toString(),
+        });
+
+        const startTime = Date.now();
+        hydrusLog.debug({ endpoint, paramKeys: params ? Object.keys(params) : [] }, 'Hydrus API request');
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            "Hydrus-Client-API-Access-Key": this.apiKey,
+          },
+        });
+
+        const durationMs = Date.now() - startTime;
+        span.setAttribute("http.status_code", response.status);
+        span.setAttribute("hydrus.duration_ms", durationMs);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          hydrusLog.error({ endpoint, status: response.status, body: errorText.slice(0, 500), durationMs }, 'Hydrus API error');
+          throw new HydrusApiError(
+            `Hydrus API error: ${response.status} ${response.statusText}`,
+            response.status,
+            errorText
+          );
+        }
+
+        hydrusLog.debug({ endpoint, status: response.status, durationMs }, 'Hydrus API response');
+
+        return response.json() as Promise<T>;
       }
-    }
-
-    const startTime = Date.now();
-    hydrusLog.debug({ endpoint, paramKeys: params ? Object.keys(params) : [] }, 'Hydrus API request');
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        "Hydrus-Client-API-Access-Key": this.apiKey,
-      },
-    });
-
-    const durationMs = Date.now() - startTime;
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      hydrusLog.error({ endpoint, status: response.status, body: errorText.slice(0, 500), durationMs }, 'Hydrus API error');
-      throw new HydrusApiError(
-        `Hydrus API error: ${response.status} ${response.statusText}`,
-        response.status,
-        errorText
-      );
-    }
-
-    hydrusLog.debug({ endpoint, status: response.status, durationMs }, 'Hydrus API response');
-
-    return response.json() as Promise<T>;
+    );
   }
 
   /**
