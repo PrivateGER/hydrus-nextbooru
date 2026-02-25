@@ -12,6 +12,20 @@ import type {
 
 type ProviderTab = "openrouter" | "local";
 
+function isBulkTranslationProgressPayload(value: unknown): value is BulkTranslationProgress {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as Partial<BulkTranslationProgress> & Record<string, unknown>;
+
+  return (
+    typeof candidate.status === "string" &&
+    typeof candidate.total === "number" &&
+    typeof candidate.completed === "number" &&
+    typeof candidate.failed === "number" &&
+    Array.isArray(candidate.errors)
+  );
+}
+
 export interface UseTranslationReturn {
   // Settings
   settings: TranslationSettings | null;
@@ -99,8 +113,8 @@ export function useTranslation(
   const [isTranslating, setIsTranslating] = useState(false);
   const [isNoteTranslating, setIsNoteTranslating] = useState(false);
 
-  const titlePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const notePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const titlePollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const notePollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -196,7 +210,29 @@ export function useTranslation(
   const fetchNoteBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
     try {
       const response = await fetch("/api/admin/note-translations");
-      const data: BulkTranslationProgress = await response.json();
+      const data: unknown = await response.json();
+
+      if (!response.ok) {
+        const error =
+          data && typeof data === "object" && "error" in data
+            ? (data as { error?: unknown }).error
+            : data;
+        console.error("Error fetching note translation progress:", error);
+        return null;
+      }
+
+      if (data && typeof data === "object" && "error" in data) {
+        console.error(
+          "Error fetching note translation progress:",
+          (data as { error?: unknown }).error
+        );
+        return null;
+      }
+
+      if (!isBulkTranslationProgressPayload(data)) {
+        console.error("Invalid note translation progress payload:", data);
+        return null;
+      }
 
       if (mountedRef.current) {
         setNoteBulkProgress(data);
