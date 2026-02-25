@@ -170,7 +170,7 @@ export function getEffectiveModel(settings: OpenRouterSettings): string {
   if (settings.baseUrl && isCustomEndpoint(settings.baseUrl)) {
     if (!settings.model) {
       throw new OpenRouterConfigError(
-        "Model not configured for Local provider. Set it in Admin Settings."
+        "Model not configured for custom OpenRouter endpoint. Set it in Admin Settings."
       );
     }
     return settings.model;

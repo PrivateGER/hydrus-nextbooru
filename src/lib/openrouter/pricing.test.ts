@@ -93,7 +93,12 @@ describe("getModelPricing", () => {
   it("should return default pricing when API key is not configured", async () => {
     // Mock settings to return no API key
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
@@ -107,10 +112,35 @@ describe("getModelPricing", () => {
 
   it("should return default pricing for custom endpoints", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi
-        .fn()
-        .mockResolvedValue({ apiKey: "test-key", baseUrl: "https://example.com/v1" }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: "test-key", model: null, baseUrl: "https://example.com/v1" },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(true),
+    }));
+
+    const fetchSpy = vi.spyOn(global, "fetch");
+
+    const { getModelPricing: getModelPricingMocked } = await import(
+      "./pricing"
+    );
+    const pricing = await getModelPricingMocked("custom-model");
+
+    expect(pricing).toEqual(DEFAULT_PRICING);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("should return default pricing for local provider even when local API key exists", async () => {
+    vi.doMock("./settings", () => ({
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "local",
+        targetLang: "en",
+        openrouter: { apiKey: "openrouter-key", model: null, baseUrl: null },
+        local: { apiKey: "local-key", model: "local-model", baseUrl: "https://local.example/v1" },
+      }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     const fetchSpy = vi.spyOn(global, "fetch");
@@ -136,7 +166,12 @@ describe("warmPricingCache", () => {
 
   it("should not throw when API key is not configured", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
@@ -148,9 +183,12 @@ describe("warmPricingCache", () => {
 
   it("should not throw when fetch fails", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi
-        .fn()
-        .mockResolvedValue({ apiKey: "test-key", baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: "test-key", model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
@@ -175,7 +213,12 @@ describe("estimateTranslationCost", () => {
 
   it("should return zero cost for empty titles array", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
@@ -192,7 +235,12 @@ describe("estimateTranslationCost", () => {
 
   it("should calculate cost based on title tokens", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
@@ -213,7 +261,12 @@ describe("estimateTranslationCost", () => {
 
   it("should scale cost with number of titles", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "openrouter",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: null, model: null, baseUrl: null },
+      }),
       isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 

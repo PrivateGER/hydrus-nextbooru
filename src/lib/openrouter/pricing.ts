@@ -4,7 +4,7 @@
  * Fetches pricing dynamically from OpenRouter's API with caching.
  */
 
-import { getOpenRouterSettings, isCustomEndpoint } from "./settings";
+import { getTranslationSettings, isCustomEndpoint } from "./settings";
 
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
@@ -76,8 +76,12 @@ async function fetchModelPricing(
 export async function getModelPricing(modelId: string): Promise<ModelPricing> {
   const now = Date.now();
 
-  const settings = await getOpenRouterSettings();
-  const useOpenRouterPricing = !!settings.apiKey && !isCustomEndpoint(settings.baseUrl);
+  const settings = await getTranslationSettings();
+  const openrouterSettings = settings.openrouter;
+  const useOpenRouterPricing =
+    settings.provider === "openrouter" &&
+    !!openrouterSettings.apiKey &&
+    !isCustomEndpoint(openrouterSettings.baseUrl);
 
   if (!useOpenRouterPricing) {
     return DEFAULT_PRICING;
@@ -90,7 +94,7 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
 
   // Try to refresh cache
   try {
-    pricingCache = await fetchModelPricing(settings.apiKey);
+    pricingCache = await fetchModelPricing(openrouterSettings.apiKey!);
     cacheTimestamp = now;
     return pricingCache.get(modelId) ?? DEFAULT_PRICING;
   } catch (error) {
@@ -118,9 +122,14 @@ export function getModelPricingSync(modelId: string): ModelPricing {
  */
 export async function warmPricingCache(): Promise<void> {
   try {
-    const settings = await getOpenRouterSettings();
-    if (settings.apiKey && !isCustomEndpoint(settings.baseUrl)) {
-      pricingCache = await fetchModelPricing(settings.apiKey);
+    const settings = await getTranslationSettings();
+    const openrouterSettings = settings.openrouter;
+    if (
+      settings.provider === "openrouter" &&
+      openrouterSettings.apiKey &&
+      !isCustomEndpoint(openrouterSettings.baseUrl)
+    ) {
+      pricingCache = await fetchModelPricing(openrouterSettings.apiKey);
       cacheTimestamp = Date.now();
     }
   } catch (error) {
