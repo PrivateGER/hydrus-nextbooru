@@ -1,10 +1,14 @@
 export { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "./client";
+export { DEFAULT_BASE_URL, normalizeBaseUrl, isCustomEndpointUrl } from "./base-url";
 export {
   getOpenRouterSettings,
+  getTranslationSettings,
   getOpenRouterClient,
   updateSetting,
   updateSettings,
   maskApiKey,
+  isCustomEndpoint,
+  getEffectiveModel,
 } from "./settings";
 export {
   SETTINGS_KEYS,

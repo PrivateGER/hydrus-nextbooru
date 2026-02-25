@@ -4,7 +4,7 @@
  * Fetches pricing dynamically from OpenRouter's API with caching.
  */
 
-import { getOpenRouterSettings } from "./settings";
+import { getOpenRouterSettings, isCustomEndpoint } from "./settings";
 
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
@@ -76,6 +76,13 @@ async function fetchModelPricing(
 export async function getModelPricing(modelId: string): Promise<ModelPricing> {
   const now = Date.now();
 
+  const settings = await getOpenRouterSettings();
+  const useOpenRouterPricing = settings.apiKey && !isCustomEndpoint(settings.baseUrl);
+
+  if (!useOpenRouterPricing) {
+    return DEFAULT_PRICING;
+  }
+
   // Check if cache is valid
   if (pricingCache && now - cacheTimestamp < CACHE_TTL_MS) {
     return pricingCache.get(modelId) ?? DEFAULT_PRICING;
@@ -83,7 +90,6 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
 
   // Try to refresh cache
   try {
-    const settings = await getOpenRouterSettings();
     if (settings.apiKey) {
       pricingCache = await fetchModelPricing(settings.apiKey);
       cacheTimestamp = now;
@@ -115,7 +121,7 @@ export function getModelPricingSync(modelId: string): ModelPricing {
 export async function warmPricingCache(): Promise<void> {
   try {
     const settings = await getOpenRouterSettings();
-    if (settings.apiKey) {
+    if (settings.apiKey && !isCustomEndpoint(settings.baseUrl)) {
       pricingCache = await fetchModelPricing(settings.apiKey);
       cacheTimestamp = Date.now();
     }
