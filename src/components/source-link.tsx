@@ -1,5 +1,6 @@
 import { SourceType } from "@/generated/prisma/client";
 import type { DisplaySource } from "@/lib/hydrus/url-parser";
+import type { ReactElement } from "react";
 
 // Source icons as inline SVGs
 function PixivIcon({ className }: { className?: string }) {
@@ -52,7 +53,9 @@ function LinkIcon({ className }: { className?: string }) {
   );
 }
 
-const SOURCE_ICONS: Partial<Record<SourceType, ({ className }: { className?: string }) => JSX.Element>> = {
+type SourceIconComponent = ({ className }: { className?: string }) => ReactElement;
+
+const SOURCE_ICONS: Partial<Record<SourceType, SourceIconComponent>> = {
   [SourceType.PIXIV]: PixivIcon,
   [SourceType.TWITTER]: TwitterIcon,
   [SourceType.DEVIANTART]: DeviantArtIcon,

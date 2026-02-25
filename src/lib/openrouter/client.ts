@@ -107,15 +107,22 @@ export class OpenRouterClient {
       );
     }
 
-    const data = (await response.json()) as {
-      data?: { id?: string; name?: string }[];
-      models?: { id?: string; key?: string; name?: string; display_name?: string }[];
+    type ModelListEntry = {
+      id?: string;
+      key?: string;
+      name?: string;
+      display_name?: string;
     };
 
-    const models =
+    const data = (await response.json()) as {
+      data?: ModelListEntry[];
+      models?: ModelListEntry[];
+    };
+
+    const models: ModelListEntry[] =
       data.data ??
       data.models ??
-      (Array.isArray(data) ? (data as { id?: string; key?: string; name?: string; display_name?: string }[]) : []);
+      (Array.isArray(data) ? (data as ModelListEntry[]) : []);
 
     return models
       .map((model) => {

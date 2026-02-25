@@ -255,8 +255,8 @@ export function useTranslation(
         throw new Error(data.error || "Failed to fetch models");
       }
 
-      const models = Array.isArray(data.models)
-        ? data.models.map((model: { id: string; name?: string }) => ({
+      const models: ModelDefinition[] = Array.isArray(data.models)
+        ? data.models.map((model: { id: string; name?: string }): ModelDefinition => ({
             id: model.id,
             name: model.name || model.id,
           }))

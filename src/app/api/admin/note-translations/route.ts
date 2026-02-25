@@ -70,11 +70,11 @@ export async function POST(request: NextRequest) {
     // Ignore parse errors and use default target language from settings
   }
 
-  let releaseLock: (() => void) | null = null;
+  let releaseLock: () => void = () => {};
 
   try {
     noteTranslationLock = new Promise((resolve) => {
-      releaseLock = resolve;
+      releaseLock = () => resolve();
     });
 
     noteTranslationProgress = {
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         }
       })
       .finally(() => {
-        releaseLock?.();
+        releaseLock();
         noteTranslationLock = null;
         noteTranslationStarting = false;
       });
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
       status: "running",
     });
   } catch (error) {
-    releaseLock?.();
+    releaseLock();
     noteTranslationLock = null;
     noteTranslationStarting = false;
     aiLog.error({ error: String(error) }, "Failed to initialize bulk note translation");

@@ -52,7 +52,7 @@ export async function batchTranslateNotes(
     ? [...new Set(noteIds)].filter((id) => Number.isSafeInteger(id) && id > 0)
     : undefined;
 
-  if (noteIds && scopedNoteIds.length === 0) {
+  if (scopedNoteIds && scopedNoteIds.length === 0) {
     return {
       status: "completed",
       total: 0,
