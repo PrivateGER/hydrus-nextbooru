@@ -1,29 +1,34 @@
-import { defineConfig, mergeConfig } from 'vitest/config';
-import baseConfig from './vitest.config';
+import { defineConfig } from 'vitest/config';
+import path from 'path';
 
-export default mergeConfig(baseConfig, defineConfig({
+export default defineConfig({
   test: {
+    globals: true,
+    environment: 'node',
+
     // Only run integration tests
     include: ['src/test/integration/**/*.integration.test.ts'],
     exclude: ['node_modules', '.next'],
 
-    // Use integration-specific setup
-    setupFiles: ['./src/test/integration/vitest-setup.ts'],
+    // Shared env setup + integration-specific setup
+    setupFiles: ['./src/test/setup.ts', './src/test/integration/vitest-setup.ts'],
 
     // Longer timeouts for container startup
-    testTimeout: 60000,  // 60s per test
-    hookTimeout: 120000, // 2min for beforeAll/afterAll (container startup)
+    testTimeout: 60000,
+    hookTimeout: 120000,
 
-    // Single thread required for shared database connection
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
+    // Keep container-backed suites strictly single-worker in Vitest v4.
+    pool: 'forks',
+    fileParallelism: false,
+    maxWorkers: 1,
 
-    // Disable coverage for integration tests (run separately)
     coverage: {
       enabled: false,
     },
   },
-}));
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+});

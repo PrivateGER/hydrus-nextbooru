@@ -4,9 +4,33 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { execSync } from 'child_process';
 
-let container: StartedPostgreSqlContainer;
-let pool: Pool;
-let prisma: PrismaClient;
+type DockerApiError = Error & {
+  statusCode?: number;
+  reason?: string;
+  json?: { message?: string };
+};
+
+let container: StartedPostgreSqlContainer | undefined;
+let pool: Pool | undefined;
+let prisma: PrismaClient | undefined;
+
+function isContainerAlreadyStoppedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const dockerError = error as DockerApiError;
+  const statusCode = dockerError.statusCode;
+  const message = error.message.toLowerCase();
+  const reason = dockerError.reason?.toLowerCase() ?? '';
+  const dockerMessage = dockerError.json?.message?.toLowerCase() ?? '';
+
+  return statusCode === 404
+    || message.includes('no such container')
+    || message.includes('not running')
+    || reason.includes('not running')
+    || dockerMessage.includes('not running');
+}
 
 /**
  * Start PostgreSQL container and run migrations.
@@ -53,8 +77,24 @@ export async function setupTestDatabase(): Promise<{
  */
 export async function teardownTestDatabase(): Promise<void> {
   await prisma?.$disconnect();
+  prisma = undefined;
+
   await pool?.end();
-  await container?.stop();
+  pool = undefined;
+
+  if (!container) {
+    return;
+  }
+
+  try {
+    await container.stop();
+  } catch (error) {
+    if (!isContainerAlreadyStoppedError(error)) {
+      throw error;
+    }
+  } finally {
+    container = undefined;
+  }
 }
 
 /**

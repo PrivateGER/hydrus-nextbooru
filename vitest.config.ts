@@ -8,9 +8,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    exclude: ['node_modules', '.next', 'src/test/perf/**'],
+    // Unit suite only; integration/perf run via dedicated configs.
+    exclude: ['node_modules', '.next', 'src/test/perf/**', 'src/test/integration/**'],
     setupFiles: ['./src/test/setup.ts'],
-    hookTimeout: 60000, // Allow time for Testcontainers to pull images
+    hookTimeout: 60000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
