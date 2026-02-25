@@ -45,8 +45,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      - name: Run tests
-        run: npm run test:coverage -- --reporter=junit --outputFile=test-report.junit.xml
+      - name: Run unit tests with coverage
+        run: npm run test:coverage -- --reporter=junit --outputFile=test-report.junit.xml --reporter=default
+
+      - name: Run integration tests
+        run: npm run test:integration
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
