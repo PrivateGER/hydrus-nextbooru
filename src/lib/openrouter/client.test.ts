@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OpenRouterClient, OpenRouterConfigError } from "./client";
+import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "./client";
 
 const createResponse = (body: unknown, ok = true, status = 200) => ({
   ok,
@@ -92,5 +92,63 @@ describe("OpenRouterClient", () => {
       { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B" },
       { id: "custom-model", name: "Custom Model" },
     ]);
+  });
+
+  it("should parse models from OpenRouter-style data responses", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        data: [
+          { id: "provider/model-a", name: "Model A" },
+          { id: "provider/model-b" },
+          { name: "Missing Id" },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "provider/model-a", name: "Model A" },
+      { id: "provider/model-b", name: "provider/model-b" },
+    ]);
+  });
+
+  it("should parse models from array-root responses", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse([
+        { id: "array/model-a", display_name: "Array Model A" },
+        { key: "array/model-b" },
+      ])
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "array/model-a", name: "Array Model A" },
+      { id: "array/model-b", name: "array/model-b" },
+    ]);
+  });
+
+  it("should throw OpenRouterApiError when model listing fails", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({ error: "rate limited" }, false, 429)
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    await expect(client.listModels()).rejects.toBeInstanceOf(OpenRouterApiError);
   });
 });

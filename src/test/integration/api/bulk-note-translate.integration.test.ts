@@ -120,6 +120,73 @@ describe("Bulk Note Translation API", () => {
     expect(translations).toHaveLength(2);
   });
 
+  it("returns 409 when a second translation start is requested while one is running", async () => {
+    const prisma = getTestPrisma();
+    openRouterState.delayMs = 250;
+
+    await prisma.settings.upsert({
+      where: { key: SETTINGS_KEYS.API_KEY },
+      update: { value: "test-api-key" },
+      create: { key: SETTINGS_KEYS.API_KEY, value: "test-api-key" },
+    });
+
+    const post = await createPost(prisma, { hash: "9".repeat(64), hydrusFileId: 99 });
+    await prisma.note.create({
+      data: { postId: post.id, name: "running", content: "in progress content" },
+    });
+
+    const { POST } = await import("@/app/api/admin/note-translations/route");
+    const firstResponse = await POST(
+      new NextRequest("http://localhost/api/admin/note-translations", {
+        method: "POST",
+      })
+    );
+    const secondResponse = await POST(
+      new NextRequest("http://localhost/api/admin/note-translations", {
+        method: "POST",
+      })
+    );
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(409);
+
+    const secondData = await secondResponse.json();
+    expect(secondData.error).toBe("Translation already in progress");
+
+    const status = await waitForTranslationComplete();
+    expect(status.status).toBe("completed");
+  });
+
+  it("ignores invalid JSON request bodies and still starts translation", async () => {
+    const prisma = getTestPrisma();
+
+    await prisma.settings.upsert({
+      where: { key: SETTINGS_KEYS.API_KEY },
+      update: { value: "test-api-key" },
+      create: { key: SETTINGS_KEYS.API_KEY, value: "test-api-key" },
+    });
+
+    const post = await createPost(prisma, { hash: "7".repeat(64), hydrusFileId: 77 });
+    await prisma.note.create({
+      data: { postId: post.id, name: "Invalid JSON", content: "翻訳テスト" },
+    });
+
+    const { POST } = await import("@/app/api/admin/note-translations/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/admin/note-translations", {
+        method: "POST",
+        body: "{",
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    expect(response.status).toBe(200);
+
+    const status = await waitForTranslationComplete();
+    expect(status.status).toBe("completed");
+    expect(status.total).toBe(1);
+  });
+
   it("returns 400 on cancel when no note translation is running", async () => {
     const { DELETE } = await import("@/app/api/admin/note-translations/route");
     const response = await DELETE();

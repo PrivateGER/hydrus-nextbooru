@@ -142,6 +142,19 @@ describe("batchTranslateNotes", () => {
     expect(result.errors.some((error) => error.includes("Authentication failed"))).toBe(true);
   });
 
+  it("replaces overflow error entries with auth error when maxErrors is reached", async () => {
+    mockQueryRaw.mockResolvedValue([
+      { contentHash: "a".repeat(64), content: "content A" },
+    ]);
+    mockTranslate.mockRejectedValue(new OpenRouterApiError("Unauthorized", 401));
+
+    const result = await batchTranslateNotes({ batchDelayMs: 0, maxErrors: 1 });
+
+    expect(result.status).toBe("error");
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Authentication failed");
+  });
+
   it("returns error status when client configuration is invalid", async () => {
     mockQueryRaw.mockResolvedValue([
       { contentHash: "a".repeat(64), content: "content A" },
@@ -154,6 +167,27 @@ describe("batchTranslateNotes", () => {
 
     expect(result.status).toBe("error");
     expect(result.errors[0]).toContain("OpenRouter API key not configured");
+  });
+
+  it("returns API-prefixed errors for OpenRouter API failures outside translation loop", async () => {
+    mockQueryRaw.mockResolvedValue([
+      { contentHash: "a".repeat(64), content: "content A" },
+    ]);
+    mockGetOpenRouterClient.mockRejectedValue(new OpenRouterApiError("Rate limited", 429));
+
+    const result = await batchTranslateNotes();
+
+    expect(result.status).toBe("error");
+    expect(result.errors[0]).toContain("API error: Rate limited");
+  });
+
+  it("returns unknown-error message for non-Error failures", async () => {
+    mockQueryRaw.mockRejectedValue("database unavailable");
+
+    const result = await batchTranslateNotes();
+
+    expect(result.status).toBe("error");
+    expect(result.errors[0]).toContain("Unknown error");
   });
 
   it("clamps maxConcurrent to avoid stalled batch loops", async () => {
