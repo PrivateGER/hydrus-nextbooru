@@ -23,12 +23,22 @@ export interface ThumbnailStats {
 }
 
 export interface TranslationSettings {
-  apiKey: string | null;
-  apiKeyConfigured: boolean;
-  model: string;
+  provider: "openrouter" | "local";
   targetLang: string;
   supportedLanguages: { code: string; name: string }[];
   defaultModel: string;
+  openrouter: {
+    apiKey: string | null;
+    apiKeyConfigured: boolean;
+    model: string;
+    baseUrl: string | null;
+  };
+  local: {
+    apiKey: string | null;
+    apiKeyConfigured: boolean;
+    model: string;
+    baseUrl: string | null;
+  };
 }
 
 export interface TranslationEstimate {

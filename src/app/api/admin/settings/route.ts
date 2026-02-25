@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getOpenRouterSettings,
+  getTranslationSettings,
   updateSettings,
   maskApiKey,
   SETTINGS_KEYS,
@@ -10,18 +10,27 @@ import { verifyAdminSession } from "@/lib/auth";
 import { apiLog } from "@/lib/logger";
 
 interface SettingsUpdateBody {
-  apiKey?: string;
-  model?: string;
+  provider?: "openrouter" | "local";
   targetLang?: string;
+  openrouter?: {
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  };
+  local?: {
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  };
 }
 
 /**
- * Return current OpenRouter settings and UI options with the stored API key masked.
+ * Return current translation settings and UI options with stored API keys masked.
  *
  * @returns An object with the current settings:
- * - `apiKey`: masked API key string or `null` if not configured
- * - `apiKeyConfigured`: `true` if an API key is configured, `false` otherwise
- * - `model`: configured model or the OpenRouter default model
+ * - `provider`: selected provider ("openrouter" | "local")
+ * - `openrouter`: masked OpenRouter settings
+ * - `local`: masked local endpoint settings
  * - `targetLang`: configured target language or the OpenRouter default target language
  * - `supportedLanguages`: array of supported language codes for the UI
  * - `defaultModel`: the OpenRouter default model
@@ -31,19 +40,30 @@ export async function GET() {
   if (!auth.authorized) return auth.response;
 
   try {
-    const settings = await getOpenRouterSettings();
+    const settings = await getTranslationSettings();
+    const openrouterBase = settings.openrouter.baseUrl || OpenRouterClient.getDefaultBaseUrl();
 
     return NextResponse.json({
-      apiKey: settings.apiKey ? maskApiKey(settings.apiKey) : null,
-      apiKeyConfigured: !!settings.apiKey,
-      model: settings.model || OpenRouterClient.getDefaultModel(),
+      provider: settings.provider,
       targetLang: settings.targetLang || OpenRouterClient.getDefaultTargetLang(),
       // Include available options for the UI
       supportedLanguages: OpenRouterClient.getSupportedLanguages(),
       defaultModel: OpenRouterClient.getDefaultModel(),
+      openrouter: {
+        apiKey: settings.openrouter.apiKey ? maskApiKey(settings.openrouter.apiKey) : null,
+        apiKeyConfigured: !!settings.openrouter.apiKey,
+        model: settings.openrouter.model || OpenRouterClient.getDefaultModel(),
+        baseUrl: openrouterBase,
+      },
+      local: {
+        apiKey: settings.local.apiKey ? maskApiKey(settings.local.apiKey) : null,
+        apiKeyConfigured: !!settings.local.apiKey,
+        model: settings.local.model || "",
+        baseUrl: settings.local.baseUrl || "",
+      },
     });
   } catch (error) {
-    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get OpenRouter settings');
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get translation settings');
     return NextResponse.json(
       { error: "Failed to get settings" },
       { status: 500 }
@@ -54,8 +74,8 @@ export async function GET() {
 /**
  * Handle PUT requests to update OpenRouter settings.
  *
- * @param request - Request whose JSON body may include optional `apiKey`, `model`, and `targetLang` fields to update.
- * @returns On success, JSON with `message`, `apiKey` (masked string or `null`), `apiKeyConfigured` (`true` if an API key is configured, `false` otherwise), `model` (updated or default), and `targetLang` (updated or default). Returns a 400 JSON error when no updatable fields are provided, and a 500 JSON error on failure.
+ * @param request - Request whose JSON body may include optional provider settings to update.
+ * @returns On success, JSON with `message` and the updated settings. Returns a 400 JSON error when no updatable fields are provided, and a 500 JSON error on failure.
  */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAdminSession();
@@ -66,15 +86,36 @@ export async function PUT(request: NextRequest) {
 
     const updates: Record<string, string> = {};
 
-    // Only update fields that are provided
-    if (body.apiKey !== undefined && body.apiKey !== "") {
-      updates[SETTINGS_KEYS.API_KEY] = body.apiKey;
+    if (body.provider) {
+      updates[SETTINGS_KEYS.PROVIDER] = body.provider;
     }
-    if (body.model !== undefined && body.model !== "") {
-      updates[SETTINGS_KEYS.MODEL] = body.model;
-    }
+
     if (body.targetLang !== undefined && body.targetLang !== "") {
       updates[SETTINGS_KEYS.TARGET_LANG] = body.targetLang;
+    }
+
+    if (body.openrouter) {
+      if (body.openrouter.apiKey !== undefined) {
+        updates[SETTINGS_KEYS.API_KEY] = body.openrouter.apiKey;
+      }
+      if (body.openrouter.model !== undefined) {
+        updates[SETTINGS_KEYS.MODEL] = body.openrouter.model;
+      }
+      if (body.openrouter.baseUrl !== undefined) {
+        updates[SETTINGS_KEYS.BASE_URL] = body.openrouter.baseUrl;
+      }
+    }
+
+    if (body.local) {
+      if (body.local.apiKey !== undefined) {
+        updates[SETTINGS_KEYS.LOCAL_API_KEY] = body.local.apiKey;
+      }
+      if (body.local.model !== undefined) {
+        updates[SETTINGS_KEYS.LOCAL_MODEL] = body.local.model;
+      }
+      if (body.local.baseUrl !== undefined) {
+        updates[SETTINGS_KEYS.LOCAL_BASE_URL] = body.local.baseUrl;
+      }
     }
 
     if (Object.keys(updates).length === 0) {
@@ -87,17 +128,28 @@ export async function PUT(request: NextRequest) {
     await updateSettings(updates);
 
     // Fetch updated settings to return
-    const settings = await getOpenRouterSettings();
+    const settings = await getTranslationSettings();
+    const openrouterBase = settings.openrouter.baseUrl || OpenRouterClient.getDefaultBaseUrl();
 
     return NextResponse.json({
       message: "Settings updated successfully",
-      apiKey: settings.apiKey ? maskApiKey(settings.apiKey) : null,
-      apiKeyConfigured: !!settings.apiKey,
-      model: settings.model || OpenRouterClient.getDefaultModel(),
+      provider: settings.provider,
       targetLang: settings.targetLang || OpenRouterClient.getDefaultTargetLang(),
+      openrouter: {
+        apiKey: settings.openrouter.apiKey ? maskApiKey(settings.openrouter.apiKey) : null,
+        apiKeyConfigured: !!settings.openrouter.apiKey,
+        model: settings.openrouter.model || OpenRouterClient.getDefaultModel(),
+        baseUrl: openrouterBase,
+      },
+      local: {
+        apiKey: settings.local.apiKey ? maskApiKey(settings.local.apiKey) : null,
+        apiKeyConfigured: !!settings.local.apiKey,
+        model: settings.local.model || "",
+        baseUrl: settings.local.baseUrl || "",
+      },
     });
   } catch (error) {
-    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to update OpenRouter settings');
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to update translation settings');
     return NextResponse.json(
       { error: "Failed to update settings" },
       { status: 500 }

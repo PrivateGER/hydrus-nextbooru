@@ -5,8 +5,9 @@ import {
   getOpenRouterSettings,
   estimateTranslationCost,
   formatCost,
+  getEffectiveModel,
 } from "@/lib/openrouter";
-import { OpenRouterClient } from "@/lib/openrouter";
+import { OpenRouterConfigError } from "@/lib/openrouter";
 
 /**
  * Get cost estimate for translating all untranslated group titles.
@@ -28,7 +29,7 @@ export async function GET() {
       );
     }
 
-    const model = settings.model || OpenRouterClient.getDefaultModel();
+    const model = getEffectiveModel(settings);
 
     // Find all unique untranslated titles (filter whitespace-only titles)
     // Groups that have a title but no corresponding translation
@@ -88,6 +89,13 @@ export async function GET() {
       },
     });
   } catch (error) {
+    if (error instanceof OpenRouterConfigError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+
     console.error("Error estimating translation cost:", error);
     return NextResponse.json(
       { error: "Failed to estimate translation cost" },

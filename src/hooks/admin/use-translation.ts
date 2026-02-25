@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { POPULAR_MODELS } from "@/lib/openrouter/types";
+import { POPULAR_MODELS, type ModelDefinition } from "@/lib/openrouter/types";
 import type { TranslationSettings, TranslationEstimate, BulkTranslationProgress, Message } from "@/types/admin";
+
+type ProviderTab = "openrouter" | "local";
 
 export interface UseTranslationReturn {
   // Settings
@@ -11,14 +13,31 @@ export interface UseTranslationReturn {
   bulkProgress: BulkTranslationProgress | null;
 
   // Form state
-  apiKey: string;
-  setApiKey: (value: string) => void;
-  model: string;
-  setModel: (value: string) => void;
-  customModel: string;
-  setCustomModel: (value: string) => void;
+  provider: ProviderTab;
+  setProvider: (value: ProviderTab) => void;
   targetLang: string;
   setTargetLang: (value: string) => void;
+
+  openrouterApiKey: string;
+  setOpenrouterApiKey: (value: string) => void;
+  openrouterModel: string;
+  setOpenrouterModel: (value: string) => void;
+  openrouterCustomModel: string;
+  setOpenrouterCustomModel: (value: string) => void;
+  openrouterBaseUrl: string;
+  setOpenrouterBaseUrl: (value: string) => void;
+
+  localApiKey: string;
+  setLocalApiKey: (value: string) => void;
+  localModel: string;
+  setLocalModel: (value: string) => void;
+  localCustomModel: string;
+  setLocalCustomModel: (value: string) => void;
+  localBaseUrl: string;
+  setLocalBaseUrl: (value: string) => void;
+
+  localModels: ModelDefinition[];
+  isModelsLoading: boolean;
 
   // Loading states
   isSaving: boolean;
@@ -28,6 +47,7 @@ export interface UseTranslationReturn {
   fetchSettings: () => Promise<void>;
   fetchEstimate: () => Promise<void>;
   fetchBulkProgress: () => Promise<BulkTranslationProgress | null>;
+  fetchModels: () => Promise<void>;
   saveSettings: () => Promise<void>;
   startBulkTranslation: () => Promise<void>;
   cancelBulkTranslation: () => Promise<void>;
@@ -43,10 +63,21 @@ export function useTranslation(
   const [bulkProgress, setBulkProgress] = useState<BulkTranslationProgress | null>(null);
 
   // Form state
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [customModel, setCustomModel] = useState("");
+  const [provider, setProvider] = useState<ProviderTab>("openrouter");
   const [targetLang, setTargetLang] = useState("");
+
+  const [openrouterApiKey, setOpenrouterApiKey] = useState("");
+  const [openrouterModel, setOpenrouterModel] = useState("");
+  const [openrouterCustomModel, setOpenrouterCustomModel] = useState("");
+  const [openrouterBaseUrl, setOpenrouterBaseUrl] = useState("");
+
+  const [localApiKey, setLocalApiKey] = useState("");
+  const [localModel, setLocalModel] = useState("");
+  const [localCustomModel, setLocalCustomModel] = useState("");
+  const [localBaseUrl, setLocalBaseUrl] = useState("");
+
+  const [localModels, setLocalModels] = useState<ModelDefinition[]>([]);
+  const [isModelsLoading, setIsModelsLoading] = useState(false);
 
   // Loading states
   const [isSaving, setIsSaving] = useState(false);
@@ -75,14 +106,23 @@ export function useTranslation(
       if (!mountedRef.current) return;
 
       setSettings(data);
-      setModel(data.model);
+      setProvider(data.provider);
       setTargetLang(data.targetLang);
 
-      const isPopularModel = POPULAR_MODELS.some((m) => m.id === data.model);
-      if (!isPopularModel && data.model) {
-        setCustomModel(data.model);
-        setModel("custom");
+      setOpenrouterBaseUrl(data.openrouter.baseUrl || "");
+      setOpenrouterModel(data.openrouter.model);
+      setLocalBaseUrl(data.local.baseUrl || "");
+      setLocalModel(data.local.model || "");
+
+      const isPopularModel = POPULAR_MODELS.some((m) => m.id === data.openrouter.model);
+      if (!isPopularModel && data.openrouter.model) {
+        setOpenrouterCustomModel(data.openrouter.model);
+        setOpenrouterModel("custom");
+      } else {
+        setOpenrouterCustomModel("");
       }
+
+      setLocalCustomModel("");
     } catch (error) {
       console.error("Error fetching translation settings:", error);
     }
@@ -118,6 +158,47 @@ export function useTranslation(
     }
   }, []);
 
+  const fetchModels = useCallback(async () => {
+    if (!localBaseUrl.trim()) {
+      setLocalModels([]);
+      return;
+    }
+
+    setIsModelsLoading(true);
+    try {
+      const response = await fetch("/api/admin/models");
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to fetch models");
+      }
+
+      const models = Array.isArray(data.models)
+        ? data.models.map((model: { id: string; name?: string }) => ({
+            id: model.id,
+            name: model.name || model.id,
+          }))
+        : [];
+
+      if (mountedRef.current) {
+        setLocalModels(models);
+        if (localModel && localModel !== "custom" && !models.some((m) => m.id === localModel)) {
+          setLocalCustomModel(localModel);
+          setLocalModel("custom");
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching models:", error);
+      if (mountedRef.current) {
+        setLocalModels([]);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsModelsLoading(false);
+      }
+    }
+  }, [localModel, localBaseUrl]);
+
   // Initial fetch
   useEffect(() => {
     fetchSettings();
@@ -125,17 +206,46 @@ export function useTranslation(
     fetchBulkProgress();
   }, [fetchSettings, fetchEstimate, fetchBulkProgress]);
 
+  useEffect(() => {
+    if (provider === "local") {
+      fetchModels();
+    }
+  }, [provider, fetchModels]);
+
   const saveSettings = useCallback(async () => {
     setIsSaving(true);
     setMessage(null);
 
     try {
-      const effectiveModel = model === "custom" ? customModel : model;
+      const openrouterEffectiveModel =
+        openrouterModel === "custom" ? openrouterCustomModel : openrouterModel;
+      const localEffectiveModel = localModel === "custom" ? localCustomModel : localModel;
 
-      const body: Record<string, string> = {};
-      if (apiKey) body.apiKey = apiKey;
-      if (effectiveModel) body.model = effectiveModel;
-      if (targetLang) body.targetLang = targetLang;
+      if (provider === "openrouter" && openrouterModel === "custom" && !openrouterCustomModel.trim()) {
+        throw new Error("Please enter a custom OpenRouter model ID.");
+      }
+      if (provider === "local" && localModel === "custom" && !localCustomModel.trim()) {
+        throw new Error("Please enter a custom local model ID.");
+      }
+
+      const body: Record<string, unknown> = {
+        provider,
+        targetLang,
+      };
+
+      if (provider === "openrouter") {
+        body.openrouter = {
+          apiKey: openrouterApiKey,
+          model: openrouterEffectiveModel,
+          baseUrl: openrouterBaseUrl.trim(),
+        };
+      } else {
+        body.local = {
+          apiKey: localApiKey,
+          model: localEffectiveModel,
+          baseUrl: localBaseUrl.trim(),
+        };
+      }
 
       const response = await fetch("/api/admin/settings", {
         method: "PUT",
@@ -151,7 +261,8 @@ export function useTranslation(
 
       triggerSuccessAnimation();
       setMessage({ type: "success", text: "Settings saved!" });
-      setApiKey("");
+      setOpenrouterApiKey("");
+      setLocalApiKey("");
       await fetchSettings();
     } catch (error) {
       setMessage({
@@ -161,7 +272,21 @@ export function useTranslation(
     } finally {
       setIsSaving(false);
     }
-  }, [apiKey, model, customModel, targetLang, setMessage, triggerSuccessAnimation, fetchSettings]);
+  }, [
+    provider,
+    targetLang,
+    openrouterApiKey,
+    openrouterModel,
+    openrouterCustomModel,
+    openrouterBaseUrl,
+    localApiKey,
+    localModel,
+    localCustomModel,
+    localBaseUrl,
+    setMessage,
+    triggerSuccessAnimation,
+    fetchSettings,
+  ]);
 
   const startBulkTranslation = useCallback(async () => {
     setIsTranslating(true);
@@ -246,19 +371,34 @@ export function useTranslation(
     settings,
     estimate,
     bulkProgress,
-    apiKey,
-    setApiKey,
-    model,
-    setModel,
-    customModel,
-    setCustomModel,
+    provider,
+    setProvider,
     targetLang,
     setTargetLang,
+    openrouterApiKey,
+    setOpenrouterApiKey,
+    openrouterModel,
+    setOpenrouterModel,
+    openrouterCustomModel,
+    setOpenrouterCustomModel,
+    openrouterBaseUrl,
+    setOpenrouterBaseUrl,
+    localApiKey,
+    setLocalApiKey,
+    localModel,
+    setLocalModel,
+    localCustomModel,
+    setLocalCustomModel,
+    localBaseUrl,
+    setLocalBaseUrl,
+    localModels,
+    isModelsLoading,
     isSaving,
     isTranslating,
     fetchSettings,
     fetchEstimate,
     fetchBulkProgress,
+    fetchModels,
     saveSettings,
     startBulkTranslation,
     cancelBulkTranslation,

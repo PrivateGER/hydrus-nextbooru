@@ -9,8 +9,10 @@ import { Select } from "@/components/ui/select";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { InfoBox } from "@/components/ui/info-box";
 import { ModelSelect } from "./model-select";
-import { POPULAR_MODELS } from "@/lib/openrouter/types";
+import { POPULAR_MODELS, type ModelDefinition } from "@/lib/openrouter/types";
 import type { TranslationSettings, TranslationEstimate, BulkTranslationProgress, ConfirmModalConfig } from "@/types/admin";
+
+type ProviderTab = "openrouter" | "local";
 
 export interface TranslationSectionProps {
   settings: TranslationSettings | null;
@@ -18,16 +20,35 @@ export interface TranslationSectionProps {
   bulkProgress: BulkTranslationProgress | null;
 
   // Form state
-  apiKey: string;
-  model: string;
-  customModel: string;
+  provider: ProviderTab;
   targetLang: string;
 
+  openrouterApiKey: string;
+  openrouterModel: string;
+  openrouterCustomModel: string;
+  openrouterBaseUrl: string;
+
+  localApiKey: string;
+  localModel: string;
+  localCustomModel: string;
+  localBaseUrl: string;
+  localModels: ModelDefinition[];
+  isModelsLoading: boolean;
+
   // Form handlers
-  onApiKeyChange: (value: string) => void;
-  onModelChange: (value: string) => void;
-  onCustomModelChange: (value: string) => void;
+  onProviderChange: (value: ProviderTab) => void;
   onTargetLangChange: (value: string) => void;
+
+  onOpenrouterApiKeyChange: (value: string) => void;
+  onOpenrouterModelChange: (value: string) => void;
+  onOpenrouterCustomModelChange: (value: string) => void;
+  onOpenrouterBaseUrlChange: (value: string) => void;
+
+  onLocalApiKeyChange: (value: string) => void;
+  onLocalModelChange: (value: string) => void;
+  onLocalCustomModelChange: (value: string) => void;
+  onLocalBaseUrlChange: (value: string) => void;
+  onRefreshModels: () => void;
 
   // Actions
   isSaving: boolean;
@@ -42,14 +63,29 @@ export function TranslationSection({
   settings,
   estimate,
   bulkProgress,
-  apiKey,
-  model,
-  customModel,
+  provider,
   targetLang,
-  onApiKeyChange,
-  onModelChange,
-  onCustomModelChange,
+  openrouterApiKey,
+  openrouterModel,
+  openrouterCustomModel,
+  openrouterBaseUrl,
+  localApiKey,
+  localModel,
+  localCustomModel,
+  localBaseUrl,
+  localModels,
+  isModelsLoading,
+  onProviderChange,
   onTargetLangChange,
+  onOpenrouterApiKeyChange,
+  onOpenrouterModelChange,
+  onOpenrouterCustomModelChange,
+  onOpenrouterBaseUrlChange,
+  onLocalApiKeyChange,
+  onLocalModelChange,
+  onLocalCustomModelChange,
+  onLocalBaseUrlChange,
+  onRefreshModels,
   isSaving,
   isTranslating,
   onSave,
@@ -57,53 +93,144 @@ export function TranslationSection({
   onCancelBulk,
   openConfirmModal,
 }: TranslationSectionProps) {
+  const isLocal = provider === "local";
+
   return (
     <div className="space-y-5">
       <Card>
         <h3 className="mb-1 font-medium text-zinc-800 dark:text-zinc-200">Translation Settings</h3>
         <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          Use a model from OpenRouter to translate notes and images.{" "}
+          Choose OpenRouter or a local OpenAI-compatible endpoint to translate notes and images.{" "}
           <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
-            Get API key
+            Get OpenRouter key
           </a>
         </p>
 
         <div className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key</label>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(e) => onApiKeyChange(e.target.value)}
-              placeholder={settings?.apiKeyConfigured ? "Enter new key..." : "sk-or-v1-..."}
-              hint={settings?.apiKeyConfigured ? `Current: ${settings.apiKey}` : undefined}
-            />
+          <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-100/60 dark:bg-zinc-800/60 p-1">
+            <button
+              type="button"
+              onClick={() => onProviderChange("openrouter")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                !isLocal
+                  ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                  : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              OpenRouter
+            </button>
+            <button
+              type="button"
+              onClick={() => onProviderChange("local")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                isLocal
+                  ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                  : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              Local
+            </button>
           </div>
 
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
-            <ModelSelect
-              value={model}
-              onChange={onModelChange}
-              models={POPULAR_MODELS}
-              allowCustom
-            />
-            {model === "custom" && (
-              <div className="mt-2">
+          {!isLocal ? (
+            <>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">OpenRouter Base URL</label>
                 <Input
-                  value={customModel}
-                  onChange={(e) => onCustomModelChange(e.target.value)}
-                  placeholder="model-provider/model-name"
+                  value={openrouterBaseUrl}
+                  onChange={(e) => onOpenrouterBaseUrlChange(e.target.value)}
+                  placeholder="https://openrouter.ai/api/v1"
                 />
               </div>
-            )}
-            {model !== "custom" && !POPULAR_MODELS.find((m) => m.id === model)?.vision && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-400">
-                <ExclamationCircleIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                This model only supports text translation (notes). Image text won&apos;t be translated.
-              </p>
-            )}
-          </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key</label>
+                <Input
+                  type="password"
+                  value={openrouterApiKey}
+                  onChange={(e) => onOpenrouterApiKeyChange(e.target.value)}
+                  placeholder={settings?.openrouter.apiKeyConfigured ? "Enter new key..." : "sk-or-v1-..."}
+                  hint={settings?.openrouter.apiKeyConfigured ? `Current: ${settings.openrouter.apiKey}` : undefined}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
+                <ModelSelect
+                  value={openrouterModel}
+                  onChange={onOpenrouterModelChange}
+                  models={POPULAR_MODELS}
+                  allowCustom
+                />
+                {openrouterModel === "custom" && (
+                  <div className="mt-2">
+                    <Input
+                      value={openrouterCustomModel}
+                      onChange={(e) => onOpenrouterCustomModelChange(e.target.value)}
+                      placeholder="model-provider/model-name"
+                    />
+                  </div>
+                )}
+                {openrouterModel !== "custom" && !POPULAR_MODELS.find((m) => m.id === openrouterModel)?.vision && (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-400">
+                    <ExclamationCircleIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                    This model only supports text translation (notes). Image text won&apos;t be translated.
+                  </p>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Local Base URL</label>
+                <Input
+                  value={localBaseUrl}
+                  onChange={(e) => onLocalBaseUrlChange(e.target.value)}
+                  placeholder="http://localhost:1234/api/v1"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key (Optional)</label>
+                <Input
+                  type="password"
+                  value={localApiKey}
+                  onChange={(e) => onLocalApiKeyChange(e.target.value)}
+                  placeholder={settings?.local.apiKeyConfigured ? "Enter new key..." : "Optional"}
+                  hint={settings?.local.apiKeyConfigured ? `Current: ${settings.local.apiKey}` : undefined}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
+                <ModelSelect
+                  value={localModel}
+                  onChange={onLocalModelChange}
+                  models={localModels}
+                  allowCustom
+                />
+                {localModel === "custom" && (
+                  <div className="mt-2">
+                    <Input
+                      value={localCustomModel}
+                      onChange={(e) => onLocalCustomModelChange(e.target.value)}
+                      placeholder="model-name"
+                    />
+                  </div>
+                )}
+                <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                  <span>{isModelsLoading ? "Loading models..." : `Loaded ${localModels.length} models`}</span>
+                  <button
+                    type="button"
+                    onClick={onRefreshModels}
+                    className="text-blue-400 hover:underline"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
 
           <div>
             <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Target Language</label>
@@ -122,7 +249,7 @@ export function TranslationSection({
       </Card>
 
       {/* Bulk Title Translation */}
-      {settings?.apiKeyConfigured && estimate && (
+      {settings && estimate && (
         <Card>
           <div className="mb-4 flex items-center justify-between">
             <div>
