@@ -9,6 +9,35 @@ describe("GET /api/admin/models", () => {
     vi.resetModules();
   });
 
+  it("should ignore baseUrl query override and use configured local endpoint", async () => {
+    let usedBaseUrl: string | undefined;
+
+    vi.doMock("@/lib/openrouter", () => ({
+      getTranslationSettings: vi.fn().mockResolvedValue({
+        provider: "local",
+        targetLang: "en",
+        openrouter: { apiKey: null, model: null, baseUrl: null },
+        local: { apiKey: "", model: "local-model", baseUrl: "https://configured.example/v1" },
+      }),
+      OpenRouterApiError: class extends Error {},
+      OpenRouterClient: class {
+        constructor(config: { baseUrl?: string }) {
+          usedBaseUrl = config.baseUrl;
+        }
+        listModels() {
+          return [];
+        }
+      },
+    }));
+
+    const { GET } = await import("./route");
+    await (GET as unknown as (request: Request) => Promise<Response>)(
+      new Request("https://nextbooru.local/api/admin/models?baseUrl=https://evil.internal/v1")
+    );
+
+    expect(usedBaseUrl).toBe("https://configured.example/v1");
+  });
+
   it("should return status from OpenRouterApiError", async () => {
     vi.doMock("@/lib/openrouter", () => {
       class OpenRouterApiError extends Error {

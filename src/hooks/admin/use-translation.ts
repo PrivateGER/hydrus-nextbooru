@@ -102,7 +102,6 @@ export function useTranslation(
   const titlePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const notePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
-  const localBaseUrlRef = useRef(localBaseUrl);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -119,10 +118,6 @@ export function useTranslation(
       }
     };
   }, []);
-
-  useEffect(() => {
-    localBaseUrlRef.current = localBaseUrl;
-  }, [localBaseUrl]);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -214,18 +209,10 @@ export function useTranslation(
     }
   }, []);
 
-  const fetchModels = useCallback(async (baseUrlOverride?: string) => {
-    const baseUrl = (baseUrlOverride ?? localBaseUrlRef.current).trim();
-    if (!baseUrl) {
-      setLocalModels([]);
-      return;
-    }
-
+  const fetchModels = useCallback(async () => {
     setIsModelsLoading(true);
     try {
-      const response = await fetch(
-        `/api/admin/models?baseUrl=${encodeURIComponent(baseUrl)}`
-      );
+      const response = await fetch("/api/admin/models");
       const data = await response.json();
 
       if (!response.ok) {
@@ -241,10 +228,13 @@ export function useTranslation(
 
       if (mountedRef.current) {
         setLocalModels(models);
-        if (localModel && localModel !== "custom" && !models.some((m) => m.id === localModel)) {
-          setLocalCustomModel(localModel);
-          setLocalModel("custom");
-        }
+        setLocalModel((prev) => {
+          if (prev && prev !== "custom" && !models.some((m) => m.id === prev)) {
+            setLocalCustomModel(prev);
+            return "custom";
+          }
+          return prev;
+        });
       }
     } catch (error) {
       console.error("Error fetching models:", error);
@@ -256,7 +246,7 @@ export function useTranslation(
         setIsModelsLoading(false);
       }
     }
-  }, [localModel]);
+  }, []);
 
   // Initial fetch
   useEffect(() => {
@@ -270,14 +260,8 @@ export function useTranslation(
   useEffect(() => {
     if (provider !== "local") return;
 
-    const timeout = window.setTimeout(() => {
-      void fetchModels(localBaseUrl);
-    }, 350);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [provider, localBaseUrl, fetchModels]);
+    void fetchModels();
+  }, [provider, fetchModels]);
 
   const saveSettings = useCallback(async () => {
     setIsSaving(true);
@@ -331,6 +315,9 @@ export function useTranslation(
       setOpenrouterApiKey("");
       setLocalApiKey("");
       await fetchSettings();
+      if (provider === "local") {
+        await fetchModels();
+      }
     } catch (error) {
       setMessage({
         type: "error",
@@ -353,6 +340,7 @@ export function useTranslation(
     setMessage,
     triggerSuccessAnimation,
     fetchSettings,
+    fetchModels,
   ]);
 
   const startBulkTranslation = useCallback(async () => {

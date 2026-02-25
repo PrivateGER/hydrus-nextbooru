@@ -6,16 +6,13 @@ import { apiLog } from "@/lib/logger";
 /**
  * Fetch available models from the configured local endpoint.
  */
-export async function GET(request?: Request) {
+export async function GET() {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
   try {
     const settings = await getTranslationSettings();
-    const baseUrlOverride = request
-      ? new URL(request.url).searchParams.get("baseUrl")?.trim()
-      : undefined;
-    const localBaseUrl = baseUrlOverride || settings.local.baseUrl;
+    const localBaseUrl = settings.local.baseUrl;
 
     if (!localBaseUrl) {
       return NextResponse.json(
