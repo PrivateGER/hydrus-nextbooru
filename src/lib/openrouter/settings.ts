@@ -114,6 +114,12 @@ export async function getOpenRouterClient(): Promise<OpenRouterClient> {
     );
   }
 
+  if (settings.provider === "openrouter" && active.baseUrl && isCustomEndpoint(active.baseUrl) && !active.model) {
+    throw new OpenRouterConfigError(
+      "Model not configured for custom OpenRouter endpoint. Set it in Admin Settings."
+    );
+  }
+
   if (settings.provider === "local" && !active.model) {
     throw new OpenRouterConfigError(
       "Model not configured for Local provider. Set it in Admin Settings."

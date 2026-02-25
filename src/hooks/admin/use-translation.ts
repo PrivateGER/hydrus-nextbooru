@@ -102,6 +102,7 @@ export function useTranslation(
   const titlePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const notePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
+  const localBaseUrlRef = useRef(localBaseUrl);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -118,6 +119,10 @@ export function useTranslation(
       }
     };
   }, []);
+
+  useEffect(() => {
+    localBaseUrlRef.current = localBaseUrl;
+  }, [localBaseUrl]);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -209,15 +214,18 @@ export function useTranslation(
     }
   }, []);
 
-  const fetchModels = useCallback(async () => {
-    if (!localBaseUrl.trim()) {
+  const fetchModels = useCallback(async (baseUrlOverride?: string) => {
+    const baseUrl = (baseUrlOverride ?? localBaseUrlRef.current).trim();
+    if (!baseUrl) {
       setLocalModels([]);
       return;
     }
 
     setIsModelsLoading(true);
     try {
-      const response = await fetch("/api/admin/models");
+      const response = await fetch(
+        `/api/admin/models?baseUrl=${encodeURIComponent(baseUrl)}`
+      );
       const data = await response.json();
 
       if (!response.ok) {
@@ -248,7 +256,7 @@ export function useTranslation(
         setIsModelsLoading(false);
       }
     }
-  }, [localModel, localBaseUrl]);
+  }, [localModel]);
 
   // Initial fetch
   useEffect(() => {
@@ -260,10 +268,16 @@ export function useTranslation(
   }, [fetchSettings, fetchEstimate, fetchNoteEstimate, fetchBulkProgress, fetchNoteBulkProgress]);
 
   useEffect(() => {
-    if (provider === "local") {
-      fetchModels();
-    }
-  }, [provider, fetchModels]);
+    if (provider !== "local") return;
+
+    const timeout = window.setTimeout(() => {
+      void fetchModels(localBaseUrl);
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [provider, localBaseUrl, fetchModels]);
 
   const saveSettings = useCallback(async () => {
     setIsSaving(true);

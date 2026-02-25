@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSession } from "@/lib/auth";
-import { getTranslationSettings } from "@/lib/openrouter";
-import { OpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
+import { getTranslationSettings, OpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { apiLog } from "@/lib/logger";
 
 /**
  * Fetch available models from the configured local endpoint.
  */
-export async function GET() {
+export async function GET(request?: Request) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
   try {
     const settings = await getTranslationSettings();
-    const localBaseUrl = settings.local.baseUrl;
+    const baseUrlOverride = request
+      ? new URL(request.url).searchParams.get("baseUrl")?.trim()
+      : undefined;
+    const localBaseUrl = baseUrlOverride || settings.local.baseUrl;
 
     if (!localBaseUrl) {
       return NextResponse.json(

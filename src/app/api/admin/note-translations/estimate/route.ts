@@ -90,6 +90,7 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
+    console.error("Error estimating note translation cost:", error);
     return NextResponse.json(
       { error: "Failed to estimate note translation cost" },
       { status: 500 }

@@ -113,8 +113,7 @@ describe("getModelPricing", () => {
       isCustomEndpoint: vi.fn().mockReturnValue(true),
     }));
 
-    const originalFetch = global.fetch;
-    global.fetch = vi.fn();
+    const fetchSpy = vi.spyOn(global, "fetch");
 
     const { getModelPricing: getModelPricingMocked } = await import(
       "./pricing"
@@ -122,9 +121,7 @@ describe("getModelPricing", () => {
     const pricing = await getModelPricingMocked("custom-model");
 
     expect(pricing).toEqual(DEFAULT_PRICING);
-    expect(global.fetch).not.toHaveBeenCalled();
-
-    global.fetch = originalFetch;
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -158,15 +155,12 @@ describe("warmPricingCache", () => {
     }));
 
     // Mock global fetch to fail
-    const originalFetch = global.fetch;
-    global.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
+    vi.spyOn(global, "fetch").mockRejectedValue(new Error("Network error"));
 
     const { warmPricingCache: warmPricingCacheMocked } = await import(
       "./pricing"
     );
     await expect(warmPricingCacheMocked()).resolves.not.toThrow();
-
-    global.fetch = originalFetch;
   });
 });
 

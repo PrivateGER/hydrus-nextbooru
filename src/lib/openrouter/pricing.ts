@@ -77,7 +77,7 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
   const now = Date.now();
 
   const settings = await getOpenRouterSettings();
-  const useOpenRouterPricing = settings.apiKey && !isCustomEndpoint(settings.baseUrl);
+  const useOpenRouterPricing = !!settings.apiKey && !isCustomEndpoint(settings.baseUrl);
 
   if (!useOpenRouterPricing) {
     return DEFAULT_PRICING;
@@ -90,11 +90,9 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
 
   // Try to refresh cache
   try {
-    if (settings.apiKey) {
-      pricingCache = await fetchModelPricing(settings.apiKey);
-      cacheTimestamp = now;
-      return pricingCache.get(modelId) ?? DEFAULT_PRICING;
-    }
+    pricingCache = await fetchModelPricing(settings.apiKey);
+    cacheTimestamp = now;
+    return pricingCache.get(modelId) ?? DEFAULT_PRICING;
   } catch (error) {
     // Log for debugging but don't fail - fallback to cache/default
     console.debug?.("Failed to refresh pricing cache:", error);

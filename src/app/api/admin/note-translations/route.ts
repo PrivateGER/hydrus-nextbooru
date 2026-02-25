@@ -2,18 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAdminSession } from "@/lib/auth";
 import { aiLog } from "@/lib/logger";
 import { batchTranslateNotes } from "@/lib/notes-translation";
+import type { BulkTranslationProgress } from "@/types/admin";
 
-interface TranslationProgress {
-  status: "idle" | "running" | "completed" | "cancelled" | "error";
-  total: number;
-  completed: number;
-  failed: number;
-  errors: string[];
-  startedAt?: string;
-  completedAt?: string;
-}
-
-const initialProgress: TranslationProgress = {
+const initialProgress: BulkTranslationProgress = {
   status: "idle",
   total: 0,
   completed: 0,
@@ -21,8 +12,9 @@ const initialProgress: TranslationProgress = {
   errors: [],
 };
 
-let noteTranslationProgress: TranslationProgress = { ...initialProgress };
+let noteTranslationProgress: BulkTranslationProgress = { ...initialProgress };
 let noteTranslationLock: Promise<void> | null = null;
+let noteTranslationStarting = false;
 
 // Concurrency control
 const MAX_CONCURRENT = 10;
@@ -36,6 +28,7 @@ const MAX_ERRORS = 10;
 export function resetNoteTranslationProgress(): void {
   noteTranslationProgress = { ...initialProgress };
   noteTranslationLock = null;
+  noteTranslationStarting = false;
 }
 
 /**
@@ -55,16 +48,14 @@ export async function POST(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  if (noteTranslationLock) {
-    await noteTranslationLock;
-  }
-
-  if (noteTranslationProgress.status === "running") {
+  if (noteTranslationStarting || noteTranslationLock || noteTranslationProgress.status === "running") {
     return NextResponse.json(
       { error: "Translation already in progress" },
       { status: 409 }
     );
   }
+
+  noteTranslationStarting = true;
 
   let targetLang: string | undefined;
   try {
@@ -79,33 +70,51 @@ export async function POST(request: NextRequest) {
     // Ignore parse errors and use default target language from settings
   }
 
-  let releaseLock: () => void;
-  noteTranslationLock = new Promise((resolve) => {
-    releaseLock = resolve;
-  });
+  let releaseLock: (() => void) | null = null;
 
-  noteTranslationProgress = {
-    status: "running",
-    total: 0,
-    completed: 0,
-    failed: 0,
-    errors: [],
-    startedAt: new Date().toISOString(),
-  };
-
-  runBulkNoteTranslation(targetLang)
-    .catch((error) => {
-      aiLog.error({ error: String(error) }, "Bulk note translation failed");
-    })
-    .finally(() => {
-      releaseLock!();
-      noteTranslationLock = null;
+  try {
+    noteTranslationLock = new Promise((resolve) => {
+      releaseLock = resolve;
     });
 
-  return NextResponse.json({
-    message: "Bulk note translation started",
-    status: "running",
-  });
+    noteTranslationProgress = {
+      status: "running",
+      total: 0,
+      completed: 0,
+      failed: 0,
+      errors: [],
+      startedAt: new Date().toISOString(),
+    };
+
+    runBulkNoteTranslation(targetLang)
+      .catch((error) => {
+        aiLog.error({ error: String(error) }, "Bulk note translation failed");
+        if (noteTranslationProgress.status === "running") {
+          noteTranslationProgress.status = "error";
+          noteTranslationProgress.errors = [String(error)];
+          noteTranslationProgress.completedAt = new Date().toISOString();
+        }
+      })
+      .finally(() => {
+        releaseLock?.();
+        noteTranslationLock = null;
+        noteTranslationStarting = false;
+      });
+
+    return NextResponse.json({
+      message: "Bulk note translation started",
+      status: "running",
+    });
+  } catch (error) {
+    releaseLock?.();
+    noteTranslationLock = null;
+    noteTranslationStarting = false;
+    aiLog.error({ error: String(error) }, "Failed to initialize bulk note translation");
+    return NextResponse.json(
+      { error: "Failed to start translation" },
+      { status: 500 }
+    );
+  }
 }
 
 /**

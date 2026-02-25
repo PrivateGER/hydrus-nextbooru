@@ -190,7 +190,9 @@ export function TranslationSection({
                   <span>{isModelsLoading ? "Loading models..." : `Loaded ${localModels.length} models`}</span>
                   <button
                     type="button"
-                    onClick={fetchModels}
+                    onClick={() => {
+                      void fetchModels();
+                    }}
                     className="text-blue-400 hover:underline"
                   >
                     Refresh
@@ -258,7 +260,7 @@ export function TranslationSection({
               </div>
               <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
                 <span>~{estimate.estimatedInputTokens.toLocaleString()} input + ~{estimate.estimatedOutputTokens.toLocaleString()} output tokens</span>
-                <span>{estimate.model.split("/")[1]}</span>
+                <span>{estimate.model.split("/").pop()}</span>
               </div>
             </div>
           )}
@@ -347,7 +349,7 @@ export function TranslationSection({
               </div>
               <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
                 <span>~{noteEstimate.estimatedInputTokens.toLocaleString()} input + ~{noteEstimate.estimatedOutputTokens.toLocaleString()} output tokens</span>
-                <span>{noteEstimate.model.split("/")[1]}</span>
+                <span>{noteEstimate.model.split("/").pop()}</span>
               </div>
             </div>
           )}
