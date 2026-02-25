@@ -10,6 +10,7 @@ import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
+import { withSpan, addSpanEvent, setSpanAttributes } from "@/lib/tracing";
 
 export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -238,45 +239,58 @@ async function processBatchWithPrepopulation(
   progress: SyncProgress,
   onProgress: (progress: SyncProgress) => void
 ): Promise<void> {
-  // Phase 1: Collect and pre-populate all unique tags
-  const uniqueTags = collectTagsFromBatch(files);
-  const tagIds = await bulkEnsureTags(uniqueTags);
+  return withSpan("sync.processBatch", async (batchSpan) => {
+    batchSpan.setAttributes({
+      "sync.batch_number": progress.currentBatch,
+      "sync.batch_file_count": files.length,
+    });
 
-  // Phase 1b: Collect and pre-populate all unique groups
-  const uniqueGroups = collectGroupsFromBatch(files);
-  const groupIds = await bulkEnsureGroups(uniqueGroups);
+    // Phase 1: Collect and pre-populate all unique tags
+    const uniqueTags = collectTagsFromBatch(files);
+    const tagIds = await withSpan("sync.bulkEnsureTags", async () => {
+      return bulkEnsureTags(uniqueTags);
+    }, { "sync.unique_tag_count": uniqueTags.size });
 
-  const lookups: BatchLookups = { tagIds, groupIds };
+    // Phase 1b: Collect and pre-populate all unique groups
+    const uniqueGroups = collectGroupsFromBatch(files);
+    const groupIds = await withSpan("sync.bulkEnsureGroups", async () => {
+      return bulkEnsureGroups(uniqueGroups);
+    }, { "sync.unique_group_count": uniqueGroups.size });
 
-  // Phase 2: Process files in parallel (now safe - no tag/group creation races)
-  progress.phase = "processing";
+    const lookups: BatchLookups = { tagIds, groupIds };
 
-  for (let j = 0; j < files.length; j += CONCURRENT_FILES) {
-    const chunk = files.slice(j, j + CONCURRENT_FILES);
-    const results = await Promise.allSettled(
-      chunk.map((file) => processFileWithLookups(file, lookups))
-    );
+    // Phase 2: Process files in parallel (now safe - no tag/group creation races)
+    progress.phase = "processing";
 
-    for (let k = 0; k < results.length; k++) {
-      const result = results[k];
-      if (result.status === "fulfilled") {
-        progress.processedFiles++;
-      } else {
-        const errorMsg = `Error processing file ${chunk[k].hash}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
-        progress.errors.push(errorMsg);
-        syncLog.error({ hash: chunk[k].hash, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }, 'Error processing file in batch');
+    for (let j = 0; j < files.length; j += CONCURRENT_FILES) {
+      const chunk = files.slice(j, j + CONCURRENT_FILES);
+      const results = await Promise.allSettled(
+        chunk.map((file) => processFileWithLookups(file, lookups))
+      );
+
+      for (let k = 0; k < results.length; k++) {
+        const result = results[k];
+        if (result.status === "fulfilled") {
+          progress.processedFiles++;
+        } else {
+          const errorMsg = `Error processing file ${chunk[k].hash}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
+          progress.errors.push(errorMsg);
+          syncLog.error({ hash: chunk[k].hash, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }, 'Error processing file in batch');
+        }
       }
+
+      onProgress(progress);
+
+      // Update database progress periodically
+      await updateSyncState({
+        status: "running",
+        processedFiles: progress.processedFiles,
+        currentBatch: progress.currentBatch,
+      });
     }
 
-    onProgress(progress);
-
-    // Update database progress periodically
-    await updateSyncState({
-      status: "running",
-      processedFiles: progress.processedFiles,
-      currentBatch: progress.currentBatch,
-    });
-  }
+    batchSpan.setAttribute("sync.batch_processed_files", files.length);
+  });
 }
 
 /**
@@ -597,24 +611,30 @@ async function deleteOrphanedGroups(): Promise<number> {
  * Sync files from Hydrus to the local database
  */
 export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncProgress> {
-  const client = new HydrusClient();
-  const startTime = Date.now();
-  const progress: SyncProgress = {
-    phase: "searching",
-    totalFiles: 0,
-    processedFiles: 0,
-    currentBatch: 0,
-    totalBatches: 0,
-    errors: [],
-  };
+  return withSpan("sync.fromHydrus", async (rootSpan) => {
+    const client = new HydrusClient();
+    const startTime = Date.now();
+    const progress: SyncProgress = {
+      phase: "searching",
+      totalFiles: 0,
+      processedFiles: 0,
+      currentBatch: 0,
+      totalBatches: 0,
+      errors: [],
+    };
 
-  const onProgress = options.onProgress || (() => {});
-  const searchTags = options.tags || ["system:everything"];
-  const batchSize = options.batchSize ?? BATCH_SIZE;
+    const onProgress = options.onProgress || (() => {});
+    const searchTags = options.tags || ["system:everything"];
+    const batchSize = options.batchSize ?? BATCH_SIZE;
 
-  syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
+    rootSpan.setAttributes({
+      "sync.tags": searchTags.join(","),
+      "sync.batch_size": batchSize,
+    });
 
-  try {
+    syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
+
+    try {
     // Prevent concurrent sync operations - check if one is already running
     const existingState = await prisma.syncState.findFirst();
     if (existingState?.status === "running") {
@@ -637,6 +657,16 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const hydrusHashes = new Set(searchResult.hashes || []);
     progress.totalFiles = fileIds.length;
     progress.totalBatches = Math.ceil(fileIds.length / batchSize);
+
+    rootSpan.setAttributes({
+      "sync.total_files": fileIds.length,
+      "sync.total_batches": progress.totalBatches,
+    });
+    addSpanEvent("search_complete", {
+      total_files: fileIds.length,
+      total_batches: progress.totalBatches,
+    });
+
     syncLog.info({ totalFiles: fileIds.length, batches: progress.totalBatches }, 'Search complete, starting batch processing');
     onProgress(progress);
 
@@ -785,6 +815,14 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     });
 
     const durationMs = Date.now() - startTime;
+    rootSpan.setAttributes({
+      "sync.processed_files": progress.processedFiles,
+      "sync.deleted_posts": progress.deletedPosts ?? 0,
+      "sync.deleted_tags": progress.deletedTags ?? 0,
+      "sync.deleted_groups": progress.deletedGroups ?? 0,
+      "sync.error_count": progress.errors.length,
+      "sync.duration_ms": durationMs,
+    });
     syncLog.info({
       processedFiles: progress.processedFiles,
       deletedPosts: progress.deletedPosts ?? 0,
@@ -809,6 +847,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     onProgress(progress);
     throw err;
   }
+  });
 }
 
 /**

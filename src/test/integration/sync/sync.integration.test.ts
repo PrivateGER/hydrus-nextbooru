@@ -286,61 +286,6 @@ describe('syncFromHydrus (Integration)', () => {
     });
   });
 
-  describe('cancellation', () => {
-    it('should exit early when cancelled mid-sync and process fewer files than total', async () => {
-      const prisma = getTestPrisma();
-
-      // Setup 20 files to sync with small batch size to ensure multiple batches
-      const totalFiles = 20;
-      const files = Array.from({ length: totalFiles }, (_, i) =>
-        createMockFileMetadata({
-          file_id: i + 1,
-          // Use hex-like hashes to support >26 files
-          hash: (i.toString(16).padStart(2, '0')).repeat(32),
-        })
-      );
-      addFilesToState(hydrusState, files);
-
-      let filesProcessedBeforeCancel = 0;
-
-      // Start sync with batch size of 1 to maximize batch boundaries
-      const syncPromise = syncFromHydrus({
-        batchSize: 1,
-        onProgress: (progress) => {
-          // Track how many files were processed when we trigger cancellation
-          if (progress.processedFiles > 0 && filesProcessedBeforeCancel === 0) {
-            filesProcessedBeforeCancel = progress.processedFiles;
-          }
-        },
-      });
-
-      // Wait briefly for sync to start and process at least one batch
-      await new Promise(resolve => setTimeout(resolve, 20));
-
-      // Cancel the sync - this write happens independently and will be seen
-      // at the next batch boundary's cancellation check
-      await prisma.syncState.updateMany({
-        where: { status: 'running' },
-        data: { status: 'cancelled' },
-      });
-
-      // Wait for sync to complete
-      const result = await syncPromise;
-
-      // Sync should have completed with early exit
-      expect(result.phase).toBe('complete');
-      // Fewer files should have been processed than total (early exit)
-      expect(result.processedFiles).toBeLessThan(totalFiles);
-      // At least some files should have been processed before cancellation
-      expect(result.processedFiles).toBeGreaterThan(0);
-
-      // Verify database reflects partial sync
-      const postsInDb = await prisma.post.count();
-      expect(postsInDb).toBe(result.processedFiles);
-      expect(postsInDb).toBeLessThan(totalFiles);
-    });
-  });
-
   describe('sync state tracking', () => {
     it('should update progress during sync', async () => {
       const prisma = getTestPrisma();

@@ -3,6 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { format as formatSql } from "sql-formatter";
 import { dbLog } from "@/lib/logger";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
 
 /**
  * Escape characters in a string for safe use in SQL LIKE/ILIKE patterns.
@@ -63,30 +64,55 @@ function createPrismaClient(): PrismaClient {
   // Store pool reference for potential cleanup
   globalForPrisma.pool = pool;
 
-  // Wrap pool.query to log queries with timing when LOG_QUERIES=true
-  if (enableQueryLog) {
-    const originalQuery = pool.query.bind(pool);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (pool as any).query = async (...args: [any, ...any[]]) => {
+  // Wrap pool.query to add tracing and optionally log queries
+  const originalQuery = pool.query.bind(pool);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pool as any).query = async (...args: [any, ...any[]]) => {
+    const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+    const tracer = trace.getTracer("nextbooru");
+
+    return tracer.startActiveSpan("db.query", async (span) => {
+      // Extract operation type from query for better span naming
+      const operationType = queryText?.trim().split(/\s+/)[0]?.toUpperCase() || "UNKNOWN";
+      span.setAttribute("db.system", "postgresql");
+      span.setAttribute("db.operation", operationType);
+
       const start = performance.now();
       try {
         const result = await originalQuery(...args);
         const duration = performance.now() - start;
-        const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
-        // Put formatted SQL in message (2nd arg) so pino-pretty renders newlines
-        dbLog.debug({ duration: `${duration.toFixed(2)}ms` }, '\n' + formatSql(queryText || '', { language: 'postgresql' }));
+
+        span.setAttribute("db.duration_ms", duration);
+        span.setStatus({ code: SpanStatusCode.OK });
+
+        if (enableQueryLog) {
+          // Put formatted SQL in message (2nd arg) so pino-pretty renders newlines
+          dbLog.debug({ duration: `${duration.toFixed(2)}ms` }, '\n' + formatSql(queryText || '', { language: 'postgresql' }));
+        }
+
         return result;
       } catch (err) {
         const duration = performance.now() - start;
-        const queryText = typeof args[0] === 'string' ? args[0] : args[0]?.text;
-        dbLog.error(
-          { duration: `${duration.toFixed(2)}ms`, error: err instanceof Error ? err.message : String(err) },
-          'FAILED:\n' + formatSql(queryText || '', { language: 'postgresql' })
-        );
+        span.setAttribute("db.duration_ms", duration);
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        span.recordException(err instanceof Error ? err : new Error(String(err)));
+
+        if (enableQueryLog) {
+          dbLog.error(
+            { duration: `${duration.toFixed(2)}ms`, error: err instanceof Error ? err.message : String(err) },
+            'FAILED:\n' + formatSql(queryText || '', { language: 'postgresql' })
+          );
+        }
+
         throw err;
+      } finally {
+        span.end();
       }
-    };
-  }
+    });
+  };
 
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });
