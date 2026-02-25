@@ -172,4 +172,21 @@ describe("batchTranslateNotes", () => {
     expect(result.completed).toBe(1);
     expect(mockTranslate).toHaveBeenCalledTimes(1);
   });
+
+  it("returns cancelled when cancellation is requested before a batch runs", async () => {
+    mockQueryRaw.mockResolvedValue([
+      { contentHash: "a".repeat(64), content: "content A" },
+    ]);
+
+    const result = await batchTranslateNotes({
+      isCancelled: () => true,
+      batchDelayMs: 0,
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(result.total).toBe(1);
+    expect(result.completed).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(mockTranslate).not.toHaveBeenCalled();
+  });
 });

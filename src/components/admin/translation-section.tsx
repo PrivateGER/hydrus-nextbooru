@@ -10,14 +10,22 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { InfoBox } from "@/components/ui/info-box";
 import { ModelSelect } from "./model-select";
 import { POPULAR_MODELS, type ModelDefinition } from "@/lib/openrouter/types";
-import type { TranslationSettings, TranslationEstimate, BulkTranslationProgress, ConfirmModalConfig } from "@/types/admin";
+import type {
+  TranslationSettings,
+  TranslationEstimate,
+  NoteTranslationEstimate,
+  BulkTranslationProgress,
+  ConfirmModalConfig,
+} from "@/types/admin";
 
 type ProviderTab = "openrouter" | "local";
 
 export interface TranslationSectionProps {
   settings: TranslationSettings | null;
   estimate: TranslationEstimate | null;
+  noteEstimate: NoteTranslationEstimate | null;
   bulkProgress: BulkTranslationProgress | null;
+  noteBulkProgress: BulkTranslationProgress | null;
 
   // Form state
   provider: ProviderTab;
@@ -53,16 +61,21 @@ export interface TranslationSectionProps {
   // Actions
   isSaving: boolean;
   isTranslating: boolean;
+  isNoteTranslating: boolean;
   onSave: () => void;
   onStartBulk: () => void;
   onCancelBulk: () => void;
+  onStartBulkNotes: () => void;
+  onCancelBulkNotes: () => void;
   openConfirmModal: (config: Omit<ConfirmModalConfig, "isOpen">) => void;
 }
 
 export function TranslationSection({
   settings,
   estimate,
+  noteEstimate,
   bulkProgress,
+  noteBulkProgress,
   provider,
   targetLang,
   openrouterApiKey,
@@ -88,9 +101,12 @@ export function TranslationSection({
   onRefreshModels,
   isSaving,
   isTranslating,
+  isNoteTranslating,
   onSave,
   onStartBulk,
   onCancelBulk,
+  onStartBulkNotes,
+  onCancelBulkNotes,
   openConfirmModal,
 }: TranslationSectionProps) {
   const isLocal = provider === "local";
@@ -333,6 +349,93 @@ export function TranslationSection({
               >
                 <LanguageIcon className="h-4 w-4" />
                 Translate {estimate.untranslatedCount.toLocaleString()} Titles
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Bulk Note Translation */}
+      {settings && noteEstimate && (
+        <Card>
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-zinc-800 dark:text-zinc-200">Bulk Note Translation</h3>
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                Translate all note content at once
+              </p>
+            </div>
+            {noteEstimate.untranslatedCount === 0 && (
+              <span className="flex items-center gap-1 text-xs text-emerald-400">
+                <CheckCircleIcon className="h-4 w-4" /> All translated
+              </span>
+            )}
+          </div>
+
+          <div className="mb-4 grid grid-cols-3 gap-3">
+            <div className="rounded-lg bg-zinc-300/50 dark:bg-zinc-700/50 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums">{noteEstimate.totalUniqueNotes.toLocaleString()}</p>
+              <p className="text-xs text-zinc-500">Total</p>
+            </div>
+            <div className="rounded-lg bg-emerald-500/10 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums text-emerald-400">{noteEstimate.translatedCount.toLocaleString()}</p>
+              <p className="text-xs text-emerald-400/60">Translated</p>
+            </div>
+            <div className="rounded-lg bg-amber-500/10 p-3 text-center">
+              <p className="text-xl font-bold tabular-nums text-amber-400">{noteEstimate.untranslatedCount.toLocaleString()}</p>
+              <p className="text-xs text-amber-400/60">Pending</p>
+            </div>
+          </div>
+
+          {noteEstimate.untranslatedCount > 0 && (
+            <div className="mb-4 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-500 dark:text-zinc-400">Estimated cost</span>
+                <span className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">{noteEstimate.estimatedCost}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <span>~{noteEstimate.estimatedInputTokens.toLocaleString()} input + ~{noteEstimate.estimatedOutputTokens.toLocaleString()} output tokens</span>
+                <span>{noteEstimate.model.split("/")[1]}</span>
+              </div>
+            </div>
+          )}
+
+          {noteBulkProgress?.status === "running" && (
+            <div className="mb-4">
+              <ProgressBar
+                current={noteBulkProgress.completed + noteBulkProgress.failed}
+                total={noteBulkProgress.total}
+                color="purple"
+              />
+              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <span>{noteBulkProgress.completed} translated, {noteBulkProgress.failed} failed</span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {noteBulkProgress?.status === "running" ? (
+              <Button onClick={onCancelBulkNotes} variant="danger">
+                <StopIcon className="h-4 w-4" />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                onClick={() =>
+                  openConfirmModal({
+                    title: "Translate all notes?",
+                    message: `This will translate ${noteEstimate.untranslatedCount} unique notes for an estimated ${noteEstimate.estimatedCost}.`,
+                    confirmText: "Translate",
+                    confirmVariant: "primary",
+                    onConfirm: onStartBulkNotes,
+                  })
+                }
+                disabled={isNoteTranslating || noteEstimate.untranslatedCount === 0}
+                loading={isNoteTranslating}
+                className="bg-purple-600 hover:bg-purple-500"
+              >
+                <LanguageIcon className="h-4 w-4" />
+                Translate {noteEstimate.untranslatedCount.toLocaleString()} Notes
               </Button>
             )}
           </div>

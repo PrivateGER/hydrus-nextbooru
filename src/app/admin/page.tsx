@@ -196,7 +196,9 @@ export default function AdminPage() {
           <TranslationSection
             settings={translation.settings}
             estimate={translation.estimate}
+            noteEstimate={translation.noteEstimate}
             bulkProgress={translation.bulkProgress}
+            noteBulkProgress={translation.noteBulkProgress}
             provider={translation.provider}
             targetLang={translation.targetLang}
             openrouterApiKey={translation.openrouterApiKey}
@@ -222,9 +224,12 @@ export default function AdminPage() {
             onRefreshModels={translation.fetchModels}
             isSaving={translation.isSaving}
             isTranslating={translation.isTranslating}
+            isNoteTranslating={translation.isNoteTranslating}
             onSave={translation.saveSettings}
             onStartBulk={translation.startBulkTranslation}
             onCancelBulk={translation.cancelBulkTranslation}
+            onStartBulkNotes={translation.startBulkNoteTranslation}
+            onCancelBulkNotes={translation.cancelBulkNoteTranslation}
             openConfirmModal={openConfirmModal}
           />
         );

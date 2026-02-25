@@ -4,6 +4,7 @@ import type { ChatCompletionResponse } from '@/lib/openrouter/types';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
+const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const DEFAULT_MODELS_URL = 'https://example.com/v1/models';
 
 /**
@@ -15,7 +16,7 @@ export interface MockOpenRouterState {
   sourceLang?: string;
   error?: { message: string; status: number };
   delayMs?: number;
-  models?: { id: string; name?: string }[];
+  models?: { id: string; name?: string; pricing?: { prompt?: string; completion?: string } }[];
   modelsError?: { message: string; status: number };
   modelsUrl?: string;
   /** Set to true to simulate OpenRouter returning empty/malformed translation */
@@ -141,22 +142,33 @@ function createResponsesImageTranslationResponse(
  * Create MSW handlers for OpenRouter API endpoints.
  */
 export function createOpenRouterHandlers(state: MockOpenRouterState): RequestHandler[] {
+  const handleModelsRequest = async () => {
+    if (state.modelsError) {
+      return HttpResponse.json(
+        { error: { message: state.modelsError.message } },
+        { status: state.modelsError.status }
+      );
+    }
+
+    state.callCount++;
+
+    const modelsWithPricing = (state.models ?? []).map((model) => ({
+      ...model,
+      pricing: {
+        prompt: model.pricing?.prompt ?? "0.000001",
+        completion: model.pricing?.completion ?? "0.000002",
+      },
+    }));
+
+    return HttpResponse.json({
+      data: modelsWithPricing,
+      models: modelsWithPricing,
+    });
+  };
+
   return [
-    http.get(state.modelsUrl ?? DEFAULT_MODELS_URL, async () => {
-      if (state.modelsError) {
-        return HttpResponse.json(
-          { error: { message: state.modelsError.message } },
-          { status: state.modelsError.status }
-        );
-      }
-
-      state.callCount++;
-
-      return HttpResponse.json({
-        data: state.models ?? [],
-        models: state.models ?? [],
-      });
-    }),
+    http.get(state.modelsUrl ?? DEFAULT_MODELS_URL, handleModelsRequest),
+    http.get(OPENROUTER_MODELS_URL, handleModelsRequest),
     http.post(OPENROUTER_RESPONSES_URL, async ({ request }) => {
       if (state.delayMs) {
         await new Promise((r) => setTimeout(r, state.delayMs));

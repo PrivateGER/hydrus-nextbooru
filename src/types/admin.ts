@@ -54,6 +54,19 @@ export interface TranslationEstimate {
   pricing: { inputPer1M: number; outputPer1M: number };
 }
 
+export interface NoteTranslationEstimate {
+  totalUniqueNotes: number;
+  translatedCount: number;
+  untranslatedCount: number;
+  uniqueNotesToTranslate: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedCost: string;
+  estimatedCostUsd: number;
+  model: string;
+  pricing: { inputPer1M: number; outputPer1M: number };
+}
+
 export interface BulkTranslationProgress {
   status: "idle" | "running" | "completed" | "cancelled" | "error";
   total: number;

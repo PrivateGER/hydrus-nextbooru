@@ -2,7 +2,13 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { POPULAR_MODELS, type ModelDefinition } from "@/lib/openrouter/types";
-import type { TranslationSettings, TranslationEstimate, BulkTranslationProgress, Message } from "@/types/admin";
+import type {
+  TranslationSettings,
+  TranslationEstimate,
+  NoteTranslationEstimate,
+  BulkTranslationProgress,
+  Message,
+} from "@/types/admin";
 
 type ProviderTab = "openrouter" | "local";
 
@@ -10,7 +16,9 @@ export interface UseTranslationReturn {
   // Settings
   settings: TranslationSettings | null;
   estimate: TranslationEstimate | null;
+  noteEstimate: NoteTranslationEstimate | null;
   bulkProgress: BulkTranslationProgress | null;
+  noteBulkProgress: BulkTranslationProgress | null;
 
   // Form state
   provider: ProviderTab;
@@ -42,15 +50,20 @@ export interface UseTranslationReturn {
   // Loading states
   isSaving: boolean;
   isTranslating: boolean;
+  isNoteTranslating: boolean;
 
   // Actions
   fetchSettings: () => Promise<void>;
   fetchEstimate: () => Promise<void>;
+  fetchNoteEstimate: () => Promise<void>;
   fetchBulkProgress: () => Promise<BulkTranslationProgress | null>;
+  fetchNoteBulkProgress: () => Promise<BulkTranslationProgress | null>;
   fetchModels: () => Promise<void>;
   saveSettings: () => Promise<void>;
   startBulkTranslation: () => Promise<void>;
   cancelBulkTranslation: () => Promise<void>;
+  startBulkNoteTranslation: () => Promise<void>;
+  cancelBulkNoteTranslation: () => Promise<void>;
 }
 
 export function useTranslation(
@@ -60,7 +73,9 @@ export function useTranslation(
   // Settings state
   const [settings, setSettings] = useState<TranslationSettings | null>(null);
   const [estimate, setEstimate] = useState<TranslationEstimate | null>(null);
+  const [noteEstimate, setNoteEstimate] = useState<NoteTranslationEstimate | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkTranslationProgress | null>(null);
+  const [noteBulkProgress, setNoteBulkProgress] = useState<BulkTranslationProgress | null>(null);
 
   // Form state
   const [provider, setProvider] = useState<ProviderTab>("openrouter");
@@ -82,8 +97,10 @@ export function useTranslation(
   // Loading states
   const [isSaving, setIsSaving] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isNoteTranslating, setIsNoteTranslating] = useState(false);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const titlePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const notePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -91,9 +108,13 @@ export function useTranslation(
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+      if (titlePollIntervalRef.current) {
+        clearInterval(titlePollIntervalRef.current);
+        titlePollIntervalRef.current = null;
+      }
+      if (notePollIntervalRef.current) {
+        clearInterval(notePollIntervalRef.current);
+        notePollIntervalRef.current = null;
       }
     };
   }, []);
@@ -142,6 +163,20 @@ export function useTranslation(
     }
   }, []);
 
+  const fetchNoteEstimate = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/note-translations/estimate");
+      if (response.ok) {
+        const data: NoteTranslationEstimate = await response.json();
+        if (mountedRef.current) {
+          setNoteEstimate(data);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching note translation estimate:", error);
+    }
+  }, []);
+
   const fetchBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
     try {
       const response = await fetch("/api/admin/translations");
@@ -154,6 +189,22 @@ export function useTranslation(
       return data;
     } catch (error) {
       console.error("Error fetching bulk translation progress:", error);
+      return null;
+    }
+  }, []);
+
+  const fetchNoteBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
+    try {
+      const response = await fetch("/api/admin/note-translations");
+      const data: BulkTranslationProgress = await response.json();
+
+      if (mountedRef.current) {
+        setNoteBulkProgress(data);
+        setIsNoteTranslating(data.status === "running");
+      }
+      return data;
+    } catch (error) {
+      console.error("Error fetching note translation progress:", error);
       return null;
     }
   }, []);
@@ -203,8 +254,10 @@ export function useTranslation(
   useEffect(() => {
     fetchSettings();
     fetchEstimate();
+    fetchNoteEstimate();
     fetchBulkProgress();
-  }, [fetchSettings, fetchEstimate, fetchBulkProgress]);
+    fetchNoteBulkProgress();
+  }, [fetchSettings, fetchEstimate, fetchNoteEstimate, fetchBulkProgress, fetchNoteBulkProgress]);
 
   useEffect(() => {
     if (provider === "local") {
@@ -308,15 +361,15 @@ export function useTranslation(
       setMessage({ type: "success", text: "Translating titles..." });
 
       // Start polling for progress
-      pollIntervalRef.current = setInterval(async () => {
+      titlePollIntervalRef.current = setInterval(async () => {
         const progress = await fetchBulkProgress();
 
         if (!mountedRef.current) return;
 
         if (progress && progress.status !== "running") {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
+          if (titlePollIntervalRef.current) {
+            clearInterval(titlePollIntervalRef.current);
+            titlePollIntervalRef.current = null;
           }
           setIsTranslating(false);
           await fetchEstimate();
@@ -367,10 +420,90 @@ export function useTranslation(
     }
   }, [setMessage]);
 
+  const startBulkNoteTranslation = useCallback(async () => {
+    setIsNoteTranslating(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/note-translations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetLang }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start note translation");
+      }
+
+      setMessage({ type: "success", text: "Translating notes..." });
+
+      notePollIntervalRef.current = setInterval(async () => {
+        const progress = await fetchNoteBulkProgress();
+
+        if (!mountedRef.current) return;
+
+        if (progress && progress.status !== "running") {
+          if (notePollIntervalRef.current) {
+            clearInterval(notePollIntervalRef.current);
+            notePollIntervalRef.current = null;
+          }
+          setIsNoteTranslating(false);
+          await fetchNoteEstimate();
+
+          if (progress.status === "completed") {
+            triggerSuccessAnimation();
+            setMessage({
+              type: "success",
+              text: `Done! ${progress.completed} notes translated${progress.failed > 0 ? `, ${progress.failed} failed` : ""}.`,
+            });
+          } else if (progress.status === "cancelled") {
+            setMessage({
+              type: "success",
+              text: `Cancelled. ${progress.completed} notes were translated.`,
+            });
+          } else if (progress.status === "error") {
+            setMessage({
+              type: "error",
+              text: `Note translation failed: ${progress.errors[0] || "Unknown error"}`,
+            });
+          }
+        }
+      }, 1000);
+    } catch (error) {
+      setIsNoteTranslating(false);
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to start note translation",
+      });
+    }
+  }, [targetLang, setMessage, triggerSuccessAnimation, fetchNoteBulkProgress, fetchNoteEstimate]);
+
+  const cancelBulkNoteTranslation = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/note-translations", { method: "DELETE" });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to cancel note translation");
+      }
+
+      setMessage({ type: "success", text: "Stopping note translation..." });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to cancel note translation",
+      });
+    }
+  }, [setMessage]);
+
   return {
     settings,
     estimate,
+    noteEstimate,
     bulkProgress,
+    noteBulkProgress,
     provider,
     setProvider,
     targetLang,
@@ -395,12 +528,17 @@ export function useTranslation(
     isModelsLoading,
     isSaving,
     isTranslating,
+    isNoteTranslating,
     fetchSettings,
     fetchEstimate,
+    fetchNoteEstimate,
     fetchBulkProgress,
+    fetchNoteBulkProgress,
     fetchModels,
     saveSettings,
     startBulkTranslation,
     cancelBulkTranslation,
+    startBulkNoteTranslation,
+    cancelBulkNoteTranslation,
   };
 }

@@ -13,10 +13,12 @@ export interface BatchTranslateNotesOptions {
   maxConcurrent?: number;
   batchDelayMs?: number;
   maxErrors?: number;
+  isCancelled?: () => boolean;
+  onProgress?: (progress: BatchTranslateNotesResult) => void;
 }
 
 export interface BatchTranslateNotesResult {
-  status: "completed" | "error";
+  status: "completed" | "cancelled" | "error";
   total: number;
   completed: number;
   failed: number;
@@ -41,6 +43,8 @@ export async function batchTranslateNotes(
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     batchDelayMs = DEFAULT_BATCH_DELAY_MS,
     maxErrors = DEFAULT_MAX_ERRORS,
+    isCancelled,
+    onProgress,
   } = options;
   const concurrency = Math.max(1, Math.floor(maxConcurrent));
   const maxErrorEntries = Math.max(1, Math.floor(maxErrors));
@@ -69,6 +73,15 @@ export async function batchTranslateNotes(
     failed: 0,
     errors: [],
   };
+  const emitProgress = (): void => {
+    onProgress?.({
+      status: progress.status,
+      total: progress.total,
+      completed: progress.completed,
+      failed: progress.failed,
+      errors: [...progress.errors],
+    });
+  };
   const pushError = (message: string, force = false): void => {
     if (progress.errors.length < maxErrorEntries) {
       progress.errors.push(message);
@@ -96,6 +109,7 @@ export async function batchTranslateNotes(
     `;
 
     progress.total = untranslatedNotes.length;
+    emitProgress();
 
     if (untranslatedNotes.length === 0) {
       return progress;
@@ -108,6 +122,12 @@ export async function batchTranslateNotes(
     );
 
     for (let i = 0; i < untranslatedNotes.length; i += concurrency) {
+      if (isCancelled?.()) {
+        progress.status = "cancelled";
+        emitProgress();
+        return progress;
+      }
+
       const batch = untranslatedNotes.slice(i, i + concurrency);
 
       const results = await Promise.allSettled(
@@ -162,12 +182,15 @@ export async function batchTranslateNotes(
       if (authError) {
         progress.status = "error";
         pushError(`Authentication failed: ${authError.message}`, true);
+        emitProgress();
         aiLog.error(
           { error: authError.message },
           "Batch note translation aborted due to auth error"
         );
         return progress;
       }
+
+      emitProgress();
 
       if (i + concurrency < untranslatedNotes.length && batchDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
@@ -178,6 +201,7 @@ export async function batchTranslateNotes(
       { completed: progress.completed, failed: progress.failed },
       "Batch note translation completed"
     );
+    emitProgress();
 
     return progress;
   } catch (error) {
@@ -195,6 +219,7 @@ export async function batchTranslateNotes(
     }
 
     aiLog.error({ error: String(error) }, "Batch note translation failed");
+    emitProgress();
     return progress;
   }
 }
