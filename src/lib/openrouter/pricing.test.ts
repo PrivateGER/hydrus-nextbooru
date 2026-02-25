@@ -93,7 +93,8 @@ describe("getModelPricing", () => {
   it("should return default pricing when API key is not configured", async () => {
     // Mock settings to return no API key
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null }),
+      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     // Re-import to get fresh module with mocked settings
@@ -102,6 +103,28 @@ describe("getModelPricing", () => {
     );
     const pricing = await getModelPricingMocked("openai/gpt-4");
     expect(pricing).toEqual(DEFAULT_PRICING);
+  });
+
+  it("should return default pricing for custom endpoints", async () => {
+    vi.doMock("./settings", () => ({
+      getOpenRouterSettings: vi
+        .fn()
+        .mockResolvedValue({ apiKey: "test-key", baseUrl: "https://example.com/v1" }),
+      isCustomEndpoint: vi.fn().mockReturnValue(true),
+    }));
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn();
+
+    const { getModelPricing: getModelPricingMocked } = await import(
+      "./pricing"
+    );
+    const pricing = await getModelPricingMocked("custom-model");
+
+    expect(pricing).toEqual(DEFAULT_PRICING);
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    global.fetch = originalFetch;
   });
 });
 
@@ -116,7 +139,8 @@ describe("warmPricingCache", () => {
 
   it("should not throw when API key is not configured", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null }),
+      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     const { warmPricingCache: warmPricingCacheMocked } = await import(
@@ -129,7 +153,8 @@ describe("warmPricingCache", () => {
     vi.doMock("./settings", () => ({
       getOpenRouterSettings: vi
         .fn()
-        .mockResolvedValue({ apiKey: "test-key" }),
+        .mockResolvedValue({ apiKey: "test-key", baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     // Mock global fetch to fail
@@ -156,7 +181,8 @@ describe("estimateTranslationCost", () => {
 
   it("should return zero cost for empty titles array", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null }),
+      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     const { estimateTranslationCost: estimateMocked } = await import(
@@ -172,7 +198,8 @@ describe("estimateTranslationCost", () => {
 
   it("should calculate cost based on title tokens", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null }),
+      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     const { estimateTranslationCost: estimateMocked, DEFAULT_PRICING } =
@@ -192,7 +219,8 @@ describe("estimateTranslationCost", () => {
 
   it("should scale cost with number of titles", async () => {
     vi.doMock("./settings", () => ({
-      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null }),
+      getOpenRouterSettings: vi.fn().mockResolvedValue({ apiKey: null, baseUrl: null }),
+      isCustomEndpoint: vi.fn().mockReturnValue(false),
     }));
 
     const { estimateTranslationCost: estimateMocked } = await import(
