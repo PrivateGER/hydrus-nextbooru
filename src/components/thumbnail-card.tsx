@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, type ReactNode } from "react";
-import { BlurhashImage } from "./blurhash-image";
+import { BlurhashImage } from "@/components/blurhash-image";
 
 interface ThumbnailCardProps {
   hash: string;
@@ -34,17 +34,18 @@ export function ThumbnailCard({
   children,
   className = "",
 }: ThumbnailCardProps) {
-  const [loaded, setLoaded] = useState(false);
+  const [loadedHash, setLoadedHash] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const loaded = loadedHash === hash;
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
   const setImageRef = useCallback((node: HTMLImageElement | null) => {
     imgRef.current = node;
     if (node?.complete && node.naturalWidth > 0) {
-      setLoaded(true);
+      setLoadedHash(hash);
     }
-  }, []);
+  }, [hash]);
 
   const aspectRatio = width && height ? `${width} / ${height}` : "1";
 
@@ -77,6 +78,7 @@ export function ThumbnailCard({
 
       {/* Actual thumbnail */}
       <img
+        key={hash}
         ref={setImageRef}
         src={`/api/thumbnails/${hash}.webp`}
         alt=""
@@ -85,7 +87,7 @@ export function ThumbnailCard({
         }`}
         style={{ aspectRatio }}
         loading="lazy"
-        onLoad={() => setLoaded(true)}
+        onLoad={() => setLoadedHash(hash)}
       />
 
       {/* Video/GIF indicator */}

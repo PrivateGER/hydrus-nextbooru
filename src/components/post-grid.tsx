@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PostCard, LayoutMode } from "./post-card";
 
 interface Post {
@@ -18,15 +18,31 @@ interface PostGridProps {
 const LAYOUT_STORAGE_KEY = "booru-layout-mode";
 
 export function PostGrid({ posts }: PostGridProps) {
-  const [layout, setLayout] = useState<LayoutMode>(() => {
-    if (typeof window === "undefined") return "masonry";
-    const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    return saved === "grid" || saved === "masonry" ? saved : "masonry";
-  });
+  const [layout, setLayout] = useState<LayoutMode>("masonry");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      if (saved === "grid" || saved === "masonry") {
+        const timeout = window.setTimeout(() => {
+          setLayout(saved);
+        }, 0);
+        return () => {
+          window.clearTimeout(timeout);
+        };
+      }
+    } catch {
+      // Keep default layout if storage is unavailable.
+    }
+  }, []);
 
   const handleLayoutChange = (newLayout: LayoutMode) => {
     setLayout(newLayout);
-    localStorage.setItem(LAYOUT_STORAGE_KEY, newLayout);
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, newLayout);
+    } catch {
+      // Ignore storage write failures and keep UI state.
+    }
   };
 
   if (posts.length === 0) {

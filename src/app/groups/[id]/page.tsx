@@ -197,6 +197,7 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
         {group.posts.map((pg, index) => (
           <div key={pg.post.hash} className="group/post relative">
             <PostCard
+              key={pg.post.hash}
               hash={pg.post.hash}
               width={pg.post.width}
               height={pg.post.height}
