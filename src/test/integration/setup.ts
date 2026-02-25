@@ -45,7 +45,7 @@ export async function setupTestDatabase(): Promise<{
     .withDatabase('booru_test')
     .withUsername('test')
     .withPassword('test')
-    .withTmpFs({ "/var/lib/postgresql/data": "rw" })
+    .withTmpFs({ "/var/lib/postgresql": "rw" })
     .start();
 
   const connectionString = container.getConnectionUri();
