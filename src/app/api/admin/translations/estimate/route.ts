@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { verifyAdminSession } from "@/lib/auth";
 import {
   getOpenRouterSettings,
+  getTranslationSettings,
   estimateTranslationCost,
   formatCost,
   getEffectiveModel,
@@ -20,9 +21,11 @@ export async function GET() {
   if (!auth.authorized) return auth.response;
 
   try {
+    const translationSettings = await getTranslationSettings();
     const settings = await getOpenRouterSettings();
+    const isLocalProvider = translationSettings.provider === "local";
 
-    if (!settings.apiKey) {
+    if (!isLocalProvider && !settings.apiKey) {
       return NextResponse.json(
         { error: "OpenRouter API key not configured" },
         { status: 401 }
@@ -78,8 +81,8 @@ export async function GET() {
       uniqueTitlesToTranslate: estimate.uniqueTitles,
       estimatedInputTokens: estimate.estimatedInputTokens,
       estimatedOutputTokens: estimate.estimatedOutputTokens,
-      estimatedCost: formatCost(estimate.estimatedCostUsd),
-      estimatedCostUsd: estimate.estimatedCostUsd,
+      estimatedCost: isLocalProvider ? "?" : formatCost(estimate.estimatedCostUsd),
+      estimatedCostUsd: isLocalProvider ? 0 : estimate.estimatedCostUsd,
 
       // Model info
       model,

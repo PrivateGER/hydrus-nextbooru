@@ -25,7 +25,7 @@ export interface BatchTranslateNotesResult {
   errors: string[];
 }
 
-const DEFAULT_MAX_CONCURRENT = 5;
+const DEFAULT_MAX_CONCURRENT = 10;
 const DEFAULT_BATCH_DELAY_MS = 500;
 const DEFAULT_MAX_ERRORS = 10;
 

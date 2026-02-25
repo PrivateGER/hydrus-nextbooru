@@ -170,4 +170,32 @@ describe("Bulk Note Translation API", () => {
     expect(data.translatedCount).toBe(1);
     expect(data.untranslatedCount).toBe(1);
   });
+
+  it("returns estimate with unknown cost in local mode without API key", async () => {
+    const prisma = getTestPrisma();
+
+    await prisma.settings.upsert({
+      where: { key: SETTINGS_KEYS.PROVIDER },
+      update: { value: "local" },
+      create: { key: SETTINGS_KEYS.PROVIDER, value: "local" },
+    });
+    await prisma.settings.upsert({
+      where: { key: SETTINGS_KEYS.LOCAL_MODEL },
+      update: { value: "local-model" },
+      create: { key: SETTINGS_KEYS.LOCAL_MODEL, value: "local-model" },
+    });
+    await prisma.settings.upsert({
+      where: { key: SETTINGS_KEYS.LOCAL_BASE_URL },
+      update: { value: "http://localhost:1234/v1" },
+      create: { key: SETTINGS_KEYS.LOCAL_BASE_URL, value: "http://localhost:1234/v1" },
+    });
+
+    const { GET } = await import("@/app/api/admin/note-translations/estimate/route");
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.estimatedCost).toBe("?");
+    expect(data.estimatedCostUsd).toBe(0);
+  });
 });

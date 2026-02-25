@@ -25,7 +25,7 @@ let noteTranslationProgress: TranslationProgress = { ...initialProgress };
 let noteTranslationLock: Promise<void> | null = null;
 
 // Concurrency control
-const MAX_CONCURRENT = 5;
+const MAX_CONCURRENT = 10;
 const BATCH_DELAY_MS = 500;
 const MAX_ERRORS = 10;
 

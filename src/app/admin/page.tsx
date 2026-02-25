@@ -194,42 +194,7 @@ export default function AdminPage() {
       case "translation":
         return (
           <TranslationSection
-            settings={translation.settings}
-            estimate={translation.estimate}
-            noteEstimate={translation.noteEstimate}
-            bulkProgress={translation.bulkProgress}
-            noteBulkProgress={translation.noteBulkProgress}
-            provider={translation.provider}
-            targetLang={translation.targetLang}
-            openrouterApiKey={translation.openrouterApiKey}
-            openrouterModel={translation.openrouterModel}
-            openrouterCustomModel={translation.openrouterCustomModel}
-            openrouterBaseUrl={translation.openrouterBaseUrl}
-            localApiKey={translation.localApiKey}
-            localModel={translation.localModel}
-            localCustomModel={translation.localCustomModel}
-            localBaseUrl={translation.localBaseUrl}
-            localModels={translation.localModels}
-            isModelsLoading={translation.isModelsLoading}
-            onProviderChange={translation.setProvider}
-            onTargetLangChange={translation.setTargetLang}
-            onOpenrouterApiKeyChange={translation.setOpenrouterApiKey}
-            onOpenrouterModelChange={translation.setOpenrouterModel}
-            onOpenrouterCustomModelChange={translation.setOpenrouterCustomModel}
-            onOpenrouterBaseUrlChange={translation.setOpenrouterBaseUrl}
-            onLocalApiKeyChange={translation.setLocalApiKey}
-            onLocalModelChange={translation.setLocalModel}
-            onLocalCustomModelChange={translation.setLocalCustomModel}
-            onLocalBaseUrlChange={translation.setLocalBaseUrl}
-            onRefreshModels={translation.fetchModels}
-            isSaving={translation.isSaving}
-            isTranslating={translation.isTranslating}
-            isNoteTranslating={translation.isNoteTranslating}
-            onSave={translation.saveSettings}
-            onStartBulk={translation.startBulkTranslation}
-            onCancelBulk={translation.cancelBulkTranslation}
-            onStartBulkNotes={translation.startBulkNoteTranslation}
-            onCancelBulkNotes={translation.cancelBulkNoteTranslation}
+            translation={translation}
             openConfirmModal={openConfirmModal}
           />
         );

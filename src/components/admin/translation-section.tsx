@@ -9,106 +9,58 @@ import { Select } from "@/components/ui/select";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { InfoBox } from "@/components/ui/info-box";
 import { ModelSelect } from "./model-select";
-import { POPULAR_MODELS, type ModelDefinition } from "@/lib/openrouter/types";
-import type {
-  TranslationSettings,
-  TranslationEstimate,
-  NoteTranslationEstimate,
-  BulkTranslationProgress,
-  ConfirmModalConfig,
-} from "@/types/admin";
-
-type ProviderTab = "openrouter" | "local";
+import { POPULAR_MODELS } from "@/lib/openrouter/types";
+import type { ConfirmModalConfig } from "@/types/admin";
+import type { UseTranslationReturn } from "@/hooks/admin/use-translation";
 
 export interface TranslationSectionProps {
-  settings: TranslationSettings | null;
-  estimate: TranslationEstimate | null;
-  noteEstimate: NoteTranslationEstimate | null;
-  bulkProgress: BulkTranslationProgress | null;
-  noteBulkProgress: BulkTranslationProgress | null;
-
-  // Form state
-  provider: ProviderTab;
-  targetLang: string;
-
-  openrouterApiKey: string;
-  openrouterModel: string;
-  openrouterCustomModel: string;
-  openrouterBaseUrl: string;
-
-  localApiKey: string;
-  localModel: string;
-  localCustomModel: string;
-  localBaseUrl: string;
-  localModels: ModelDefinition[];
-  isModelsLoading: boolean;
-
-  // Form handlers
-  onProviderChange: (value: ProviderTab) => void;
-  onTargetLangChange: (value: string) => void;
-
-  onOpenrouterApiKeyChange: (value: string) => void;
-  onOpenrouterModelChange: (value: string) => void;
-  onOpenrouterCustomModelChange: (value: string) => void;
-  onOpenrouterBaseUrlChange: (value: string) => void;
-
-  onLocalApiKeyChange: (value: string) => void;
-  onLocalModelChange: (value: string) => void;
-  onLocalCustomModelChange: (value: string) => void;
-  onLocalBaseUrlChange: (value: string) => void;
-  onRefreshModels: () => void;
-
-  // Actions
-  isSaving: boolean;
-  isTranslating: boolean;
-  isNoteTranslating: boolean;
-  onSave: () => void;
-  onStartBulk: () => void;
-  onCancelBulk: () => void;
-  onStartBulkNotes: () => void;
-  onCancelBulkNotes: () => void;
+  translation: UseTranslationReturn;
   openConfirmModal: (config: Omit<ConfirmModalConfig, "isOpen">) => void;
 }
 
 export function TranslationSection({
-  settings,
-  estimate,
-  noteEstimate,
-  bulkProgress,
-  noteBulkProgress,
-  provider,
-  targetLang,
-  openrouterApiKey,
-  openrouterModel,
-  openrouterCustomModel,
-  openrouterBaseUrl,
-  localApiKey,
-  localModel,
-  localCustomModel,
-  localBaseUrl,
-  localModels,
-  isModelsLoading,
-  onProviderChange,
-  onTargetLangChange,
-  onOpenrouterApiKeyChange,
-  onOpenrouterModelChange,
-  onOpenrouterCustomModelChange,
-  onOpenrouterBaseUrlChange,
-  onLocalApiKeyChange,
-  onLocalModelChange,
-  onLocalCustomModelChange,
-  onLocalBaseUrlChange,
-  onRefreshModels,
-  isSaving,
-  isTranslating,
-  isNoteTranslating,
-  onSave,
-  onStartBulk,
-  onCancelBulk,
-  onStartBulkNotes,
-  onCancelBulkNotes,
+  translation,
   openConfirmModal,
 }: TranslationSectionProps) {
+  const {
+    settings,
+    estimate,
+    noteEstimate,
+    bulkProgress,
+    noteBulkProgress,
+    provider,
+    targetLang,
+    openrouterApiKey,
+    openrouterModel,
+    openrouterCustomModel,
+    openrouterBaseUrl,
+    localApiKey,
+    localModel,
+    localCustomModel,
+    localBaseUrl,
+    localModels,
+    isModelsLoading,
+    isSaving,
+    isTranslating,
+    isNoteTranslating,
+    setProvider,
+    setTargetLang,
+    setOpenrouterApiKey,
+    setOpenrouterModel,
+    setOpenrouterCustomModel,
+    setOpenrouterBaseUrl,
+    setLocalApiKey,
+    setLocalModel,
+    setLocalCustomModel,
+    setLocalBaseUrl,
+    fetchModels,
+    saveSettings,
+    startBulkTranslation,
+    cancelBulkTranslation,
+    startBulkNoteTranslation,
+    cancelBulkNoteTranslation,
+  } = translation;
+
   const isLocal = provider === "local";
 
   return (
@@ -126,7 +78,7 @@ export function TranslationSection({
           <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-100/60 dark:bg-zinc-800/60 p-1">
             <button
               type="button"
-              onClick={() => onProviderChange("openrouter")}
+              onClick={() => setProvider("openrouter")}
               className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 !isLocal
                   ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
@@ -137,7 +89,7 @@ export function TranslationSection({
             </button>
             <button
               type="button"
-              onClick={() => onProviderChange("local")}
+              onClick={() => setProvider("local")}
               className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 isLocal
                   ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
@@ -154,7 +106,7 @@ export function TranslationSection({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">OpenRouter Base URL</label>
                 <Input
                   value={openrouterBaseUrl}
-                  onChange={(e) => onOpenrouterBaseUrlChange(e.target.value)}
+                  onChange={(e) => setOpenrouterBaseUrl(e.target.value)}
                   placeholder="https://openrouter.ai/api/v1"
                 />
               </div>
@@ -164,7 +116,7 @@ export function TranslationSection({
                 <Input
                   type="password"
                   value={openrouterApiKey}
-                  onChange={(e) => onOpenrouterApiKeyChange(e.target.value)}
+                  onChange={(e) => setOpenrouterApiKey(e.target.value)}
                   placeholder={settings?.openrouter.apiKeyConfigured ? "Enter new key..." : "sk-or-v1-..."}
                   hint={settings?.openrouter.apiKeyConfigured ? `Current: ${settings.openrouter.apiKey}` : undefined}
                 />
@@ -174,7 +126,7 @@ export function TranslationSection({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
                 <ModelSelect
                   value={openrouterModel}
-                  onChange={onOpenrouterModelChange}
+                  onChange={setOpenrouterModel}
                   models={POPULAR_MODELS}
                   allowCustom
                 />
@@ -182,7 +134,7 @@ export function TranslationSection({
                   <div className="mt-2">
                     <Input
                       value={openrouterCustomModel}
-                      onChange={(e) => onOpenrouterCustomModelChange(e.target.value)}
+                      onChange={(e) => setOpenrouterCustomModel(e.target.value)}
                       placeholder="model-provider/model-name"
                     />
                   </div>
@@ -201,7 +153,7 @@ export function TranslationSection({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Local Base URL</label>
                 <Input
                   value={localBaseUrl}
-                  onChange={(e) => onLocalBaseUrlChange(e.target.value)}
+                  onChange={(e) => setLocalBaseUrl(e.target.value)}
                   placeholder="http://localhost:1234/api/v1"
                 />
               </div>
@@ -211,7 +163,7 @@ export function TranslationSection({
                 <Input
                   type="password"
                   value={localApiKey}
-                  onChange={(e) => onLocalApiKeyChange(e.target.value)}
+                  onChange={(e) => setLocalApiKey(e.target.value)}
                   placeholder={settings?.local.apiKeyConfigured ? "Enter new key..." : "Optional"}
                   hint={settings?.local.apiKeyConfigured ? `Current: ${settings.local.apiKey}` : undefined}
                 />
@@ -221,7 +173,7 @@ export function TranslationSection({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
                 <ModelSelect
                   value={localModel}
-                  onChange={onLocalModelChange}
+                  onChange={setLocalModel}
                   models={localModels}
                   allowCustom
                 />
@@ -229,7 +181,7 @@ export function TranslationSection({
                   <div className="mt-2">
                     <Input
                       value={localCustomModel}
-                      onChange={(e) => onLocalCustomModelChange(e.target.value)}
+                      onChange={(e) => setLocalCustomModel(e.target.value)}
                       placeholder="model-name"
                     />
                   </div>
@@ -238,7 +190,7 @@ export function TranslationSection({
                   <span>{isModelsLoading ? "Loading models..." : `Loaded ${localModels.length} models`}</span>
                   <button
                     type="button"
-                    onClick={onRefreshModels}
+                    onClick={fetchModels}
                     className="text-blue-400 hover:underline"
                   >
                     Refresh
@@ -250,14 +202,14 @@ export function TranslationSection({
 
           <div>
             <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Target Language</label>
-            <Select value={targetLang} onChange={(e) => onTargetLangChange(e.target.value)}>
+            <Select value={targetLang} onChange={(e) => setTargetLang(e.target.value)}>
               {(settings?.supportedLanguages ?? []).map((lang) => (
                 <option key={lang.code} value={lang.code}>{lang.name}</option>
               ))}
             </Select>
           </div>
 
-          <Button onClick={onSave} loading={isSaving}>
+          <Button onClick={saveSettings} loading={isSaving}>
             <CheckCircleIconSolid className="h-4 w-4" />
             Save
           </Button>
@@ -328,7 +280,7 @@ export function TranslationSection({
           {/* Actions */}
           <div className="flex gap-2">
             {bulkProgress?.status === "running" ? (
-              <Button onClick={onCancelBulk} variant="danger">
+              <Button onClick={cancelBulkTranslation} variant="danger">
                 <StopIcon className="h-4 w-4" />
                 Stop
               </Button>
@@ -340,7 +292,7 @@ export function TranslationSection({
                     message: `This will translate ${estimate.untranslatedCount} titles for an estimated ${estimate.estimatedCost}.`,
                     confirmText: "Translate",
                     confirmVariant: "primary",
-                    onConfirm: onStartBulk,
+                    onConfirm: startBulkTranslation,
                   })
                 }
                 disabled={isTranslating || estimate.untranslatedCount === 0}
@@ -415,7 +367,7 @@ export function TranslationSection({
 
           <div className="flex gap-2">
             {noteBulkProgress?.status === "running" ? (
-              <Button onClick={onCancelBulkNotes} variant="danger">
+              <Button onClick={cancelBulkNoteTranslation} variant="danger">
                 <StopIcon className="h-4 w-4" />
                 Stop
               </Button>
@@ -427,7 +379,7 @@ export function TranslationSection({
                     message: `This will translate ${noteEstimate.untranslatedCount} unique notes for an estimated ${noteEstimate.estimatedCost}.`,
                     confirmText: "Translate",
                     confirmVariant: "primary",
-                    onConfirm: onStartBulkNotes,
+                    onConfirm: startBulkNoteTranslation,
                   })
                 }
                 disabled={isNoteTranslating || noteEstimate.untranslatedCount === 0}
