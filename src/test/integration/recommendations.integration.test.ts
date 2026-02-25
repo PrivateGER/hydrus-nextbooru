@@ -15,13 +15,13 @@ describe('Recommendations Module (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    const module = await import('@/lib/recommendations');
-    getOrComputeRecommendations = module.getOrComputeRecommendations;
-    getOrComputeRecommendationsByHash = module.getOrComputeRecommendationsByHash;
-    computeRecommendationsForPost = module.computeRecommendationsForPost;
-    invalidateRecommendationsForPost = module.invalidateRecommendationsForPost;
-    hasRecommendations = module.hasRecommendations;
-    getRecommendationStats = module.getRecommendationStats;
+    const routeModule = await import('@/lib/recommendations');
+    getOrComputeRecommendations = routeModule.getOrComputeRecommendations;
+    getOrComputeRecommendationsByHash = routeModule.getOrComputeRecommendationsByHash;
+    computeRecommendationsForPost = routeModule.computeRecommendationsForPost;
+    invalidateRecommendationsForPost = routeModule.invalidateRecommendationsForPost;
+    hasRecommendations = routeModule.hasRecommendations;
+    getRecommendationStats = routeModule.getRecommendationStats;
   });
 
   afterAll(async () => {

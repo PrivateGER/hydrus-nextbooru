@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdir, rm, stat, readFile } from "fs/promises";
+import { mkdir, rm, stat, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
@@ -96,7 +96,7 @@ describe.skipIf(!ffmpegInstalled)("video-extractor", () => {
 
     it("should reject for invalid video file", async () => {
       const invalidPath = join(testDir, "invalid.mp4");
-      await require("fs/promises").writeFile(invalidPath, "not a video");
+      await writeFile(invalidPath, "not a video");
 
       await expect(extractVideoFrame(invalidPath)).rejects.toThrow();
     });

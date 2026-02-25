@@ -11,9 +11,9 @@ describe('Groups Module (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    const module = await import('@/lib/groups');
-    searchGroups = module.searchGroups;
-    getGroupTypeCounts = module.getGroupTypeCounts;
+    const routeModule = await import('@/lib/groups');
+    searchGroups = routeModule.searchGroups;
+    getGroupTypeCounts = routeModule.getGroupTypeCounts;
   });
 
   afterAll(async () => {

@@ -52,22 +52,13 @@ function LinkIcon({ className }: { className?: string }) {
   );
 }
 
-function getSourceIcon(type: SourceType | null) {
-  switch (type) {
-    case SourceType.PIXIV:
-      return PixivIcon;
-    case SourceType.TWITTER:
-      return TwitterIcon;
-    case SourceType.DEVIANTART:
-      return DeviantArtIcon;
-    case SourceType.DANBOORU:
-      return DanbooruIcon;
-    case SourceType.GELBOORU:
-      return GelbooruIcon;
-    default:
-      return LinkIcon;
-  }
-}
+const SOURCE_ICONS: Partial<Record<SourceType, ({ className }: { className?: string }) => JSX.Element>> = {
+  [SourceType.PIXIV]: PixivIcon,
+  [SourceType.TWITTER]: TwitterIcon,
+  [SourceType.DEVIANTART]: DeviantArtIcon,
+  [SourceType.DANBOORU]: DanbooruIcon,
+  [SourceType.GELBOORU]: GelbooruIcon,
+};
 
 function getSourceColor(type: SourceType | null): string {
   switch (type) {
@@ -91,7 +82,7 @@ interface SourceLinkProps {
 }
 
 export function SourceLink({ source }: SourceLinkProps) {
-  const Icon = getSourceIcon(source.type);
+  const IconComponent = source.type ? (SOURCE_ICONS[source.type] ?? LinkIcon) : LinkIcon;
   const colorClass = getSourceColor(source.type);
 
   return (
@@ -102,7 +93,7 @@ export function SourceLink({ source }: SourceLinkProps) {
       className={`inline-flex items-center gap-2 ${colorClass} transition-colors`}
       title={source.url}
     >
-      <Icon className="h-4 w-4 shrink-0" />
+      <IconComponent className="h-4 w-4 shrink-0" />
       <span>{source.label}</span>
     </a>
   );

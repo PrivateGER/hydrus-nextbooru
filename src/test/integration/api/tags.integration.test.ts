@@ -13,8 +13,8 @@ describe('GET /api/tags (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    const module = await import('@/app/api/tags/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/tags/route');
+    GET = routeModule.GET;
   });
 
   afterAll(async () => {

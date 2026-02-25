@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useCallback, type ReactNode } from "react";
 import { BlurhashImage } from "./blurhash-image";
 
 interface ThumbnailCardProps {
@@ -39,24 +39,12 @@ export function ThumbnailCard({
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
-
-  // Handle hash changes and check for cached images
-  // When hash changes: reset state, then check if new image is already cached
-  const prevHashRef = useRef(hash);
-  useEffect(() => {
-    const img = imgRef.current;
-
-    // If hash changed, reset first
-    if (prevHashRef.current !== hash) {
-      prevHashRef.current = hash;
-      setLoaded(false);
-    }
-
-    // Then check if image is already cached (handles bfcache/back navigation)
-    if (img?.complete && img.naturalWidth > 0) {
+  const setImageRef = useCallback((node: HTMLImageElement | null) => {
+    imgRef.current = node;
+    if (node?.complete && node.naturalWidth > 0) {
       setLoaded(true);
     }
-  }, [hash]);
+  }, []);
 
   const aspectRatio = width && height ? `${width} / ${height}` : "1";
 
@@ -89,7 +77,7 @@ export function ThumbnailCard({
 
       {/* Actual thumbnail */}
       <img
-        ref={imgRef}
+        ref={setImageRef}
         src={`/api/thumbnails/${hash}.webp`}
         alt=""
         className={`${heightClass} w-auto transition-opacity duration-300 ${

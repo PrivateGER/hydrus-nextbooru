@@ -24,8 +24,8 @@ describe('GET /api/tags/search (Integration)', () => {
     setTestPrisma(prisma);
 
     // Dynamic import after Prisma is set up
-    const module = await import('@/app/api/tags/search/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/tags/search/route');
+    GET = routeModule.GET;
   });
 
   afterAll(async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { BlurhashImage } from "./blurhash-image";
 
 export type LayoutMode = "masonry" | "grid";
@@ -31,32 +31,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
   const canHavePreview = isVideo || isAnimated;
-
-  // Handle hash changes and check for cached images.
-  // If we don't do this, we get stuck with a blurhash.
-  const prevHashRef = useRef(hash);
-  useEffect(() => {
-    const img = imgRef.current;
-
-    // If hash changed, reset state first
-    if (prevHashRef.current !== hash) {
-      prevHashRef.current = hash;
-      setLoaded(false);
-      setError(false);
-      setPreviewLoaded(false);
-      loadedRef.current = false;
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = undefined;
-      }
-    }
-
-    // Then check if image is already cached (precached or caused by bfcache navigation)
-    if (img?.complete && img.naturalWidth > 0) {
-      setLoaded(true);
-      loadedRef.current = true;
-    }
-  }, [hash]);
 
   // Preload animated preview for videos/GIFs when card is visible
   useEffect(() => {
@@ -184,6 +158,14 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const isMasonry = layout === "masonry";
   const showAnimatedPreview = canHavePreview && previewLoaded && isHovering;
 
+  const setImageRef = useCallback((node: HTMLImageElement | null) => {
+    imgRef.current = node;
+    if (node?.complete && node.naturalWidth > 0) {
+      loadedRef.current = true;
+      setLoaded(true);
+    }
+  }, []);
+
   return (
     <Link
       href={`/post/${hash}`}
@@ -248,7 +230,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         <>
           <img
             key={hash}
-            ref={imgRef}
+            ref={setImageRef}
             src={`/api/thumbnails/${hash}.webp`}
             alt=""
             className={

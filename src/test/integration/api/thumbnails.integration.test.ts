@@ -22,8 +22,8 @@ describe('GET /api/thumbnails/[filename] (Integration)', () => {
 
     // Mock fs modules and import the route handler
     await setupFsMock();
-    const module = await import('@/app/api/thumbnails/[filename]/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/thumbnails/[filename]/route');
+    GET = routeModule.GET;
   });
 
   afterAll(async () => {

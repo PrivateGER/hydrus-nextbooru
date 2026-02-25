@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PostCard, LayoutMode } from "./post-card";
 
 interface Post {
@@ -18,14 +18,11 @@ interface PostGridProps {
 const LAYOUT_STORAGE_KEY = "booru-layout-mode";
 
 export function PostGrid({ posts }: PostGridProps) {
-  const [layout, setLayout] = useState<LayoutMode>("masonry");
-
-  useEffect(() => {
+  const [layout, setLayout] = useState<LayoutMode>(() => {
+    if (typeof window === "undefined") return "masonry";
     const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (saved === "grid" || saved === "masonry") {
-      setLayout(saved);
-    }
-  }, []);
+    return saved === "grid" || saved === "masonry" ? saved : "masonry";
+  });
 
   const handleLayoutChange = (newLayout: LayoutMode) => {
     setLayout(newLayout);

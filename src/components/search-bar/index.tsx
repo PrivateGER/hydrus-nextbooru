@@ -27,6 +27,10 @@ interface SearchBarProps {
   placeholder?: string;
 }
 
+function getSearchBarStateKey(initialTags: string[], initialNotesQuery: string, initialMode: SearchMode): string {
+  return `${initialMode}:${initialNotesQuery}:${initialTags.join(",")}`;
+}
+
 /**
  * Interactive search bar with two modes: tag search (with autocompletion) and note content search (full-text).
  */
@@ -36,6 +40,35 @@ export function SearchBar({
   initialMode = "tags",
   placeholder = "Search tags...",
 }: SearchBarProps) {
+  const stateKey = getSearchBarStateKey(initialTags, initialNotesQuery, initialMode);
+
+  return (
+    <SearchBarContent
+      key={stateKey}
+      initialTags={initialTags}
+      initialNotesQuery={initialNotesQuery}
+      initialMode={initialMode}
+      placeholder={placeholder}
+      stateKey={stateKey}
+    />
+  );
+}
+
+interface SearchBarContentProps {
+  initialTags: string[];
+  initialNotesQuery: string;
+  initialMode: SearchMode;
+  placeholder: string;
+  stateKey: string;
+}
+
+function SearchBarContent({
+  initialTags = [],
+  initialNotesQuery = "",
+  initialMode = "tags",
+  placeholder = "Search tags...",
+  stateKey,
+}: SearchBarContentProps) {
   const router = useRouter();
   const [searchMode, setSearchMode] = useState<SearchMode>(initialMode);
   const [inputValue, setInputValue] = useState(initialMode === "notes" ? initialNotesQuery : "");
@@ -47,9 +80,6 @@ export function SearchBar({
   // Detect exclude mode when input starts with "-"
   const isExcludeMode = inputValue.startsWith("-");
   const searchQuery = isExcludeMode ? inputValue.slice(1) : inputValue;
-
-  // Sync state when props change (e.g., navigation to different search)
-  const initialTagsKey = initialTags.join(",");
 
   // Use custom hook for tag suggestions
   const {
@@ -65,15 +95,8 @@ export function SearchBar({
     searchQuery,
     isExcludeMode,
     enabled: searchMode === "tags",
-    propsKey: `${initialTagsKey}:${initialNotesQuery}:${initialMode}`,
+    propsKey: stateKey,
   });
-
-  // Sync state when props change (e.g., navigation to different search)
-  useEffect(() => {
-    setSearchMode(initialMode);
-    setInputValue(initialMode === "notes" ? initialNotesQuery : "");
-    setSelectedTags(initialTags);
-  }, [initialTagsKey, initialNotesQuery, initialMode]);
 
   // Close suggestions on click outside
   useEffect(() => {
@@ -131,7 +154,7 @@ export function SearchBar({
 
     setInputValue("");
     inputRef.current?.focus();
-  }, [selectedTags, setShowSuggestions]);
+  }, [selectedTags]);
 
   const handleToggleNegation = useCallback((tagName: string) => {
     const newTags = selectedTags.map((t) => (t === tagName ? toggleTagNegation(t) : t));

@@ -25,6 +25,10 @@ interface HomePageProps {
   searchParams: Promise<{ page?: string; sort?: string; seed?: string }>;
 }
 
+function createRandomSeed(): string {
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+}
+
 function HomePageSkeleton() {
   return (
     <div className="space-y-8" aria-busy="true" aria-label="Loading gallery">
@@ -126,13 +130,13 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
 
   // Redirect to include seed for stable random ordering across pagination
   if (sort === "random" && !seed) {
-    const newSeed = Math.random().toString(36).substring(2, 10);
+    const newSeed = createRandomSeed();
     redirect(`/?sort=random&seed=${newSeed}`);
   }
 
   // Redirect if seed is invalid for random sort
   if (sort === "random" && seed && !isValidSeed) {
-    const newSeed = Math.random().toString(36).substring(2, 10);
+    const newSeed = createRandomSeed();
     redirect(`/?sort=random&seed=${newSeed}`);
   }
 
@@ -148,7 +152,7 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
     const newSort = overrides.sort ?? sort;
     const newPage = overrides.page ?? page;
     const newSeed = overrides.newSeed
-      ? Math.random().toString(36).substring(2, 10)
+      ? createRandomSeed()
       : seed;
 
     if (newSort !== "newest") urlParams.set("sort", newSort);
