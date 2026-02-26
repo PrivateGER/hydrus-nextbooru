@@ -268,7 +268,29 @@ export function useTranslation(
   const fetchBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
     try {
       const response = await fetch("/api/admin/translations");
-      const data: BulkTranslationProgress = await response.json();
+      const data: unknown = await response.json();
+
+      if (!response.ok) {
+        const error =
+          data && typeof data === "object" && "error" in data
+            ? (data as { error?: unknown }).error
+            : data;
+        console.error("Error fetching bulk translation progress:", error);
+        return null;
+      }
+
+      if (data && typeof data === "object" && "error" in data) {
+        console.error(
+          "Error fetching bulk translation progress:",
+          (data as { error?: unknown }).error
+        );
+        return null;
+      }
+
+      if (!isBulkTranslationProgressPayload(data)) {
+        console.error("Invalid bulk translation progress payload:", data);
+        return null;
+      }
 
       if (mountedRef.current) {
         setBulkProgress(data);

@@ -99,14 +99,14 @@ describe("Admin settings route", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const { GET } = await import("./route");
+    const { GET } = await import("@/app/api/admin/settings/route");
     const response = await GET();
 
     expect(response.status).toBe(401);
   });
 
   it("returns masked settings and defaults on GET", async () => {
-    const { GET } = await import("./route");
+    const { GET } = await import("@/app/api/admin/settings/route");
     const response = await GET();
     const data = await response.json();
 
@@ -121,7 +121,7 @@ describe("Admin settings route", () => {
   it("returns 500 when GET settings retrieval fails", async () => {
     mockGetTranslationSettings.mockRejectedValueOnce(new Error("db unavailable"));
 
-    const { GET } = await import("./route");
+    const { GET } = await import("@/app/api/admin/settings/route");
     const response = await GET();
     const data = await response.json();
 
@@ -130,7 +130,7 @@ describe("Admin settings route", () => {
   });
 
   it("returns 400 when PUT has no updatable fields", async () => {
-    const { PUT } = await import("./route");
+    const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(
       new NextRequest("http://localhost/api/admin/settings", {
         method: "PUT",
@@ -160,7 +160,7 @@ describe("Admin settings route", () => {
       },
     });
 
-    const { PUT } = await import("./route");
+    const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(
       new NextRequest("http://localhost/api/admin/settings", {
         method: "PUT",
@@ -195,10 +195,14 @@ describe("Admin settings route", () => {
     expect(response.status).toBe(200);
     expect(data.message).toBe("Settings updated successfully");
     expect(data.provider).toBe("local");
+    expect(data.openrouter.apiKey).not.toBe("new-openrouter-key");
+    expect(data.local.apiKey).not.toBe("new-local-key");
+    expect(data.openrouter.apiKey).toMatch(/^\*+/);
+    expect(data.local.apiKey).toMatch(/^\*+/);
   });
 
   it("returns 500 when PUT body parsing fails", async () => {
-    const { PUT } = await import("./route");
+    const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(
       new NextRequest("http://localhost/api/admin/settings", {
         method: "PUT",

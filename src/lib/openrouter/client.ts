@@ -60,16 +60,27 @@ export class OpenRouterClient {
     const startTime = Date.now();
     aiLog.debug({ model }, 'OpenRouter API request');
 
-    const response = await fetch(this.getUrl("responses"), {
+    const useResponsesApi = this.isOpenRouter;
+    const path = useResponsesApi ? "responses" : "chat/completions";
+    const requestBody = useResponsesApi
+      ? {
+          model,
+          input: request.messages,
+          temperature: request.temperature ?? 0.3,
+          max_output_tokens: request.max_tokens ?? 2048,
+          max_tokens: request.max_tokens ?? 2048,
+        }
+      : {
+          model,
+          messages: request.messages,
+          temperature: request.temperature ?? 0.3,
+          max_tokens: request.max_tokens ?? 2048,
+        };
+
+    const response = await fetch(this.getUrl(path), {
       method: "POST",
       headers: this.getHeaders(true),
-      body: JSON.stringify({
-        model,
-        input: request.messages,
-        temperature: request.temperature ?? 0.3,
-        max_output_tokens: request.max_tokens ?? 2048,
-        max_tokens: request.max_tokens ?? 2048,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     const durationMs = Date.now() - startTime;

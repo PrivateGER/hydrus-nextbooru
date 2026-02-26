@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
+import { containerSuiteDefaults } from './vitest.container-suite-defaults';
 
 export default defineConfig({
   test: {
@@ -10,17 +11,12 @@ export default defineConfig({
     include: ['src/test/perf/**/*.perf.test.ts'],
     exclude: ['node_modules', '.next'],
 
-    // Shared env setup + integration setup (Testcontainers)
-    setupFiles: ['./src/test/setup.ts', './src/test/integration/vitest-setup.ts'],
-
     // Longer timeouts for perf tests with large datasets
     testTimeout: 600000,  // 10min per test
     hookTimeout: 600000,  // 10min for beforeAll (seeding)
 
-    // Keep container-backed suites strictly single-worker in Vitest v4.
-    pool: 'forks',
-    fileParallelism: false,
-    maxWorkers: 1,
+    // Shared defaults for container-backed suites.
+    ...containerSuiteDefaults,
 
     // Verbose output to see timing results
     reporters: ['verbose'],

@@ -11,6 +11,9 @@ const {
   mockModelSupportsVision,
   mockGetOpenRouterClient,
   mockTranslateImage,
+  mockAiLogDebug,
+  mockAiLogInfo,
+  mockAiLogWarn,
   mockAiLogError,
   MockOpenRouterApiError,
   MockOpenRouterConfigError,
@@ -36,6 +39,9 @@ const {
     mockModelSupportsVision: vi.fn(),
     mockGetOpenRouterClient: vi.fn(),
     mockTranslateImage: vi.fn(),
+    mockAiLogDebug: vi.fn(),
+    mockAiLogInfo: vi.fn(),
+    mockAiLogWarn: vi.fn(),
     mockAiLogError: vi.fn(),
     MockOpenRouterApiError: TestOpenRouterApiError,
     MockOpenRouterConfigError: TestOpenRouterConfigError,
@@ -61,6 +67,9 @@ vi.mock("@/lib/hydrus/paths", () => ({
 
 vi.mock("@/lib/logger", () => ({
   aiLog: {
+    debug: mockAiLogDebug,
+    info: mockAiLogInfo,
+    warn: mockAiLogWarn,
     error: mockAiLogError,
   },
 }));
@@ -174,6 +183,24 @@ describe("POST /api/posts/[hash]/translate-image", () => {
 
     expect(response.status).toBe(429);
     expect(data.error).toContain("Rate limited");
+  });
+
+  it("maps OpenRouter config errors to 400", async () => {
+    mockTranslateImage.mockRejectedValueOnce(
+      new MockOpenRouterConfigError("OpenRouter API key is required")
+    );
+
+    const { POST } = await import("./route");
+    const response = await POST(
+      new NextRequest(`http://localhost/api/posts/${validHash}/translate-image`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ hash: validHash }) }
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toContain("OpenRouter API key is required");
   });
 
   it("maps generic API key errors to 401", async () => {

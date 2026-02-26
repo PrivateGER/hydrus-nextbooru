@@ -32,6 +32,17 @@ function isContainerAlreadyStoppedError(error: unknown): boolean {
     || dockerMessage.includes('not running');
 }
 
+function throwIfCleanupErrors(cleanupErrors: Error[]): void {
+  if (cleanupErrors.length === 1) {
+    throw cleanupErrors[0];
+  }
+  if (cleanupErrors.length > 1) {
+    const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
+    (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
+    throw aggregatedError;
+  }
+}
+
 /**
  * Start PostgreSQL container and run migrations.
  * Call this in beforeAll of your test suite.
@@ -111,14 +122,7 @@ export async function teardownTestDatabase(): Promise<void> {
   }
 
   if (!container) {
-    if (cleanupErrors.length === 1) {
-      throw cleanupErrors[0];
-    }
-    if (cleanupErrors.length > 1) {
-      const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
-      (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
-      throw aggregatedError;
-    }
+    throwIfCleanupErrors(cleanupErrors);
     return;
   }
 
@@ -136,14 +140,7 @@ export async function teardownTestDatabase(): Promise<void> {
     container = undefined;
   }
 
-  if (cleanupErrors.length === 1) {
-    throw cleanupErrors[0];
-  }
-  if (cleanupErrors.length > 1) {
-    const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
-    (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
-    throw aggregatedError;
-  }
+  throwIfCleanupErrors(cleanupErrors);
 }
 
 /**

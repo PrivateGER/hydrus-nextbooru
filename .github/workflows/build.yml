@@ -56,12 +56,14 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: true
 
       - name: Upload coverage reports to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/unit/**,coverage/integration/**
 
       - name: Upload test results to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

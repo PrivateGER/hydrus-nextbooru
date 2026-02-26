@@ -31,6 +31,76 @@ describe("OpenRouterClient", () => {
     ).not.toThrow();
   });
 
+  it("should use chat/completions with messages for local-compatible endpoints", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        id: "cmpl-local",
+        model: "local-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Hello" },
+            finish_reason: "stop",
+          },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    await client.chatCompletion({
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 111,
+    });
+
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(requestInit.body));
+
+    expect(url).toBe("https://example.com/v1/chat/completions");
+    expect(body.messages).toEqual([{ role: "user", content: "Hi" }]);
+    expect(body.input).toBeUndefined();
+    expect(body.max_tokens).toBe(111);
+  });
+
+  it("should use responses with input for OpenRouter endpoints", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        id: "cmpl-or",
+        model: "openrouter-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Hello" },
+            finish_reason: "stop",
+          },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+    });
+
+    await client.chatCompletion({
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 222,
+    });
+
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(requestInit.body));
+
+    expect(url).toBe("https://openrouter.ai/api/v1/responses");
+    expect(body.input).toEqual([{ role: "user", content: "Hi" }]);
+    expect(body.messages).toBeUndefined();
+    expect(body.max_output_tokens).toBe(222);
+  });
+
   it("should normalize Responses API output_text to chat completion shape", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({ output_text: "Hello" })
