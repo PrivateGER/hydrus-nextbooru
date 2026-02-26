@@ -12,6 +12,7 @@ import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
 import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
+import { isValidCreatorName } from "@/lib/groups";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
@@ -51,10 +52,11 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
   const characters = post.tags.filter(t => t.tag.category === "CHARACTER").map(t => t.tag.name);
   const copyrights = post.tags.filter(t => t.tag.category === "COPYRIGHT").map(t => t.tag.name);
   const groupTitle = post.groups[0]?.group.title;
+  const titleArtists = artists.filter(isValidCreatorName).slice(0, 2);
 
   // Build title: prefer group title, then artist, then hash
   const title = groupTitle
-    || (artists.length > 0 ? `Art by ${artists.slice(0, 2).join(", ")}` : null)
+    || (titleArtists.length > 0 ? `Art by ${titleArtists.join(", ")}` : null)
     || `Post ${hash.slice(0, 8)}`;
 
   // Build description from characters and copyrights
