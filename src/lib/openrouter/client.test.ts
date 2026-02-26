@@ -179,8 +179,35 @@ describe("OpenRouterClient", () => {
     const models = await client.listModels();
 
     expect(models).toEqual([
-      { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B" },
       { id: "custom-model", name: "Custom Model" },
+      { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B" },
+    ]);
+  });
+
+  it("should parse OpenAI-style data lists and filter non-generation LM Studio models", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        data: [
+          { id: "qwen/qwen3.5-35b-a3b", object: "model", owned_by: "organization_owner" },
+          { id: "text-embedding-nomic-embed-text-v1.5", object: "model", owned_by: "organization_owner" },
+          { id: "gpt-oss-safeguard-20b", object: "model", owned_by: "organization_owner" },
+          { id: "openai/gpt-oss-120b", object: "model", owned_by: "organization_owner" },
+          { id: "qwen/qwen3.5-35b-a3b", object: "model", owned_by: "organization_owner" },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "openai/gpt-oss-120b", name: "openai/gpt-oss-120b" },
+      { id: "qwen/qwen3.5-35b-a3b", name: "qwen/qwen3.5-35b-a3b" },
     ]);
   });
 
@@ -205,6 +232,74 @@ describe("OpenRouterClient", () => {
     expect(models).toEqual([
       { id: "provider/model-a", name: "Model A" },
       { id: "provider/model-b", name: "provider/model-b" },
+    ]);
+  });
+
+  it("should keep non-generation models when no generation model is available", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        data: [
+          { id: "text-embedding-nomic-embed-text-v1.5" },
+          { id: "jina-embeddings-v3" },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "jina-embeddings-v3", name: "jina-embeddings-v3" },
+      { id: "text-embedding-nomic-embed-text-v1.5", name: "text-embedding-nomic-embed-text-v1.5" },
+    ]);
+  });
+
+  it("should merge duplicate models to preserve richer names", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        data: [
+          { id: "provider/model-a" },
+          { id: "provider/model-a", display_name: "Provider Model A" },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "provider/model-a", name: "Provider Model A" },
+    ]);
+  });
+
+  it("should not filter generation models based only on display name text", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        data: [
+          { id: "provider/model-a", name: "Model A Embeddings Edition" },
+          { id: "provider/model-b", name: "Model B" },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const models = await client.listModels();
+
+    expect(models).toEqual([
+      { id: "provider/model-a", name: "Model A Embeddings Edition" },
+      { id: "provider/model-b", name: "Model B" },
     ]);
   });
 
