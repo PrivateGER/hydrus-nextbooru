@@ -145,8 +145,11 @@ describe("batchTranslateNotes", () => {
   it("replaces overflow error entries with auth error when maxErrors is reached", async () => {
     mockQueryRaw.mockResolvedValue([
       { contentHash: "a".repeat(64), content: "content A" },
+      { contentHash: "b".repeat(64), content: "content B" },
     ]);
-    mockTranslate.mockRejectedValue(new OpenRouterApiError("Unauthorized", 401));
+    mockTranslate
+      .mockRejectedValueOnce(new Error("some failure"))
+      .mockRejectedValueOnce(new OpenRouterApiError("Unauthorized", 401));
 
     const result = await batchTranslateNotes({ batchDelayMs: 0, maxErrors: 1 });
 

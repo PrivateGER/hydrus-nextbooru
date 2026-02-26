@@ -1,6 +1,7 @@
 import type {
   OpenRouterClientConfig,
   ChatCompletionRequest,
+  ChatCompletionChoice,
   ChatCompletionResponse,
   TranslationRequest,
   TranslationResult,
@@ -287,7 +288,18 @@ TRANSLATION:
       "choices" in data &&
       Array.isArray((data as { choices?: unknown }).choices)
     ) {
-      return data as ChatCompletionResponse;
+      const choices = (data as { choices: unknown[] }).choices;
+      const hasValidChoices = choices.length > 0
+        && choices.every((choice) => this.isChatCompletionChoice(choice));
+
+      if (hasValidChoices) {
+        return data as ChatCompletionResponse;
+      }
+
+      aiLog.warn(
+        { model, choicesLength: choices.length },
+        "OpenRouter response choices were invalid; using normalized fallback"
+      );
     }
 
     const text = this.extractResponseText(data);
@@ -306,6 +318,29 @@ TRANSLATION:
         },
       ],
     };
+  }
+
+  private isChatCompletionChoice(choice: unknown): choice is ChatCompletionChoice {
+    if (!choice || typeof choice !== "object") {
+      return false;
+    }
+
+    const candidate = choice as {
+      index?: unknown;
+      finish_reason?: unknown;
+      message?: unknown;
+    };
+
+    if (typeof candidate.index !== "number" || typeof candidate.finish_reason !== "string") {
+      return false;
+    }
+
+    if (!candidate.message || typeof candidate.message !== "object") {
+      return false;
+    }
+
+    const message = candidate.message as { role?: unknown; content?: unknown };
+    return typeof message.role === "string" && typeof message.content === "string";
   }
 
   private extractResponseText(data: unknown): string {

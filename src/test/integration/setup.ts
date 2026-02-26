@@ -76,13 +76,49 @@ export async function setupTestDatabase(): Promise<{
  * Call this in afterAll of your test suite.
  */
 export async function teardownTestDatabase(): Promise<void> {
-  await prisma?.$disconnect();
-  prisma = undefined;
+  const cleanupErrors: Error[] = [];
 
-  await pool?.end();
-  pool = undefined;
+  if (prisma) {
+    try {
+      await prisma.$disconnect();
+    } catch (error) {
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to disconnect Prisma client: ${String(error)}`)
+      );
+    } finally {
+      prisma = undefined;
+    }
+  } else {
+    prisma = undefined;
+  }
+
+  if (pool) {
+    try {
+      await pool.end();
+    } catch (error) {
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to close PostgreSQL pool: ${String(error)}`)
+      );
+    } finally {
+      pool = undefined;
+    }
+  } else {
+    pool = undefined;
+  }
 
   if (!container) {
+    if (cleanupErrors.length === 1) {
+      throw cleanupErrors[0];
+    }
+    if (cleanupErrors.length > 1) {
+      const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
+      (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
+      throw aggregatedError;
+    }
     return;
   }
 
@@ -90,10 +126,23 @@ export async function teardownTestDatabase(): Promise<void> {
     await container.stop();
   } catch (error) {
     if (!isContainerAlreadyStoppedError(error)) {
-      throw error;
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to stop test container: ${String(error)}`)
+      );
     }
   } finally {
     container = undefined;
+  }
+
+  if (cleanupErrors.length === 1) {
+    throw cleanupErrors[0];
+  }
+  if (cleanupErrors.length > 1) {
+    const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
+    (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
+    throw aggregatedError;
   }
 }
 

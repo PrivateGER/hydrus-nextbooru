@@ -12,6 +12,67 @@ import type {
 
 type ProviderTab = "openrouter" | "local";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function parseProvider(value: unknown): ProviderTab {
+  return value === "local" ? "local" : "openrouter";
+}
+
+function parseString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function parseTranslationSettingsPayload(value: unknown): TranslationSettings | null {
+  if (!isRecord(value)) return null;
+
+  const openrouter = value.openrouter;
+  const local = value.local;
+
+  if (!isRecord(openrouter) || !isRecord(local)) {
+    return null;
+  }
+
+  const supportedLanguages = Array.isArray(value.supportedLanguages)
+    ? value.supportedLanguages
+        .filter((language): language is { code: string; name: string } => (
+          isRecord(language)
+          && typeof language.code === "string"
+          && typeof language.name === "string"
+        ))
+    : [{ code: "en", name: "English" }];
+
+  const defaultModel = parseString(value.defaultModel, POPULAR_MODELS[0]?.id || "");
+
+  return {
+    provider: parseProvider(value.provider),
+    targetLang: parseString(value.targetLang, "en"),
+    supportedLanguages,
+    defaultModel,
+    openrouter: {
+      apiKey: typeof openrouter.apiKey === "string" || openrouter.apiKey === null
+        ? openrouter.apiKey
+        : null,
+      apiKeyConfigured: Boolean(openrouter.apiKeyConfigured),
+      model: parseString(openrouter.model, defaultModel),
+      baseUrl: typeof openrouter.baseUrl === "string" || openrouter.baseUrl === null
+        ? openrouter.baseUrl
+        : null,
+    },
+    local: {
+      apiKey: typeof local.apiKey === "string" || local.apiKey === null
+        ? local.apiKey
+        : null,
+      apiKeyConfigured: Boolean(local.apiKeyConfigured),
+      model: parseString(local.model),
+      baseUrl: typeof local.baseUrl === "string" || local.baseUrl === null
+        ? local.baseUrl
+        : null,
+    },
+  };
+}
+
 function isBulkTranslationProgressPayload(value: unknown): value is BulkTranslationProgress {
   if (!value || typeof value !== "object") return false;
 
@@ -136,7 +197,20 @@ export function useTranslation(
   const fetchSettings = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/settings");
-      const data: TranslationSettings = await response.json();
+      const rawData: unknown = await response.json();
+
+      if (!response.ok) {
+        const error =
+          rawData && typeof rawData === "object" && "error" in rawData
+            ? (rawData as { error?: unknown }).error
+            : rawData;
+        throw new Error(typeof error === "string" ? error : "Failed to fetch translation settings");
+      }
+
+      const data = parseTranslationSettingsPayload(rawData);
+      if (!data) {
+        throw new Error("Invalid translation settings payload");
+      }
 
       if (!mountedRef.current) return;
 
@@ -304,14 +378,16 @@ export function useTranslation(
     setMessage(null);
 
     try {
+      const trimmedOpenrouterCustomModel = openrouterCustomModel.trim();
+      const trimmedLocalCustomModel = localCustomModel.trim();
       const openrouterEffectiveModel =
-        openrouterModel === "custom" ? openrouterCustomModel : openrouterModel;
-      const localEffectiveModel = localModel === "custom" ? localCustomModel : localModel;
+        openrouterModel === "custom" ? trimmedOpenrouterCustomModel : openrouterModel;
+      const localEffectiveModel = localModel === "custom" ? trimmedLocalCustomModel : localModel;
 
-      if (provider === "openrouter" && openrouterModel === "custom" && !openrouterCustomModel.trim()) {
+      if (provider === "openrouter" && openrouterModel === "custom" && !trimmedOpenrouterCustomModel) {
         throw new Error("Please enter a custom OpenRouter model ID.");
       }
-      if (provider === "local" && localModel === "custom" && !localCustomModel.trim()) {
+      if (provider === "local" && localModel === "custom" && !trimmedLocalCustomModel) {
         throw new Error("Please enter a custom local model ID.");
       }
 

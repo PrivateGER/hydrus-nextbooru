@@ -71,6 +71,26 @@ describe("OpenRouterClient", () => {
     expect(result.choices[0]?.message?.content).toBe("Array text");
   });
 
+  it("should fall back to extracted text when choices payload is invalid", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        output_text: "Fallback text",
+        choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const result = await client.chatCompletion({
+      messages: [{ role: "user", content: "Hi" }],
+    });
+
+    expect(result.choices[0]?.message?.content).toBe("Fallback text");
+  });
+
   it("should parse models from LM Studio-style responses", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({
