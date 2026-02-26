@@ -4,9 +4,44 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { execSync } from 'child_process';
 
-let container: StartedPostgreSqlContainer;
-let pool: Pool;
-let prisma: PrismaClient;
+type DockerApiError = Error & {
+  statusCode?: number;
+  reason?: string;
+  json?: { message?: string };
+};
+
+let container: StartedPostgreSqlContainer | undefined;
+let pool: Pool | undefined;
+let prisma: PrismaClient | undefined;
+
+function isContainerAlreadyStoppedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const dockerError = error as DockerApiError;
+  const statusCode = dockerError.statusCode;
+  const message = error.message.toLowerCase();
+  const reason = dockerError.reason?.toLowerCase() ?? '';
+  const dockerMessage = dockerError.json?.message?.toLowerCase() ?? '';
+
+  return statusCode === 404
+    || message.includes('no such container')
+    || message.includes('not running')
+    || reason.includes('not running')
+    || dockerMessage.includes('not running');
+}
+
+function throwIfCleanupErrors(cleanupErrors: Error[]): void {
+  if (cleanupErrors.length === 1) {
+    throw cleanupErrors[0];
+  }
+  if (cleanupErrors.length > 1) {
+    const aggregatedError = new Error(`Teardown failed with ${cleanupErrors.length} errors`);
+    (aggregatedError as Error & { errors?: Error[] }).errors = cleanupErrors;
+    throw aggregatedError;
+  }
+}
 
 /**
  * Start PostgreSQL container and run migrations.
@@ -21,7 +56,7 @@ export async function setupTestDatabase(): Promise<{
     .withDatabase('booru_test')
     .withUsername('test')
     .withPassword('test')
-    .withTmpFs({ "/var/lib/postgresql/data": "rw" })
+    .withTmpFs({ "/var/lib/postgresql": "rw" })
     .start();
 
   const connectionString = container.getConnectionUri();
@@ -52,9 +87,60 @@ export async function setupTestDatabase(): Promise<{
  * Call this in afterAll of your test suite.
  */
 export async function teardownTestDatabase(): Promise<void> {
-  await prisma?.$disconnect();
-  await pool?.end();
-  await container?.stop();
+  const cleanupErrors: Error[] = [];
+
+  if (prisma) {
+    try {
+      await prisma.$disconnect();
+    } catch (error) {
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to disconnect Prisma client: ${String(error)}`)
+      );
+    } finally {
+      prisma = undefined;
+    }
+  } else {
+    prisma = undefined;
+  }
+
+  if (pool) {
+    try {
+      await pool.end();
+    } catch (error) {
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to close PostgreSQL pool: ${String(error)}`)
+      );
+    } finally {
+      pool = undefined;
+    }
+  } else {
+    pool = undefined;
+  }
+
+  if (!container) {
+    throwIfCleanupErrors(cleanupErrors);
+    return;
+  }
+
+  try {
+    await container.stop();
+  } catch (error) {
+    if (!isContainerAlreadyStoppedError(error)) {
+      cleanupErrors.push(
+        error instanceof Error
+          ? error
+          : new Error(`Failed to stop test container: ${String(error)}`)
+      );
+    }
+  } finally {
+    container = undefined;
+  }
+
+  throwIfCleanupErrors(cleanupErrors);
 }
 
 /**

@@ -45,6 +45,35 @@ export function MediaViewer({
   currentPosition,
   totalCount,
 }: MediaViewerProps) {
+  return (
+    <MediaViewerContent
+      key={hash}
+      hash={hash}
+      extension={extension}
+      mimeType={mimeType}
+      width={width}
+      height={height}
+      blurhash={blurhash}
+      prevPostHash={prevPostHash}
+      nextPostHash={nextPostHash}
+      currentPosition={currentPosition}
+      totalCount={totalCount}
+    />
+  );
+}
+
+function MediaViewerContent({
+  hash,
+  extension,
+  mimeType,
+  width,
+  height,
+  blurhash,
+  prevPostHash,
+  nextPostHash,
+  currentPosition,
+  totalCount,
+}: MediaViewerProps) {
   const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
@@ -144,12 +173,8 @@ export function MediaViewer({
     }
   }, [blurhash]);
 
-  // Reset loading states when hash changes
+  // Loading states reset naturally because MediaViewerContent is keyed by hash.
   useEffect(() => {
-    setPreviewLoaded(false);
-    setFullLoaded(false);
-    setShowBlurhash(false);
-
     let rafId2: number | null = null;
     let timerId: ReturnType<typeof setTimeout> | null = null;
 

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect, type ReactNode } from "react";
-import { BlurhashImage } from "./blurhash-image";
+import { useState, useRef, useCallback, type ReactNode } from "react";
+import { BlurhashImage } from "@/components/blurhash-image";
 
 interface ThumbnailCardProps {
   hash: string;
@@ -34,27 +34,16 @@ export function ThumbnailCard({
   children,
   className = "",
 }: ThumbnailCardProps) {
-  const [loaded, setLoaded] = useState(false);
+  const [loadedHash, setLoadedHash] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const loaded = loadedHash === hash;
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
-
-  // Handle hash changes and check for cached images
-  // When hash changes: reset state, then check if new image is already cached
-  const prevHashRef = useRef(hash);
-  useEffect(() => {
-    const img = imgRef.current;
-
-    // If hash changed, reset first
-    if (prevHashRef.current !== hash) {
-      prevHashRef.current = hash;
-      setLoaded(false);
-    }
-
-    // Then check if image is already cached (handles bfcache/back navigation)
-    if (img?.complete && img.naturalWidth > 0) {
-      setLoaded(true);
+  const setImageRef = useCallback((node: HTMLImageElement | null) => {
+    imgRef.current = node;
+    if (node?.complete && node.naturalWidth > 0) {
+      setLoadedHash(hash);
     }
   }, [hash]);
 
@@ -89,7 +78,8 @@ export function ThumbnailCard({
 
       {/* Actual thumbnail */}
       <img
-        ref={imgRef}
+        key={hash}
+        ref={setImageRef}
         src={`/api/thumbnails/${hash}.webp`}
         alt=""
         className={`${heightClass} w-auto transition-opacity duration-300 ${
@@ -97,7 +87,7 @@ export function ThumbnailCard({
         }`}
         style={{ aspectRatio }}
         loading="lazy"
-        onLoad={() => setLoaded(true)}
+        onLoad={() => setLoadedHash(hash)}
       />
 
       {/* Video/GIF indicator */}

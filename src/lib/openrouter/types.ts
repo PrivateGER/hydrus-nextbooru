@@ -4,6 +4,7 @@ export interface OpenRouterClientConfig {
   apiKey: string;
   model?: string;
   defaultTargetLang?: string;
+  baseUrl?: string;
 }
 
 export interface ChatMessageText {
@@ -74,15 +75,36 @@ export interface ImageTranslationResult {
 
 // Settings keys stored in database
 export const SETTINGS_KEYS = {
+  PROVIDER: "openrouter.provider",
   API_KEY: "openrouter.apiKey",
   MODEL: "openrouter.model",
   TARGET_LANG: "openrouter.targetLang",
+  BASE_URL: "openrouter.baseUrl",
+  LOCAL_API_KEY: "openrouter.local.apiKey",
+  LOCAL_MODEL: "openrouter.local.model",
+  LOCAL_BASE_URL: "openrouter.local.baseUrl",
 } as const;
 
 export interface OpenRouterSettings {
   apiKey: string | null;
   model: string | null;
   targetLang: string | null;
+  baseUrl: string | null;
+}
+
+export type LlmProvider = "openrouter" | "local";
+
+export interface ProviderSettings {
+  apiKey: string | null;
+  model: string | null;
+  baseUrl: string | null;
+}
+
+export interface TranslationSettings {
+  provider: LlmProvider;
+  targetLang: string | null;
+  openrouter: ProviderSettings;
+  local: ProviderSettings;
 }
 
 // Model definitions with capabilities

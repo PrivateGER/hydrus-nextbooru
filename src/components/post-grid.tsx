@@ -21,15 +21,28 @@ export function PostGrid({ posts }: PostGridProps) {
   const [layout, setLayout] = useState<LayoutMode>("masonry");
 
   useEffect(() => {
-    const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-    if (saved === "grid" || saved === "masonry") {
-      setLayout(saved);
+    try {
+      const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      if (saved === "grid" || saved === "masonry") {
+        const timeout = window.setTimeout(() => {
+          setLayout(saved);
+        }, 0);
+        return () => {
+          window.clearTimeout(timeout);
+        };
+      }
+    } catch {
+      // Keep default layout if storage is unavailable.
     }
   }, []);
 
   const handleLayoutChange = (newLayout: LayoutMode) => {
     setLayout(newLayout);
-    localStorage.setItem(LAYOUT_STORAGE_KEY, newLayout);
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, newLayout);
+    } catch {
+      // Ignore storage write failures and keep UI state.
+    }
   };
 
   if (posts.length === 0) {

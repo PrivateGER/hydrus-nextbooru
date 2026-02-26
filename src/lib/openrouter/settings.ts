@@ -1,16 +1,17 @@
 import { prisma } from "@/lib/db";
 import { OpenRouterClient, OpenRouterConfigError } from "./client";
-import { SETTINGS_KEYS, type OpenRouterSettings } from "./types";
+import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
+import {
+  SETTINGS_KEYS,
+  type OpenRouterSettings,
+  type TranslationSettings,
+  type LlmProvider,
+} from "./types";
 
 /**
- * Load OpenRouter configuration, preferring values stored in the database and falling back to environment variables.
- *
- * @returns An OpenRouterSettings object with the resolved settings:
- * - `apiKey`: the OpenRouter API key or `null` if not configured
- * - `model`: the OpenRouter model identifier or `null` if not configured
- * - `targetLang`: the default target language or `null` if not configured
+ * Load translation configuration from the database.
  */
-export async function getOpenRouterSettings(): Promise<OpenRouterSettings> {
+export async function getTranslationSettings(): Promise<TranslationSettings> {
   const settings = await prisma.settings.findMany({
     where: {
       key: {
@@ -21,19 +22,38 @@ export async function getOpenRouterSettings(): Promise<OpenRouterSettings> {
 
   const settingsMap = new Map(settings.map((s) => [s.key, s.value]));
 
+  const provider = (settingsMap.get(SETTINGS_KEYS.PROVIDER) as LlmProvider | undefined) || "openrouter";
+
   return {
-    apiKey:
-      settingsMap.get(SETTINGS_KEYS.API_KEY) ||
-      process.env.OPENROUTER_API_KEY ||
-      null,
-    model:
-      settingsMap.get(SETTINGS_KEYS.MODEL) ||
-      process.env.OPENROUTER_MODEL ||
-      null,
-    targetLang:
-      settingsMap.get(SETTINGS_KEYS.TARGET_LANG) ||
-      process.env.OPENROUTER_DEFAULT_TARGET_LANG ||
-      null,
+    provider,
+    targetLang: settingsMap.get(SETTINGS_KEYS.TARGET_LANG) || null,
+    openrouter: {
+      apiKey: settingsMap.get(SETTINGS_KEYS.API_KEY) || null,
+      model: settingsMap.get(SETTINGS_KEYS.MODEL) || null,
+      baseUrl: settingsMap.get(SETTINGS_KEYS.BASE_URL) || null,
+    },
+    local: {
+      apiKey: settingsMap.get(SETTINGS_KEYS.LOCAL_API_KEY) || null,
+      model: settingsMap.get(SETTINGS_KEYS.LOCAL_MODEL) || null,
+      baseUrl: settingsMap.get(SETTINGS_KEYS.LOCAL_BASE_URL) || null,
+    },
+  };
+}
+
+/**
+ * Load active provider configuration for translation calls.
+ */
+export async function getOpenRouterSettings(): Promise<OpenRouterSettings> {
+  const settings = await getTranslationSettings();
+  const active = settings.provider === "local" ? settings.local : settings.openrouter;
+
+  return {
+    apiKey: active.apiKey,
+    model: active.model,
+    targetLang: settings.targetLang,
+    baseUrl:
+      active.baseUrl ||
+      (settings.provider === "openrouter" ? DEFAULT_BASE_URL : null),
   };
 }
 
@@ -79,24 +99,46 @@ export async function updateSettings(
 }
 
 /**
- * Create an OpenRouterClient using configured settings, falling back to environment variables when necessary.
+ * Create an OpenRouterClient using configured settings.
  *
  * @returns An initialized OpenRouterClient configured with the resolved API key, model (if present), and default target language (if present).
- * @throws Error if an API key is not configured in settings or environment variables.
+ * @throws Error if the active provider is missing required settings.
  */
 export async function getOpenRouterClient(): Promise<OpenRouterClient> {
-  const settings = await getOpenRouterSettings();
+  const settings = await getTranslationSettings();
+  const active = settings.provider === "local" ? settings.local : settings.openrouter;
 
-  if (!settings.apiKey) {
+  if (settings.provider === "openrouter" && !active.apiKey) {
     throw new OpenRouterConfigError(
-      "OpenRouter API key not configured. Set it in Admin Settings or OPENROUTER_API_KEY environment variable."
+      "OpenRouter API key not configured. Set it in Admin Settings."
+    );
+  }
+
+  if (settings.provider === "openrouter" && active.baseUrl && isCustomEndpoint(active.baseUrl) && !active.model) {
+    throw new OpenRouterConfigError(
+      "Model not configured for custom OpenRouter endpoint. Set it in Admin Settings."
+    );
+  }
+
+  if (settings.provider === "local" && !active.model) {
+    throw new OpenRouterConfigError(
+      "Model not configured for Local provider. Set it in Admin Settings."
+    );
+  }
+
+  if (settings.provider === "local" && !active.baseUrl) {
+    throw new OpenRouterConfigError(
+      "Local endpoint not configured. Set it in Admin Settings."
     );
   }
 
   return new OpenRouterClient({
-    apiKey: settings.apiKey,
-    model: settings.model || undefined,
+    apiKey: active.apiKey || "",
+    model: active.model || undefined,
     defaultTargetLang: settings.targetLang || undefined,
+    baseUrl:
+      active.baseUrl ||
+      (settings.provider === "openrouter" ? DEFAULT_BASE_URL : undefined),
   });
 }
 
@@ -111,4 +153,28 @@ export function maskApiKey(key: string): string {
     return "****";
   }
   return `${key.slice(0, 8)}...${key.slice(-4)}`;
+}
+
+/**
+ * Check whether a base URL points to a custom (non-OpenRouter) endpoint.
+ */
+export function isCustomEndpoint(baseUrl: string | null | undefined): boolean {
+  if (!baseUrl) return false;
+  return normalizeBaseUrl(baseUrl) !== normalizeBaseUrl(DEFAULT_BASE_URL);
+}
+
+/**
+ * Resolve the effective model for API calls based on endpoint type.
+ */
+export function getEffectiveModel(settings: OpenRouterSettings): string {
+  if (settings.baseUrl && isCustomEndpoint(settings.baseUrl)) {
+    if (!settings.model) {
+      throw new OpenRouterConfigError(
+        "Model not configured for custom OpenRouter endpoint. Set it in Admin Settings."
+      );
+    }
+    return settings.model;
+  }
+
+  return settings.model || OpenRouterClient.getDefaultModel();
 }

@@ -18,8 +18,8 @@ describe('GET /api/download/[filename] (Integration)', () => {
 
     // Mock fs modules and import the route handler
     await setupFsMock();
-    const module = await import('@/app/api/download/[filename]/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/download/[filename]/route');
+    GET = routeModule.GET;
   });
 
   afterAll(async () => {

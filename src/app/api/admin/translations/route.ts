@@ -42,7 +42,7 @@ export function resetTranslationProgress(): void {
 }
 
 // Concurrency control
-const MAX_CONCURRENT = 5;
+const MAX_CONCURRENT = 10;
 const BATCH_DELAY_MS = 500; // 500ms delay to avoid rate limiting
 
 /**

@@ -23,10 +23,10 @@ describe('/api/admin/sync (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    const module = await import('@/app/api/admin/sync/route');
-    GET = module.GET;
-    POST = module.POST;
-    DELETE = module.DELETE;
+    const routeModule = await import('@/app/api/admin/sync/route');
+    GET = routeModule.GET;
+    POST = routeModule.POST;
+    DELETE = routeModule.DELETE;
   });
 
   afterAll(async () => {

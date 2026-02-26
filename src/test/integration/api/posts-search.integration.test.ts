@@ -12,8 +12,8 @@ describe('GET /api/posts/search (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    const module = await import('@/app/api/posts/search/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/posts/search/route');
+    GET = routeModule.GET;
   });
 
   afterAll(async () => {

@@ -4,7 +4,7 @@
  * Fetches pricing dynamically from OpenRouter's API with caching.
  */
 
-import { getOpenRouterSettings } from "./settings";
+import { getTranslationSettings, isCustomEndpoint } from "./settings";
 
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
@@ -76,6 +76,17 @@ async function fetchModelPricing(
 export async function getModelPricing(modelId: string): Promise<ModelPricing> {
   const now = Date.now();
 
+  const settings = await getTranslationSettings();
+  const openrouterSettings = settings.openrouter;
+  const useOpenRouterPricing =
+    settings.provider === "openrouter" &&
+    !!openrouterSettings.apiKey &&
+    !isCustomEndpoint(openrouterSettings.baseUrl);
+
+  if (!useOpenRouterPricing) {
+    return DEFAULT_PRICING;
+  }
+
   // Check if cache is valid
   if (pricingCache && now - cacheTimestamp < CACHE_TTL_MS) {
     return pricingCache.get(modelId) ?? DEFAULT_PRICING;
@@ -83,12 +94,9 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
 
   // Try to refresh cache
   try {
-    const settings = await getOpenRouterSettings();
-    if (settings.apiKey) {
-      pricingCache = await fetchModelPricing(settings.apiKey);
-      cacheTimestamp = now;
-      return pricingCache.get(modelId) ?? DEFAULT_PRICING;
-    }
+    pricingCache = await fetchModelPricing(openrouterSettings.apiKey!);
+    cacheTimestamp = now;
+    return pricingCache.get(modelId) ?? DEFAULT_PRICING;
   } catch (error) {
     // Log for debugging but don't fail - fallback to cache/default
     console.debug?.("Failed to refresh pricing cache:", error);
@@ -114,9 +122,14 @@ export function getModelPricingSync(modelId: string): ModelPricing {
  */
 export async function warmPricingCache(): Promise<void> {
   try {
-    const settings = await getOpenRouterSettings();
-    if (settings.apiKey) {
-      pricingCache = await fetchModelPricing(settings.apiKey);
+    const settings = await getTranslationSettings();
+    const openrouterSettings = settings.openrouter;
+    if (
+      settings.provider === "openrouter" &&
+      openrouterSettings.apiKey &&
+      !isCustomEndpoint(openrouterSettings.baseUrl)
+    ) {
+      pricingCache = await fetchModelPricing(openrouterSettings.apiKey);
       cacheTimestamp = Date.now();
     }
   } catch (error) {

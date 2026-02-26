@@ -23,12 +23,22 @@ export interface ThumbnailStats {
 }
 
 export interface TranslationSettings {
-  apiKey: string | null;
-  apiKeyConfigured: boolean;
-  model: string;
+  provider: "openrouter" | "local";
   targetLang: string;
   supportedLanguages: { code: string; name: string }[];
   defaultModel: string;
+  openrouter: {
+    apiKey: string | null;
+    apiKeyConfigured: boolean;
+    model: string;
+    baseUrl: string | null;
+  };
+  local: {
+    apiKey: string | null;
+    apiKeyConfigured: boolean;
+    model: string;
+    baseUrl: string | null;
+  };
 }
 
 export interface TranslationEstimate {
@@ -36,6 +46,19 @@ export interface TranslationEstimate {
   translatedCount: number;
   untranslatedCount: number;
   uniqueTitlesToTranslate: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedCost: string;
+  estimatedCostUsd: number;
+  model: string;
+  pricing: { inputPer1M: number; outputPer1M: number };
+}
+
+export interface NoteTranslationEstimate {
+  totalUniqueNotes: number;
+  translatedCount: number;
+  untranslatedCount: number;
+  uniqueNotesToTranslate: number;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
   estimatedCost: string;

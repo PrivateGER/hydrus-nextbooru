@@ -3,10 +3,12 @@ import { prisma } from "@/lib/db";
 import { verifyAdminSession } from "@/lib/auth";
 import {
   getOpenRouterSettings,
+  getTranslationSettings,
   estimateTranslationCost,
   formatCost,
+  getEffectiveModel,
+  OpenRouterConfigError,
 } from "@/lib/openrouter";
-import { OpenRouterClient } from "@/lib/openrouter";
 
 /**
  * Get cost estimate for translating all untranslated group titles.
@@ -19,16 +21,18 @@ export async function GET() {
   if (!auth.authorized) return auth.response;
 
   try {
+    const translationSettings = await getTranslationSettings();
     const settings = await getOpenRouterSettings();
+    const isLocalProvider = translationSettings.provider === "local";
 
-    if (!settings.apiKey) {
+    if (!isLocalProvider && !settings.apiKey) {
       return NextResponse.json(
         { error: "OpenRouter API key not configured" },
         { status: 401 }
       );
     }
 
-    const model = settings.model || OpenRouterClient.getDefaultModel();
+    const model = getEffectiveModel(settings);
 
     // Find all unique untranslated titles (filter whitespace-only titles)
     // Groups that have a title but no corresponding translation
@@ -77,8 +81,8 @@ export async function GET() {
       uniqueTitlesToTranslate: estimate.uniqueTitles,
       estimatedInputTokens: estimate.estimatedInputTokens,
       estimatedOutputTokens: estimate.estimatedOutputTokens,
-      estimatedCost: formatCost(estimate.estimatedCostUsd),
-      estimatedCostUsd: estimate.estimatedCostUsd,
+      estimatedCost: isLocalProvider ? "?" : formatCost(estimate.estimatedCostUsd),
+      estimatedCostUsd: isLocalProvider ? 0 : estimate.estimatedCostUsd,
 
       // Model info
       model,
@@ -88,6 +92,13 @@ export async function GET() {
       },
     });
   } catch (error) {
+    if (error instanceof OpenRouterConfigError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+
     console.error("Error estimating translation cost:", error);
     return NextResponse.json(
       { error: "Failed to estimate translation cost" },

@@ -194,22 +194,7 @@ export default function AdminPage() {
       case "translation":
         return (
           <TranslationSection
-            settings={translation.settings}
-            estimate={translation.estimate}
-            bulkProgress={translation.bulkProgress}
-            apiKey={translation.apiKey}
-            model={translation.model}
-            customModel={translation.customModel}
-            targetLang={translation.targetLang}
-            onApiKeyChange={translation.setApiKey}
-            onModelChange={translation.setModel}
-            onCustomModelChange={translation.setCustomModel}
-            onTargetLangChange={translation.setTargetLang}
-            isSaving={translation.isSaving}
-            isTranslating={translation.isTranslating}
-            onSave={translation.saveSettings}
-            onStartBulk={translation.startBulkTranslation}
-            onCancelBulk={translation.cancelBulkTranslation}
+            translation={translation}
             openConfirmModal={openConfirmModal}
           />
         );

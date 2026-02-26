@@ -1,26 +1,22 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
+import { containerSuiteDefaults } from './vitest.container-suite-defaults';
 
 export default defineConfig({
   test: {
+    globals: true,
+    environment: 'node',
+
     // Only run perf tests
     include: ['src/test/perf/**/*.perf.test.ts'],
     exclude: ['node_modules', '.next'],
-
-    // Use integration setup (Testcontainers)
-    setupFiles: ['./src/test/integration/vitest-setup.ts'],
 
     // Longer timeouts for perf tests with large datasets
     testTimeout: 600000,  // 10min per test
     hookTimeout: 600000,  // 10min for beforeAll (seeding)
 
-    // Single thread for shared database connection
-    pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    // Shared defaults for container-backed suites.
+    ...containerSuiteDefaults,
 
     // Verbose output to see timing results
     reporters: ['verbose'],

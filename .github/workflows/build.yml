@@ -45,20 +45,30 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      - name: Run tests
-        run: npm run test:coverage -- --reporter=junit --outputFile=test-report.junit.xml
+      - name: Run unit tests with coverage
+        run: npm run test:coverage -- --coverage.reportsDirectory=coverage/unit --reporter=junit --outputFile=test-report.unit.junit.xml --reporter=default
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: true
+
+      - name: Run integration tests with coverage
+        run: npm run test:integration -- --coverage --coverage.reportsDirectory=coverage/integration --reporter=junit --outputFile=test-report.integration.junit.xml --reporter=default
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: true
 
       - name: Upload coverage reports to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/unit/**,coverage/integration/**
 
       - name: Upload test results to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           report_type: test_results
-          files: test-report.junit.xml
+          files: test-report.unit.junit.xml,test-report.integration.junit.xml
 
   build:
     runs-on: ubuntu-latest

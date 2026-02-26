@@ -7,6 +7,7 @@ import { createOpenRouterHandlers, createMockOpenRouterState, setTranslationResp
 import { invalidateAllCaches } from '@/lib/cache';
 import { clearPatternCache } from '@/lib/tag-blacklist';
 import { SETTINGS_KEYS } from '@/lib/openrouter/types';
+import { batchTranslateNotes } from '@/lib/notes-translation';
 import type { SetupServer } from 'msw/node';
 
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
@@ -347,6 +348,107 @@ describe('Notes Integration', () => {
       expect(noteAfter!.contentHash).toBe(noteBefore!.contentHash);
       expect(noteAfter!.translation).not.toBeNull();
       expect(noteAfter!.translation!.translatedContent).toBe('Preserved translation');
+    });
+  });
+
+  describe('batchTranslateNotes', () => {
+    let openRouterState: MockOpenRouterState;
+
+    beforeEach(async () => {
+      const prisma = getTestPrisma();
+
+      await prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.API_KEY },
+        update: { value: 'test-api-key' },
+        create: {
+          key: SETTINGS_KEYS.API_KEY,
+          value: 'test-api-key',
+        },
+      });
+
+      openRouterState = createMockOpenRouterState();
+      server.use(...createOpenRouterHandlers(openRouterState));
+    });
+
+    it('should translate each unique note content once', async () => {
+      const prisma = getTestPrisma();
+      const sharedContent = '共有ノート';
+
+      addFilesToState(hydrusState, [
+        createMockFileWithNotes(
+          { 'Note': sharedContent },
+          { file_id: 1, hash: 'a'.repeat(64) }
+        ),
+        createMockFileWithNotes(
+          { 'Note': sharedContent },
+          { file_id: 2, hash: 'b'.repeat(64) }
+        ),
+        createMockFileWithNotes(
+          { 'Note': '別の内容' },
+          { file_id: 3, hash: 'c'.repeat(64) }
+        ),
+      ]);
+
+      await syncFromHydrus();
+      setTranslationResponse(openRouterState, 'Translated note', 'Japanese');
+
+      const result = await batchTranslateNotes({ targetLang: 'en', batchDelayMs: 0 });
+
+      expect(result.status).toBe('completed');
+      expect(result.total).toBe(2);
+      expect(result.completed).toBe(2);
+      expect(result.failed).toBe(0);
+
+      // One API call per unique contentHash
+      expect(openRouterState.callCount).toBe(2);
+
+      const translations = await prisma.contentTranslation.findMany();
+      expect(translations).toHaveLength(2);
+    });
+
+    it('should skip already translated and whitespace-only notes', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileWithNotes(
+          { 'Already': 'Already translated', 'Blank': '   ' },
+          { file_id: 1, hash: 'a'.repeat(64) }
+        ),
+        createMockFileWithNotes(
+          { 'Pending': 'Needs translation' },
+          { file_id: 2, hash: 'b'.repeat(64) }
+        ),
+      ]);
+
+      await syncFromHydrus();
+
+      const alreadyTranslated = await prisma.note.findFirst({
+        where: { content: 'Already translated' },
+      });
+      expect(alreadyTranslated).not.toBeNull();
+
+      await prisma.contentTranslation.create({
+        data: {
+          contentHash: alreadyTranslated!.contentHash,
+          translatedContent: 'Existing translation',
+          sourceLanguage: 'ja',
+          targetLanguage: 'en',
+        },
+      });
+
+      setTranslationResponse(openRouterState, 'New translation', 'Japanese');
+      openRouterState.callCount = 0;
+
+      const result = await batchTranslateNotes({ targetLang: 'en', batchDelayMs: 0 });
+
+      expect(result.status).toBe('completed');
+      expect(result.total).toBe(1);
+      expect(result.completed).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(openRouterState.callCount).toBe(1);
+
+      const translations = await prisma.contentTranslation.findMany();
+      expect(translations).toHaveLength(2);
     });
   });
 

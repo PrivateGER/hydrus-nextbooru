@@ -47,6 +47,10 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
 
 const PAGE_SIZE = 50;
 
+function createRandomSeed(): string {
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+}
+
 async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }> }) {
   const params = await searchParams;
   const typeFilter = params.type as SourceType | undefined;
@@ -55,7 +59,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
 
   // Redirect to include seed for stable random ordering across pagination
   if (order === "random" && !params.seed) {
-    const newSeed = Math.random().toString(36).substring(2, 10);
+    const newSeed = createRandomSeed();
     const redirectParams = new URLSearchParams();
     if (typeFilter) redirectParams.set("type", typeFilter);
     redirectParams.set("order", "random");
@@ -86,7 +90,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
     const newType = overrides.type === null ? undefined : (overrides.type ?? typeFilter);
     const newOrder = overrides.order ?? order;
     const newPage = overrides.page ?? page;
-    const newSeed = overrides.newSeed ? Math.random().toString(36).substring(2, 10) : seed;
+    const newSeed = overrides.newSeed ? createRandomSeed() : seed;
 
     if (newType) params.set("type", newType);
     params.set("order", newOrder);

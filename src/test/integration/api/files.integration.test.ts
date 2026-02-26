@@ -15,8 +15,8 @@ describe('GET /api/files/[filename] (Integration)', () => {
   beforeAll(async () => {
     process.env.HYDRUS_FILES_PATH = '/hydrus/files';
     await setupFsMock();
-    const module = await import('@/app/api/files/[filename]/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/files/[filename]/route');
+    GET = routeModule.GET;
   });
 
   afterAll(() => {

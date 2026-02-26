@@ -19,8 +19,8 @@ describe('Performance: Tag Search API', () => {
     await seedDataset(prisma);
 
     // Dynamic import after Prisma is set up
-    const module = await import('@/app/api/tags/search/route');
-    GET = module.GET;
+    const routeModule = await import('@/app/api/tags/search/route');
+    GET = routeModule.GET;
   }, 180_000); // 3 minutes for container + seeding
 
   afterAll(async () => {

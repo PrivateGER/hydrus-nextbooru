@@ -1,6 +1,7 @@
 import type {
   OpenRouterClientConfig,
   ChatCompletionRequest,
+  ChatCompletionChoice,
   ChatCompletionResponse,
   TranslationRequest,
   TranslationResult,
@@ -8,8 +9,8 @@ import type {
   ImageTranslationResult,
 } from "./types";
 import { aiLog } from "@/lib/logger";
+import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "google/gemini-3-flash-preview";
 const DEFAULT_TARGET_LANG = "en";
 
@@ -33,13 +34,18 @@ export class OpenRouterClient {
   private apiKey: string;
   private model: string;
   private defaultTargetLang: string;
+  private baseUrl: string;
+  private isOpenRouter: boolean;
 
   constructor(config: OpenRouterClientConfig) {
     this.apiKey = config.apiKey;
     this.model = config.model || DEFAULT_MODEL;
     this.defaultTargetLang = config.defaultTargetLang || DEFAULT_TARGET_LANG;
+    this.baseUrl = normalizeBaseUrl(config.baseUrl || DEFAULT_BASE_URL);
+    this.isOpenRouter =
+      this.baseUrl === normalizeBaseUrl(DEFAULT_BASE_URL);
 
-    if (!this.apiKey) {
+    if (!this.apiKey && this.isOpenRouter) {
       throw new OpenRouterConfigError(
         "OpenRouter API key is required. Configure it in Admin Settings."
       );
@@ -54,20 +60,27 @@ export class OpenRouterClient {
     const startTime = Date.now();
     aiLog.debug({ model }, 'OpenRouter API request');
 
-    const response = await fetch(OPENROUTER_API_URL, {
+    const useResponsesApi = this.isOpenRouter;
+    const path = useResponsesApi ? "responses" : "chat/completions";
+    const requestBody = useResponsesApi
+      ? {
+          model,
+          input: request.messages,
+          temperature: request.temperature ?? 0.3,
+          max_output_tokens: request.max_tokens ?? 2048,
+          max_tokens: request.max_tokens ?? 2048,
+        }
+      : {
+          model,
+          messages: request.messages,
+          temperature: request.temperature ?? 0.3,
+          max_tokens: request.max_tokens ?? 2048,
+        };
+
+    const response = await fetch(this.getUrl(path), {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/PrivateGER/hydrus-nextbooru",
-        "X-Title": "Nextbooru",
-      },
-      body: JSON.stringify({
-        model,
-        messages: request.messages,
-        temperature: request.temperature ?? 0.3,
-        max_tokens: request.max_tokens ?? 2048,
-      }),
+      headers: this.getHeaders(true),
+      body: JSON.stringify(requestBody),
     });
 
     const durationMs = Date.now() - startTime;
@@ -84,7 +97,55 @@ export class OpenRouterClient {
 
     aiLog.debug({ model, status: response.status, durationMs }, 'OpenRouter API response');
 
-    return response.json() as Promise<ChatCompletionResponse>;
+    const data = (await response.json()) as unknown;
+    return this.normalizeChatResponse(data, model);
+  }
+
+  /**
+   * Fetch available models from the API.
+   */
+  async listModels(): Promise<{ id: string; name: string }[]> {
+    const response = await fetch(this.getUrl("models"), {
+      headers: this.getHeaders(false),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      aiLog.error({ status: response.status, body: errorText.slice(0, 500) }, "OpenRouter models error");
+      throw new OpenRouterApiError(
+        `OpenRouter API error: ${response.status} ${response.statusText}`,
+        response.status,
+        errorText
+      );
+    }
+
+    type ModelListEntry = {
+      id?: string;
+      key?: string;
+      name?: string;
+      display_name?: string;
+    };
+
+    const data = (await response.json()) as {
+      data?: ModelListEntry[];
+      models?: ModelListEntry[];
+    };
+
+    const models: ModelListEntry[] =
+      data.data ??
+      data.models ??
+      (Array.isArray(data) ? (data as ModelListEntry[]) : []);
+
+    return models
+      .map((model) => {
+        const id = model.id || model.key;
+        if (!id) return null;
+        return {
+          id,
+          name: model.name || model.display_name || id,
+        };
+      })
+      .filter((model): model is { id: string; name: string } => model !== null);
   }
 
   /**
@@ -228,11 +289,121 @@ TRANSLATION:
     return LANGUAGE_NAMES[code.toLowerCase()] || code;
   }
 
+  private normalizeChatResponse(
+    data: unknown,
+    model: string
+  ): ChatCompletionResponse {
+    if (
+      data &&
+      typeof data === "object" &&
+      "choices" in data &&
+      Array.isArray((data as { choices?: unknown }).choices)
+    ) {
+      const choices = (data as { choices: unknown[] }).choices;
+      const hasValidChoices = choices.length > 0
+        && choices.every((choice) => this.isChatCompletionChoice(choice));
+
+      if (hasValidChoices) {
+        return data as ChatCompletionResponse;
+      }
+
+      aiLog.warn(
+        { model, choicesLength: choices.length },
+        "OpenRouter response choices were invalid; using normalized fallback"
+      );
+    }
+
+    const text = this.extractResponseText(data);
+
+    return {
+      id: typeof (data as { id?: string })?.id === "string" ? (data as { id?: string }).id! : "response",
+      model,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: text,
+          },
+          finish_reason: "stop",
+        },
+      ],
+    };
+  }
+
+  private isChatCompletionChoice(choice: unknown): choice is ChatCompletionChoice {
+    if (!choice || typeof choice !== "object") {
+      return false;
+    }
+
+    const candidate = choice as {
+      index?: unknown;
+      finish_reason?: unknown;
+      message?: unknown;
+    };
+
+    if (typeof candidate.index !== "number" || typeof candidate.finish_reason !== "string") {
+      return false;
+    }
+
+    if (!candidate.message || typeof candidate.message !== "object") {
+      return false;
+    }
+
+    const message = candidate.message as { role?: unknown; content?: unknown };
+    return typeof message.role === "string" && typeof message.content === "string";
+  }
+
+  private extractResponseText(data: unknown): string {
+    if (!data || typeof data !== "object") return "";
+
+    const directText = (data as { output_text?: string }).output_text;
+    if (typeof directText === "string") {
+      return directText;
+    }
+
+    const output = (data as { output?: unknown }).output;
+    if (Array.isArray(output)) {
+      for (const item of output) {
+        if (item && typeof item === "object") {
+          const content = (item as { content?: unknown }).content;
+          if (Array.isArray(content)) {
+            for (const part of content) {
+              if (part && typeof part === "object") {
+                const type = (part as { type?: string }).type;
+                const text = (part as { text?: string }).text;
+                if ((type === "output_text" || type === "text") && typeof text === "string") {
+                  return text;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return "";
+  }
+
   /**
    * Get default model
    */
   static getDefaultModel(): string {
     return DEFAULT_MODEL;
+  }
+
+  /**
+   * Get default API base URL.
+   */
+  static getDefaultBaseUrl(): string {
+    return DEFAULT_BASE_URL;
+  }
+
+  /**
+   * Normalize a base URL for comparisons and joins.
+   */
+  static normalizeBaseUrl(baseUrl: string): string {
+    return normalizeBaseUrl(baseUrl);
   }
 
   /**
@@ -247,6 +418,29 @@ TRANSLATION:
    */
   static getSupportedLanguages(): { code: string; name: string }[] {
     return Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }));
+  }
+
+  private getUrl(path: string): string {
+    return `${this.baseUrl}/${path.replace(/^\/+/, "")}`;
+  }
+
+  private getHeaders(includeContentType: boolean): Record<string, string> {
+    const headers: Record<string, string> = {};
+
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
+    if (includeContentType) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    if (this.isOpenRouter) {
+      headers["HTTP-Referer"] = "https://github.com/PrivateGER/hydrus-nextbooru";
+      headers["X-Title"] = "Nextbooru";
+    }
+
+    return headers;
   }
 }
 
