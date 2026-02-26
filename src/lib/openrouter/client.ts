@@ -119,33 +119,45 @@ export class OpenRouterClient {
       );
     }
 
-    type ModelListEntry = {
-      id?: string;
-      key?: string;
-      name?: string;
-      display_name?: string;
-    };
+    const data = (await response.json()) as unknown;
+    const models = this.extractModelList(data);
+    const deduped = new Map<string, { id: string; name: string; nonGeneration: boolean }>();
 
-    const data = (await response.json()) as {
-      data?: ModelListEntry[];
-      models?: ModelListEntry[];
-    };
+    for (const model of models) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
 
-    const models: ModelListEntry[] =
-      data.data ??
-      data.models ??
-      (Array.isArray(data) ? (data as ModelListEntry[]) : []);
+      const candidate = model as Record<string, unknown>;
+      const id = this.pickFirstString(candidate.id, candidate.key);
+      if (!id) {
+        continue;
+      }
 
-    return models
-      .map((model) => {
-        const id = model.id || model.key;
-        if (!id) return null;
-        return {
-          id,
-          name: model.name || model.display_name || id,
-        };
-      })
-      .filter((model): model is { id: string; name: string } => model !== null);
+      const name = this.pickFirstString(candidate.name, candidate.display_name) || id;
+      const nonGeneration = this.isLikelyNonGenerationModel(candidate, id);
+      const existing = deduped.get(id);
+
+      if (!existing) {
+        deduped.set(id, { id, name, nonGeneration });
+        continue;
+      }
+
+      const keepExistingName = existing.name !== existing.id || name === id;
+      deduped.set(id, {
+        id,
+        name: keepExistingName ? existing.name : name,
+        nonGeneration: existing.nonGeneration && nonGeneration,
+      });
+    }
+
+    const normalizedModels = [...deduped.values()];
+    const generationModels = normalizedModels.filter((model) => !model.nonGeneration);
+    const selected = generationModels.length > 0 ? generationModels : normalizedModels;
+
+    return selected
+      .map(({ id, name }) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**
@@ -352,6 +364,52 @@ TRANSLATION:
 
     const message = candidate.message as { role?: unknown; content?: unknown };
     return typeof message.role === "string" && typeof message.content === "string";
+  }
+
+  private extractModelList(payload: unknown): unknown[] {
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+
+    const modelPayload = payload as { data?: unknown; models?: unknown };
+    if (Array.isArray(modelPayload.data)) {
+      return modelPayload.data;
+    }
+
+    if (Array.isArray(modelPayload.models)) {
+      return modelPayload.models;
+    }
+
+    return [];
+  }
+
+  private pickFirstString(...values: unknown[]): string | null {
+    for (const value of values) {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+    return null;
+  }
+
+  private isLikelyNonGenerationModel(model: Record<string, unknown>, id: string): boolean {
+    if (/\b(embedding|embeddings|rerank|reranker|safeguard|moderation|classifier)\b/.test(id.toLowerCase())) {
+      return true;
+    }
+
+    const type = this.pickFirstString(model.type, model.model_type, model.purpose);
+    if (type && /\b(embedding|embeddings|rerank|reranker|safeguard|moderation|classifier)\b/i.test(type)) {
+      return true;
+    }
+
+    return false;
   }
 
   private extractResponseText(data: unknown): string {
