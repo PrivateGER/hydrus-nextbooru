@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 
 // Cache TTL: 24 hours in milliseconds
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const MAX_RECOMMENDATION_LIMIT = 20;
 
 export interface RecommendedPost {
   id: number;
@@ -11,6 +12,35 @@ export interface RecommendedPost {
   blurhash: string | null;
   mimeType: string;
   score: number;
+}
+
+type RecommendationClient = Pick<typeof prisma, "postRecommendation">;
+
+function clampRecommendationLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return 10;
+  return Math.min(MAX_RECOMMENDATION_LIMIT, Math.max(1, Math.floor(limit)));
+}
+
+function mapRecommendation(rec: {
+  recommended: {
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+  };
+  score: number;
+}): RecommendedPost {
+  return {
+    id: rec.recommended.id,
+    hash: rec.recommended.hash,
+    width: rec.recommended.width,
+    height: rec.recommended.height,
+    blurhash: rec.recommended.blurhash,
+    mimeType: rec.recommended.mimeType,
+    score: rec.score,
+  };
 }
 
 /**
@@ -27,6 +57,8 @@ export async function getOrComputeRecommendations(
   postId: number,
   limit = 10
 ): Promise<RecommendedPost[]> {
+  const clampedLimit = clampRecommendationLimit(limit);
+
   // Check for cached recommendations
   const cached = await prisma.postRecommendation.findMany({
     where: { postId },
@@ -43,7 +75,7 @@ export async function getOrComputeRecommendations(
       },
     },
     orderBy: { score: "desc" },
-    take: limit,
+    take: MAX_RECOMMENDATION_LIMIT,
   });
 
   // If cache exists and is fresh, return it
@@ -53,21 +85,14 @@ export async function getOrComputeRecommendations(
     if (computedAt) {
       const cacheAge = Date.now() - computedAt.getTime();
       if (cacheAge < CACHE_TTL_MS) {
-        return cached.map((rec) => ({
-          id: rec.recommended.id,
-          hash: rec.recommended.hash,
-          width: rec.recommended.width,
-          height: rec.recommended.height,
-          blurhash: rec.recommended.blurhash,
-          mimeType: rec.recommended.mimeType,
-          score: rec.score,
-        }));
+        return cached.map(mapRecommendation).slice(0, clampedLimit);
       }
     }
   }
 
   // Compute fresh recommendations
-  return computeAndCacheRecommendations(postId, limit);
+  const fresh = await computeAndCacheRecommendations(postId, MAX_RECOMMENDATION_LIMIT);
+  return fresh.slice(0, clampedLimit);
 }
 
 /**
@@ -142,6 +167,8 @@ async function computeAndCacheRecommendations(
         score: r.score,
         computedAt: now,
       })),
+      // Concurrent requests may compute the same rows; ignore duplicates.
+      skipDuplicates: true,
     });
   });
 
@@ -189,10 +216,28 @@ export async function computeRecommendationsForPost(
  * Invalidate cached recommendations for a specific post.
  * Call this when a post's tags change significantly.
  */
-export async function invalidateRecommendationsForPost(postId: number): Promise<void> {
-  await prisma.postRecommendation.deleteMany({
-    where: { postId },
+export async function invalidateRecommendationsForPost(
+  postId: number,
+  client: RecommendationClient = prisma
+): Promise<void> {
+  await client.postRecommendation.deleteMany({
+    where: {
+      OR: [
+        { postId },
+        { recommendedId: postId },
+      ],
+    },
   });
+}
+
+/**
+ * Invalidate all cached recommendations.
+ * Call this after global IDF/tag stats refreshes.
+ */
+export async function invalidateAllRecommendations(
+  client: RecommendationClient = prisma
+): Promise<void> {
+  await client.postRecommendation.deleteMany();
 }
 
 /**

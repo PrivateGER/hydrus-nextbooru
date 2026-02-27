@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOrComputeRecommendationsByHash } from "@/lib/recommendations";
+import { getOrComputeRecommendationsByHash, MAX_RECOMMENDATION_LIMIT } from "@/lib/recommendations";
 
 interface RouteParams {
   params: Promise<{ hash: string }>;
@@ -23,7 +23,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   const searchParams = request.nextUrl.searchParams;
   const parsedLimit = parseInt(searchParams.get("limit") || "10", 10);
-  const limit = Number.isNaN(parsedLimit) ? 10 : Math.min(20, Math.max(1, parsedLimit));
+  const limit = Number.isNaN(parsedLimit)
+    ? 10
+    : Math.min(MAX_RECOMMENDATION_LIMIT, Math.max(1, parsedLimit));
 
   try {
     const recommendations = await getOrComputeRecommendationsByHash(hash.toLowerCase(), limit);
