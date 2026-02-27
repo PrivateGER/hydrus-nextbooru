@@ -8,7 +8,7 @@ import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
-import { invalidateRecommendationsForPost } from "@/lib/recommendations";
+import { invalidateAllRecommendations, invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 import { withSpan, addSpanEvent, setSpanAttributes } from "@/lib/tracing";
 
@@ -464,7 +464,7 @@ async function processFileSafe(
         });
       }
       // Invalidate cached recommendations since tags changed
-      await invalidateRecommendationsForPost(post.id);
+      await invalidateRecommendationsForPost(post.id, tx);
     }
 
     // Update groups only if changed
@@ -491,6 +491,8 @@ async function processFileSafe(
           skipDuplicates: true,
         });
       }
+      // Group membership affects same-group exclusion in recommendation scoring.
+      await invalidateRecommendationsForPost(post.id, tx);
     }
 
     // Update notes only if changed
@@ -804,6 +806,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     await updateTotalPostCount();
     // Recalculate tag post counts for efficient sorting
     await recalculateTagCounts();
+    // IDF refresh can change scores globally, so drop recommendation cache.
+    await invalidateAllRecommendations();
     // Update precomputed homepage stats
     await updateHomeStatsCache();
 
