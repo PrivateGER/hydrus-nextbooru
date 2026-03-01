@@ -252,6 +252,21 @@ describe('HydrusClient', () => {
         expect((e as HydrusApiError).message).toContain('Unauthorized');
       }
     });
+
+    it('should retry retryable JSON parse failures', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: () => Promise.reject(new SyntaxError('Unexpected EOF')),
+        })
+        .mockResolvedValueOnce(mockOkResponse({ metadata: [] }));
+
+      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
+
+      await expect(client.getFileMetadata({ fileIds: [1] })).resolves.toEqual({ metadata: [] });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
   });
 
   // ===========================================================================
