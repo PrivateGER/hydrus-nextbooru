@@ -19,6 +19,7 @@ export interface MockHydrusState {
   searchError?: Error;
   metadataError?: Error;
   metadataDelayMs?: number;
+  metadataMalformedJsonResponses?: number;
 }
 
 export function createMockHydrusState(fileCount = 0): MockHydrusState {
@@ -72,6 +73,16 @@ export function createHydrusHandlers(state: MockHydrusState): RequestHandler[] {
           { error: state.metadataError.message },
           { status: 500 }
         );
+      }
+
+      if ((state.metadataMalformedJsonResponses ?? 0) > 0) {
+        state.metadataMalformedJsonResponses = (state.metadataMalformedJsonResponses ?? 0) - 1;
+        return new HttpResponse('{"metadata":[', {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
       }
 
       const url = new URL(request.url);

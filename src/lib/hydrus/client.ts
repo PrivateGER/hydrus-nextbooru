@@ -14,6 +14,36 @@ export interface HydrusClientConfig {
   apiKey: string;
 }
 
+const HYDRUS_REQUEST_MAX_RETRIES = 3;
+const HYDRUS_REQUEST_RETRY_BASE_DELAY_MS = 100;
+
+function isRetryableHydrusError(error: unknown): boolean {
+  if (error instanceof HydrusApiError) {
+    return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500;
+  }
+
+  if (error instanceof SyntaxError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("unexpected eof") ||
+    message.includes("unexpected end of json input") ||
+    message.includes("terminated unexpectedly") ||
+    message.includes("fetch failed") ||
+    message.includes("networkerror")
+  );
+}
+
+function getRetryDelayMs(attempt: number): number {
+  return HYDRUS_REQUEST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+}
+
 export class HydrusClient {
   private apiUrl: string;
   private apiKey: string;
@@ -52,32 +82,74 @@ export class HydrusClient {
           "http.url": url.toString(),
         });
 
-        const startTime = Date.now();
-        hydrusLog.debug({ endpoint, paramKeys: params ? Object.keys(params) : [] }, 'Hydrus API request');
+        const paramKeys = params ? Object.keys(params) : [];
+        let attempt = 0;
 
-        const response = await fetch(url.toString(), {
-          headers: {
-            "Hydrus-Client-API-Access-Key": this.apiKey,
-          },
-        });
+        while (true) {
+          try {
+            const startTime = Date.now();
+            hydrusLog.debug({ endpoint, attempt: attempt + 1, paramKeys }, 'Hydrus API request');
 
-        const durationMs = Date.now() - startTime;
-        span.setAttribute("http.status_code", response.status);
-        span.setAttribute("hydrus.duration_ms", durationMs);
+            const response = await fetch(url.toString(), {
+              headers: {
+                "Hydrus-Client-API-Access-Key": this.apiKey,
+              },
+            });
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          hydrusLog.error({ endpoint, status: response.status, body: errorText.slice(0, 500), durationMs }, 'Hydrus API error');
-          throw new HydrusApiError(
-            `Hydrus API error: ${response.status} ${response.statusText}`,
-            response.status,
-            errorText
-          );
+            const durationMs = Date.now() - startTime;
+            span.setAttribute("http.status_code", response.status);
+            span.setAttribute("hydrus.duration_ms", durationMs);
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new HydrusApiError(
+                `Hydrus API error: ${response.status} ${response.statusText}`,
+                response.status,
+                errorText
+              );
+            }
+
+            hydrusLog.debug({ endpoint, attempt: attempt + 1, status: response.status, durationMs }, 'Hydrus API response');
+
+            return await response.json() as T;
+          } catch (error) {
+            const retryable = isRetryableHydrusError(error);
+
+            if (retryable && attempt < HYDRUS_REQUEST_MAX_RETRIES) {
+              const delayMs = getRetryDelayMs(attempt);
+              span.addEvent("hydrus.retry", {
+                "hydrus.retry_attempt": attempt + 1,
+                "hydrus.retry_delay_ms": delayMs,
+              });
+              hydrusLog.warn({
+                endpoint,
+                attempt: attempt + 1,
+                retryInMs: delayMs,
+                error: error instanceof Error ? error.message : String(error),
+              }, 'Retrying Hydrus API request after transient failure');
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              attempt++;
+              continue;
+            }
+
+            if (error instanceof HydrusApiError) {
+              hydrusLog.error({
+                endpoint,
+                status: error.statusCode,
+                body: error.responseBody?.slice(0, 500),
+                attempts: attempt + 1,
+              }, 'Hydrus API error');
+            } else {
+              hydrusLog.error({
+                endpoint,
+                attempts: attempt + 1,
+                error: error instanceof Error ? error.message : String(error),
+              }, 'Hydrus API request failed');
+            }
+
+            throw error;
+          }
         }
-
-        hydrusLog.debug({ endpoint, status: response.status, durationMs }, 'Hydrus API response');
-
-        return response.json() as Promise<T>;
       }
     );
   }

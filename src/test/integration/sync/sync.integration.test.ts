@@ -284,6 +284,26 @@ describe('syncFromHydrus (Integration)', () => {
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0]).toContain('Error processing batch');
     });
+
+    it('should retry transient malformed metadata responses', async () => {
+      const prisma = getTestPrisma();
+
+      addFilesToState(hydrusState, [
+        createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+      hydrusState.metadataMalformedJsonResponses = 1;
+
+      const result = await syncFromHydrus();
+
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(1);
+      expect(result.errors).toHaveLength(0);
+
+      const post = await prisma.post.findUnique({
+        where: { hash: 'a'.repeat(64) },
+      });
+      expect(post).not.toBeNull();
+    });
   });
 
   describe('sync state tracking', () => {
