@@ -17,7 +17,9 @@ export interface MockHydrusState {
   fileIds: number[];
   metadata: Map<number, HydrusFileMetadata>;
   searchError?: Error;
+  searchErrorStatusCode?: number;
   metadataError?: Error;
+  metadataErrorStatusCode?: number;
   metadataDelayMs?: number;
   metadataMalformedJsonResponses?: number;
 }
@@ -51,7 +53,7 @@ export function createHydrusHandlers(state: MockHydrusState): RequestHandler[] {
       if (state.searchError) {
         return HttpResponse.json(
           { error: state.searchError.message },
-          { status: 500 }
+          { status: state.searchErrorStatusCode ?? 500 }
         );
       }
       // Get hashes from metadata to match actual file hashes
@@ -71,7 +73,7 @@ export function createHydrusHandlers(state: MockHydrusState): RequestHandler[] {
       if (state.metadataError) {
         return HttpResponse.json(
           { error: state.metadataError.message },
-          { status: 500 }
+          { status: state.metadataErrorStatusCode ?? 500 }
         );
       }
 

@@ -14,7 +14,7 @@ export interface HydrusClientConfig {
   apiKey: string;
 }
 
-const HYDRUS_REQUEST_MAX_RETRIES = 3;
+const HYDRUS_REQUEST_MAX_RETRIES = 10;
 const HYDRUS_REQUEST_RETRY_BASE_DELAY_MS = 100;
 
 function isRetryableHydrusError(error: unknown): boolean {
