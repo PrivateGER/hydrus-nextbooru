@@ -24,6 +24,16 @@ function parseString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+export function resolveApiKeyUpdate(apiKey: string, isConfigured: boolean): string | undefined {
+  const trimmedKey = apiKey.trim();
+
+  if (!trimmedKey && isConfigured) {
+    return undefined;
+  }
+
+  return trimmedKey;
+}
+
 function parseTranslationSettingsPayload(value: unknown): TranslationSettings | null {
   if (!isRecord(value)) return null;
 
@@ -419,14 +429,24 @@ export function useTranslation(
       };
 
       if (provider === "openrouter") {
+        const openrouterApiKeyUpdate = resolveApiKeyUpdate(
+          openrouterApiKey,
+          settings?.openrouter.apiKeyConfigured ?? false
+        );
+
         body.openrouter = {
-          apiKey: openrouterApiKey,
+          apiKey: openrouterApiKeyUpdate,
           model: openrouterEffectiveModel,
           baseUrl: openrouterBaseUrl.trim(),
         };
       } else {
+        const localApiKeyUpdate = resolveApiKeyUpdate(
+          localApiKey,
+          settings?.local.apiKeyConfigured ?? false
+        );
+
         body.local = {
-          apiKey: localApiKey,
+          apiKey: localApiKeyUpdate,
           model: localEffectiveModel,
           baseUrl: localBaseUrl.trim(),
         };
@@ -471,6 +491,7 @@ export function useTranslation(
     localModel,
     localCustomModel,
     localBaseUrl,
+    settings,
     setMessage,
     triggerSuccessAnimation,
     fetchSettings,
