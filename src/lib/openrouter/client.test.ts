@@ -66,7 +66,7 @@ describe("OpenRouterClient", () => {
     expect(body.max_tokens).toBe(111);
   });
 
-  it("should use responses with input for OpenRouter endpoints", async () => {
+  it("should use chat/completions with messages for OpenRouter endpoints", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({
         id: "cmpl-or",
@@ -95,70 +95,10 @@ describe("OpenRouterClient", () => {
     const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(requestInit.body));
 
-    expect(url).toBe("https://openrouter.ai/api/v1/responses");
-    expect(body.input).toEqual([{ role: "user", content: "Hi" }]);
-    expect(body.messages).toBeUndefined();
-    expect(body.max_output_tokens).toBe(222);
-  });
-
-  it("should normalize Responses API output_text to chat completion shape", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      createResponse({ output_text: "Hello" })
-    );
-
-    const client = new OpenRouterClient({
-      apiKey: "",
-      baseUrl: "https://example.com/v1",
-    });
-
-    const result = await client.chatCompletion({
-      messages: [{ role: "user", content: "Hi" }],
-    });
-
-    expect(result.choices[0]?.message?.content).toBe("Hello");
-  });
-
-  it("should extract text from Responses output array", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      createResponse({
-        output: [
-          {
-            content: [{ type: "output_text", text: "Array text" }],
-          },
-        ],
-      })
-    );
-
-    const client = new OpenRouterClient({
-      apiKey: "",
-      baseUrl: "https://example.com/v1",
-    });
-
-    const result = await client.chatCompletion({
-      messages: [{ role: "user", content: "Hi" }],
-    });
-
-    expect(result.choices[0]?.message?.content).toBe("Array text");
-  });
-
-  it("should fall back to extracted text when choices payload is invalid", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      createResponse({
-        output_text: "Fallback text",
-        choices: [{ index: 0, message: { role: "assistant" }, finish_reason: "stop" }],
-      })
-    );
-
-    const client = new OpenRouterClient({
-      apiKey: "",
-      baseUrl: "https://example.com/v1",
-    });
-
-    const result = await client.chatCompletion({
-      messages: [{ role: "user", content: "Hi" }],
-    });
-
-    expect(result.choices[0]?.message?.content).toBe("Fallback text");
+    expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(body.messages).toEqual([{ role: "user", content: "Hi" }]);
+    expect(body.input).toBeUndefined();
+    expect(body.max_tokens).toBe(222);
   });
 
   it("should parse models from LM Studio-style responses", async () => {

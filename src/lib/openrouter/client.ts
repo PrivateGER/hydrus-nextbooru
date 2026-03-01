@@ -1,7 +1,6 @@
 import type {
   OpenRouterClientConfig,
   ChatCompletionRequest,
-  ChatCompletionChoice,
   ChatCompletionResponse,
   TranslationRequest,
   TranslationResult,
@@ -60,27 +59,15 @@ export class OpenRouterClient {
     const startTime = Date.now();
     aiLog.debug({ model }, 'OpenRouter API request');
 
-    const useResponsesApi = this.isOpenRouter;
-    const path = useResponsesApi ? "responses" : "chat/completions";
-    const requestBody = useResponsesApi
-      ? {
-          model,
-          input: request.messages,
-          temperature: request.temperature ?? 0.3,
-          max_output_tokens: request.max_tokens ?? 2048,
-          max_tokens: request.max_tokens ?? 2048,
-        }
-      : {
-          model,
-          messages: request.messages,
-          temperature: request.temperature ?? 0.3,
-          max_tokens: request.max_tokens ?? 2048,
-        };
-
-    const response = await fetch(this.getUrl(path), {
+    const response = await fetch(this.getUrl("chat/completions"), {
       method: "POST",
       headers: this.getHeaders(true),
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({
+        model,
+        messages: request.messages,
+        temperature: request.temperature ?? 0.3,
+        max_tokens: request.max_tokens ?? 2048,
+      }),
     });
 
     const durationMs = Date.now() - startTime;
@@ -97,8 +84,7 @@ export class OpenRouterClient {
 
     aiLog.debug({ model, status: response.status, durationMs }, 'OpenRouter API response');
 
-    const data = (await response.json()) as unknown;
-    return this.normalizeChatResponse(data, model);
+    return response.json() as Promise<ChatCompletionResponse>;
   }
 
   /**
@@ -301,71 +287,6 @@ TRANSLATION:
     return LANGUAGE_NAMES[code.toLowerCase()] || code;
   }
 
-  private normalizeChatResponse(
-    data: unknown,
-    model: string
-  ): ChatCompletionResponse {
-    if (
-      data &&
-      typeof data === "object" &&
-      "choices" in data &&
-      Array.isArray((data as { choices?: unknown }).choices)
-    ) {
-      const choices = (data as { choices: unknown[] }).choices;
-      const hasValidChoices = choices.length > 0
-        && choices.every((choice) => this.isChatCompletionChoice(choice));
-
-      if (hasValidChoices) {
-        return data as ChatCompletionResponse;
-      }
-
-      aiLog.warn(
-        { model, choicesLength: choices.length },
-        "OpenRouter response choices were invalid; using normalized fallback"
-      );
-    }
-
-    const text = this.extractResponseText(data);
-
-    return {
-      id: typeof (data as { id?: string })?.id === "string" ? (data as { id?: string }).id! : "response",
-      model,
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: text,
-          },
-          finish_reason: "stop",
-        },
-      ],
-    };
-  }
-
-  private isChatCompletionChoice(choice: unknown): choice is ChatCompletionChoice {
-    if (!choice || typeof choice !== "object") {
-      return false;
-    }
-
-    const candidate = choice as {
-      index?: unknown;
-      finish_reason?: unknown;
-      message?: unknown;
-    };
-
-    if (typeof candidate.index !== "number" || typeof candidate.finish_reason !== "string") {
-      return false;
-    }
-
-    if (!candidate.message || typeof candidate.message !== "object") {
-      return false;
-    }
-
-    const message = candidate.message as { role?: unknown; content?: unknown };
-    return typeof message.role === "string" && typeof message.content === "string";
-  }
-
   private extractModelList(payload: unknown): unknown[] {
     if (Array.isArray(payload)) {
       return payload;
@@ -410,37 +331,6 @@ TRANSLATION:
     }
 
     return false;
-  }
-
-  private extractResponseText(data: unknown): string {
-    if (!data || typeof data !== "object") return "";
-
-    const directText = (data as { output_text?: string }).output_text;
-    if (typeof directText === "string") {
-      return directText;
-    }
-
-    const output = (data as { output?: unknown }).output;
-    if (Array.isArray(output)) {
-      for (const item of output) {
-        if (item && typeof item === "object") {
-          const content = (item as { content?: unknown }).content;
-          if (Array.isArray(content)) {
-            for (const part of content) {
-              if (part && typeof part === "object") {
-                const type = (part as { type?: string }).type;
-                const text = (part as { text?: string }).text;
-                if ((type === "output_text" || type === "text") && typeof text === "string") {
-                  return text;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return "";
   }
 
   /**
