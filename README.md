@@ -103,4 +103,5 @@ See documentation contained within for usage guidance.
 
 My personal "production" server running Nextbooru holds 110k files with 140k tags, with 60k groups. Up to this database size I will optimize for speed, I cannot guarantee how it scales past it.
 
+
 Open for improvements, PRs and whatever of course.
