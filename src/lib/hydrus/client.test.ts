@@ -226,7 +226,7 @@ describe('HydrusClient', () => {
     });
 
     it('should include response body in HydrusApiError', async () => {
-      mockFetch.mockResolvedValue(mockErrorResponse(500, 'Internal Server Error', 'Detailed error message'));
+      mockFetch.mockResolvedValue(mockErrorResponse(400, 'Bad Request', 'Detailed error message'));
 
       const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
 

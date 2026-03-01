@@ -262,6 +262,7 @@ describe('syncFromHydrus (Integration)', () => {
   describe('error handling', () => {
     it('should handle Hydrus search API errors', async () => {
       hydrusState.searchError = new Error('Connection refused');
+      hydrusState.searchErrorStatusCode = 400;
 
       await expect(syncFromHydrus()).rejects.toThrow();
 
@@ -276,6 +277,7 @@ describe('syncFromHydrus (Integration)', () => {
         createMockFileMetadata({ file_id: 1, hash: 'a'.repeat(64) }),
       ]);
       hydrusState.metadataError = new Error('Metadata fetch failed');
+      hydrusState.metadataErrorStatusCode = 400;
 
       // Batch errors don't throw - they're recorded and sync continues
       const result = await syncFromHydrus();
