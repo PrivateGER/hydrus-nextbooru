@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { SimilarSearch } from "@/components/similar-search";
 
 export const metadata: Metadata = {
-  title: "Find Similar - Booru",
-  description: "Search for visually similar images",
+  title: "Reverse Search - Booru",
+  description: "Find matching images by perceptual hash",
 };
 
 interface SimilarPageProps {
@@ -16,9 +16,9 @@ export default async function SimilarPage({ searchParams }: SimilarPageProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Find Similar Images</h1>
+        <h1 className="text-2xl font-bold">Reverse Image Search</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Search by uploading an image or from an existing post.
+          Upload an image or search from an existing post to find matches.
         </p>
       </div>
 

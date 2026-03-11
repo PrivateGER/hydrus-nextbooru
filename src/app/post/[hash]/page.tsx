@@ -17,7 +17,6 @@ import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
-import { FingerPrintIcon } from "@heroicons/react/24/outline";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -291,17 +290,6 @@ export default async function PostPage({ params }: PostPageProps) {
             </div>
           );
         })()}
-
-        {/* Find similar images */}
-        {post.mimeType.startsWith("image/") && (
-          <Link
-            href={`/similar?hash=${post.hash}`}
-            className="flex items-center gap-2 rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent px-4 py-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700"
-          >
-            <FingerPrintIcon className="h-5 w-5" />
-            Find Similar Images
-          </Link>
-        )}
 
         {/* File details */}
         <FileDetails
