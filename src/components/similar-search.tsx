@@ -29,9 +29,19 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Abort inflight search on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   // Search by hash via GET API
   const searchByHash = useCallback(async (hash: string, thresh: number) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsSearching(true);
     setError(null);
 
@@ -41,7 +51,7 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
         threshold: String(thresh),
         limit: "40",
       });
-      const response = await fetch(`/api/similar?${params}`);
+      const response = await fetch(`/api/similar?${params}`, { signal: controller.signal });
       const data = await response.json();
 
       if (!response.ok) {
@@ -50,15 +60,20 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
 
       setResults(data.results);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
     } finally {
-      setIsSearching(false);
+      if (!controller.signal.aborted) setIsSearching(false);
     }
   }, []);
 
   // Search by uploaded file via POST API
   const searchByFile = useCallback(async (file: File, thresh: number) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsSearching(true);
     setError(null);
 
@@ -71,6 +86,7 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
       const response = await fetch("/api/similar", {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
       const data = await response.json();
 
@@ -80,10 +96,11 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
 
       setResults(data.results);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
     } finally {
-      setIsSearching(false);
+      if (!controller.signal.aborted) setIsSearching(false);
     }
   }, []);
 
@@ -158,10 +175,19 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
 
       {/* Drop zone */}
       <div
+        tabIndex={0}
+        role="button"
+        aria-label="Upload image"
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && !isSearching) {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
         className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 transition-colors ${
           isDragging
             ? "border-blue-500 bg-blue-500/10"

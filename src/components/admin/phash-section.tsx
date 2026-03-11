@@ -70,8 +70,8 @@ export function PhashSection({
         </p>
         <Button
           onClick={onCompute}
-          disabled={isComputing || (phashStats?.withoutPhash ?? 0) === 0}
-          loading={isComputing}
+          disabled={isComputing || phashStats?.batchRunning || (phashStats?.withoutPhash ?? 0) === 0}
+          loading={isComputing || phashStats?.batchRunning}
           className="bg-purple-600 hover:bg-purple-500"
         >
           <FingerPrintIcon className="h-4 w-4" />

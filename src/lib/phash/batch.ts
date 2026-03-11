@@ -25,31 +25,36 @@ export async function batchComputePhashes(options: {
     throw new RangeError(`limit must be a non-negative integer, got ${limit}`);
   }
 
-  // Query posts without a PhashEntry that have supported image MIME types
-  const pendingPosts = await prisma.post.findMany({
-    where: {
-      phashEntry: null,
-      mimeType: { in: [...PHASH_SUPPORTED_MIMES] },
-    },
-    select: {
-      hash: true,
-      extension: true,
-      mimeType: true,
-    },
-    take: limit,
-    orderBy: { id: "asc" },
-  });
+  // Count total pending for progress reporting
+  const pendingWhere: { phashEntry: null; mimeType: { in: string[] } } = {
+    phashEntry: null,
+    mimeType: { in: [...PHASH_SUPPORTED_MIMES] },
+  };
+  const totalPending = await prisma.post.count({ where: pendingWhere });
+  const total = limit !== undefined ? Math.min(totalPending, limit) : totalPending;
 
-  const total = pendingPosts.length;
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
+  let lastId: number | undefined;
 
-  for (let i = 0; i < pendingPosts.length; i += batchSize) {
-    const batch = pendingPosts.slice(i, i + batchSize);
+  // Page through results with cursor-based pagination to avoid loading all rows into memory
+  while (processed < total) {
+    const pageSize = Math.min(batchSize, total - processed);
+    const posts = await prisma.post.findMany({
+      where: {
+        ...pendingWhere,
+        ...(lastId !== undefined ? { id: { gt: lastId } } : {}),
+      },
+      select: { id: true, hash: true, extension: true, mimeType: true },
+      take: pageSize,
+      orderBy: { id: "asc" },
+    });
+
+    if (posts.length === 0) break;
 
     const results = await Promise.all(
-      batch.map((post) =>
+      posts.map((post) =>
         computeLimit(async () => {
           const filePath = buildFilePath(post.hash, post.extension);
           const phash = await computePhash(filePath);
@@ -75,6 +80,7 @@ export async function batchComputePhashes(options: {
       else failed++;
     }
 
+    lastId = posts[posts.length - 1].id;
     onProgress?.(processed, total);
   }
 
