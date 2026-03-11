@@ -2,6 +2,7 @@
 
 import {
   CloudArrowDownIcon,
+  FingerPrintIcon,
   LanguageIcon,
   PhotoIcon,
   QuestionMarkCircleIcon,
@@ -12,6 +13,7 @@ import type { Section, NavItem } from "@/types/admin";
 export const NAV_ITEMS: NavItem[] = [
   { id: "sync", label: "Sync", icon: CloudArrowDownIcon, description: "Import files from Hydrus" },
   { id: "thumbnails", label: "Thumbnails", icon: PhotoIcon, description: "Generate preview images" },
+  { id: "phash", label: "Similarity", icon: FingerPrintIcon, description: "Perceptual image hashing" },
   { id: "translation", label: "Translation", icon: LanguageIcon, description: "Configure AI translation" },
   { id: "maintenance", label: "Maintenance", icon: WrenchScrewdriverIcon, description: "Database utilities" },
   { id: "help", label: "Help", icon: QuestionMarkCircleIcon, description: "Documentation & tips" },

@@ -149,20 +149,20 @@ async function findSimilarByPhash(
   const results = excludeHash
     ? await prisma.$queryRaw<ResultRow[]>`
         SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType",
-               bit_count(pe.phash # ${targetPhash}::BIGINT) AS distance
+               bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) AS distance
         FROM "PhashEntry" pe
         JOIN "Post" p ON p.hash = pe.hash
         WHERE pe.hash != ${excludeHash}
-          AND bit_count(pe.phash # ${targetPhash}::BIGINT) <= ${threshold}
+          AND bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) <= ${threshold}
         ORDER BY distance ASC, p.id ASC
         LIMIT ${limit}
       `
     : await prisma.$queryRaw<ResultRow[]>`
         SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType",
-               bit_count(pe.phash # ${targetPhash}::BIGINT) AS distance
+               bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) AS distance
         FROM "PhashEntry" pe
         JOIN "Post" p ON p.hash = pe.hash
-        WHERE bit_count(pe.phash # ${targetPhash}::BIGINT) <= ${threshold}
+        WHERE bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) <= ${threshold}
         ORDER BY distance ASC, p.id ASC
         LIMIT ${limit}
       `;
