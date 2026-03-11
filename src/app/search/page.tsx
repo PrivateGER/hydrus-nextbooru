@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { unstable_cache } from "next/cache";
 import Link from "next/link";
-import { CameraIcon } from "@heroicons/react/24/outline";
+import { CameraIcon, ArrowLeftIcon } from "@heroicons/react/24/outline";
 import { PostGrid } from "@/components/post-grid";
 
 import { Pagination } from "@/components/pagination";
@@ -100,7 +100,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
                 className="rounded-lg p-2 text-blue-500 bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
                 title="Back to text search"
               >
-                <CameraIcon className="h-5 w-5" />
+                <ArrowLeftIcon className="h-5 w-5" />
               </Link>
             </div>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">

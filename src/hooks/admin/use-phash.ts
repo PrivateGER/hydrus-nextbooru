@@ -35,6 +35,7 @@ export function usePhash(
   const fetchStats = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/phash");
+      if (!response.ok) return;
       const data = await response.json();
       if (mountedRef.current) {
         setPhashStats(data);
@@ -71,6 +72,7 @@ export function usePhash(
       pollIntervalRef.current = setInterval(async () => {
         try {
           const statsResponse = await fetch("/api/admin/phash");
+          if (!statsResponse.ok) return;
           const statsData = await statsResponse.json();
 
           if (!mountedRef.current) return;

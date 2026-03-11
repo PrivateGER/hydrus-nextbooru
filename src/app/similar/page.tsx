@@ -25,7 +25,7 @@ async function SimilarPageContent({ searchParams }: SimilarPageProps) {
 
       <SimilarSearch
         initialHash={hash}
-        initialThreshold={threshold ? parseInt(threshold, 10) : 10}
+        initialThreshold={threshold ? (Number.isFinite(parseInt(threshold, 10)) ? parseInt(threshold, 10) : 10) : 10}
       />
     </div>
   );

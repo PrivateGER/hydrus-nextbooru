@@ -18,6 +18,13 @@ export async function batchComputePhashes(options: {
 }): Promise<{ processed: number; succeeded: number; failed: number }> {
   const { batchSize = 50, limit, onProgress } = options;
 
+  if (!Number.isFinite(batchSize) || !Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`batchSize must be a positive integer, got ${batchSize}`);
+  }
+  if (limit !== undefined && (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0)) {
+    throw new RangeError(`limit must be a non-negative integer, got ${limit}`);
+  }
+
   // Query posts without a PhashEntry that have supported image MIME types
   const pendingPosts = await prisma.post.findMany({
     where: {

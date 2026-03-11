@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import sharp from "sharp";
-import { writeFile, unlink, mkdtemp } from "fs/promises";
+import { writeFile, unlink, mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { computePhash, computePhashFromBuffer, hammingDistance } from "./compute";
@@ -160,6 +160,7 @@ describe("computePhash (file path)", () => {
       expect(hashFromFile).toBe(hashFromBuffer);
     } finally {
       await unlink(filePath).catch(() => {});
+      await rm(dir, { recursive: true }).catch(() => {});
     }
   });
 

@@ -4,9 +4,11 @@ import { getPhashStats, batchComputePhashes } from "@/lib/phash";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, phashLog } from "@/lib/logger";
 
-// Track if batch computation is running
+// Track batch computation state
 let batchRunning = false;
 let batchProgress = { processed: 0, total: 0 };
+let batchStatus: "idle" | "running" | "completed" | "failed" = "idle";
+let batchError: string | null = null;
 
 // GET - Get phash computation statistics
 export async function GET() {
@@ -20,6 +22,8 @@ export async function GET() {
       ...stats,
       batchRunning,
       batchProgress: batchRunning ? batchProgress : null,
+      batchStatus,
+      batchError,
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to get phash stats");
@@ -40,6 +44,13 @@ export async function POST(request: NextRequest) {
     const limit = body.limit as number | undefined;
     const batchSize = body.batchSize as number | undefined;
 
+    if (batchSize !== undefined && (!Number.isFinite(batchSize) || !Number.isInteger(batchSize) || batchSize < 1)) {
+      return NextResponse.json({ error: "batchSize must be a positive integer" }, { status: 400 });
+    }
+    if (limit !== undefined && (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0)) {
+      return NextResponse.json({ error: "limit must be a non-negative integer" }, { status: 400 });
+    }
+
     if (batchRunning) {
       return NextResponse.json(
         { error: "Batch computation is already running" },
@@ -49,6 +60,8 @@ export async function POST(request: NextRequest) {
 
     batchRunning = true;
     batchProgress = { processed: 0, total: 0 };
+    batchStatus = "running";
+    batchError = null;
 
     phashLog.info({ limit: limit || "unlimited", batchSize: batchSize || 50 }, "Starting batch phash computation");
 
@@ -60,10 +73,13 @@ export async function POST(request: NextRequest) {
       },
     })
       .then((result) => {
+        batchStatus = "completed";
         phashLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, "Batch phash computation completed");
       })
       .catch((error) => {
-        phashLog.error({ error: error instanceof Error ? error.message : String(error) }, "Batch phash computation failed");
+        batchStatus = "failed";
+        batchError = error instanceof Error ? error.message : String(error);
+        phashLog.error({ error: batchError }, "Batch phash computation failed");
       })
       .finally(() => {
         batchRunning = false;

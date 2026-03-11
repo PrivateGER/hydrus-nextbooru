@@ -84,6 +84,8 @@ export interface PhashStats {
   unsupported: number;
   batchRunning: boolean;
   batchProgress: { processed: number; total: number } | null;
+  batchStatus: "idle" | "running" | "completed" | "failed";
+  batchError: string | null;
 }
 
 export type Section = "sync" | "thumbnails" | "translation" | "phash" | "maintenance" | "help";

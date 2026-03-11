@@ -16,14 +16,10 @@ const MAX_UPLOAD_SIZE = 20 * 1024 * 1024; // 20MB
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const hash = searchParams.get("hash");
-  const threshold = Math.min(
-    64,
-    Math.max(0, parseInt(searchParams.get("threshold") || String(DEFAULT_THRESHOLD), 10))
-  );
-  const limit = Math.min(
-    MAX_LIMIT,
-    Math.max(1, parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10))
-  );
+  const parsedThreshold = parseInt(searchParams.get("threshold") || String(DEFAULT_THRESHOLD), 10);
+  const threshold = Number.isFinite(parsedThreshold) ? Math.min(64, Math.max(0, parsedThreshold)) : DEFAULT_THRESHOLD;
+  const parsedLimit = parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10);
+  const limit = Number.isFinite(parsedLimit) ? Math.min(MAX_LIMIT, Math.max(1, parsedLimit)) : DEFAULT_LIMIT;
 
   if (!hash || !/^[a-fA-F0-9]{64}$/.test(hash)) {
     return NextResponse.json(
@@ -71,14 +67,10 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
-    const threshold = Math.min(
-      64,
-      Math.max(0, parseInt(formData.get("threshold") as string || String(DEFAULT_THRESHOLD), 10))
-    );
-    const limit = Math.min(
-      MAX_LIMIT,
-      Math.max(1, parseInt(formData.get("limit") as string || String(DEFAULT_LIMIT), 10))
-    );
+    const parsedThreshold = parseInt(formData.get("threshold") as string || String(DEFAULT_THRESHOLD), 10);
+    const threshold = Number.isFinite(parsedThreshold) ? Math.min(64, Math.max(0, parsedThreshold)) : DEFAULT_THRESHOLD;
+    const parsedLimit = parseInt(formData.get("limit") as string || String(DEFAULT_LIMIT), 10);
+    const limit = Number.isFinite(parsedLimit) ? Math.min(MAX_LIMIT, Math.max(1, parsedLimit)) : DEFAULT_LIMIT;
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
@@ -91,9 +83,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!PHASH_SUPPORTED_MIMES.has(file.type) && !file.type.startsWith("image/")) {
+    if (!PHASH_SUPPORTED_MIMES.has(file.type)) {
       return NextResponse.json(
-        { error: "Unsupported file type. Please upload an image." },
+        { error: "Unsupported file type. Supported formats: JPEG, PNG, WebP, GIF, BMP, TIFF, AVIF." },
         { status: 415 }
       );
     }
