@@ -77,7 +77,18 @@ export interface BulkTranslationProgress {
   completedAt?: string;
 }
 
-export type Section = "sync" | "thumbnails" | "translation" | "maintenance" | "help";
+export interface PhashStats {
+  total: number;
+  withPhash: number;
+  withoutPhash: number;
+  unsupported: number;
+  batchRunning: boolean;
+  batchProgress: { processed: number; total: number } | null;
+  batchStatus: "idle" | "running" | "completed" | "failed";
+  batchError: string | null;
+}
+
+export type Section = "sync" | "thumbnails" | "translation" | "phash" | "maintenance" | "help";
 
 export interface Message {
   type: "success" | "error";

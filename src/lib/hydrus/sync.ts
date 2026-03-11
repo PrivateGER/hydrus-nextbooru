@@ -11,6 +11,8 @@ import { updateHomeStatsCache } from "@/lib/stats";
 import { invalidateAllRecommendations, invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 import { withSpan, addSpanEvent, setSpanAttributes } from "@/lib/tracing";
+import { computePhash, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
+import { buildFilePath } from "@/lib/hydrus/paths";
 
 export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -526,6 +528,26 @@ async function processFileSafe(
     timeout: 60000, // 60s for files with many tags/groups
     isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
   });
+
+  // Compute phash for supported image types (inline, non-fatal)
+  if (PHASH_SUPPORTED_MIMES.has(metadata.mime)) {
+    try {
+      const filePath = buildFilePath(metadata.hash, metadata.ext);
+      const phash = await computePhash(filePath);
+      if (phash !== null) {
+        await prisma.phashEntry.upsert({
+          where: { hash: metadata.hash },
+          create: { hash: metadata.hash, phash },
+          update: { phash, computedAt: new Date() },
+        });
+      }
+    } catch (err) {
+      syncLog.warn(
+        { hash: metadata.hash, error: err instanceof Error ? err.message : String(err) },
+        "Failed to compute phash during sync"
+      );
+    }
+  }
 }
 
 // =============================================================================

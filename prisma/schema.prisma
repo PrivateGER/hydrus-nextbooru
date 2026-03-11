@@ -105,6 +105,7 @@ model Post {
   notes           Note[]
   recommendations PostRecommendation[] @relation("PostRecommendations")
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
+  phashEntry      PhashEntry?
 
   @@index([rating])
   @@index([importedAt])
@@ -240,6 +241,19 @@ model Thumbnail {
 
   @@unique([postId, size])
   @@index([postId])
+}
+
+// ============================================
+// PERCEPTUAL HASHING (reverse image search)
+// ============================================
+
+model PhashEntry {
+  hash  String @id @db.Char(64) // Same as Post.hash
+  phash BigInt                   // 64-bit DCT perceptual hash
+
+  computedAt DateTime @default(now())
+
+  post Post @relation(fields: [hash], references: [hash], onDelete: Cascade)
 }
 
 // ============================================

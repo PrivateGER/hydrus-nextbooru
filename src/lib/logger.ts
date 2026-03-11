@@ -51,3 +51,4 @@ export const hydrusLog = createLogger("hydrus");
 export const thumbnailLog = createLogger("thumbnail");
 export const fileLog = createLogger("file");
 export const aiLog = createLogger("ai");
+export const phashLog = createLogger("phash");

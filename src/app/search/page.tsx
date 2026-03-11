@@ -1,10 +1,13 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { unstable_cache } from "next/cache";
+import Link from "next/link";
+import { CameraIcon, ArrowLeftIcon } from "@heroicons/react/24/outline";
 import { PostGrid } from "@/components/post-grid";
 
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
+import { SimilarSearch } from "@/components/similar-search";
 import { NoteSearchResult } from "@/components/note-search-result";
 import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
 import { searchPosts, searchNotes } from "@/lib/search";
@@ -41,11 +44,12 @@ function SearchPageSkeleton() {
 }
 
 interface SearchPageProps {
-  searchParams: Promise<{ tags?: string; notes?: string; page?: string }>;
+  searchParams: Promise<{ tags?: string; notes?: string; page?: string; mode?: string }>;
 }
 
-async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; page?: string }> }) {
+async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; page?: string; mode?: string }> }) {
   const params = await searchParams;
+  const isReverseMode = params.mode === "reverse";
   const tagsParam = params.tags || "";
   const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
   const notesQuery = params.notes?.trim() || "";
@@ -84,10 +88,44 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
   const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
   const hasQuery = isNotesSearch || tags.length > 0;
 
+  if (isReverseMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <div className="relative w-full max-w-2xl">
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-semibold flex-1">Reverse Image Search</h1>
+              <Link
+                href="/search"
+                className="rounded-lg p-2 text-blue-500 bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
+                title="Back to text search"
+              >
+                <ArrowLeftIcon className="h-5 w-5" />
+              </Link>
+            </div>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Upload an image to find perceptually identical posts.
+            </p>
+          </div>
+        </div>
+        <SimilarSearch initialThreshold={10} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-center">
-        <SearchBar initialTags={tags} initialNotesQuery={notesQuery} initialMode={isNotesSearch ? "notes" : "tags"} />
+        <div className="flex w-full max-w-2xl items-end gap-2">
+          <SearchBar initialTags={tags} initialNotesQuery={notesQuery} initialMode={isNotesSearch ? "notes" : "tags"} />
+          <Link
+            href="/search?mode=reverse"
+            className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
+            title="Reverse image search"
+          >
+            <CameraIcon className="h-5 w-5" />
+          </Link>
+        </div>
       </div>
 
       {error && (

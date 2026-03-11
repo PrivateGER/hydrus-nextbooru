@@ -12,6 +12,7 @@ import type { Section, Message, ConfirmModalConfig } from "@/types/admin";
 // Hooks
 import { useSync } from "@/hooks/admin/use-sync";
 import { useThumbnails } from "@/hooks/admin/use-thumbnails";
+import { usePhash } from "@/hooks/admin/use-phash";
 import { useTranslation } from "@/hooks/admin/use-translation";
 
 // UI Components
@@ -23,6 +24,7 @@ import { NavTabs } from "@/components/admin/nav-tabs";
 import { MessageToast } from "@/components/admin/message-toast";
 import { SyncSection } from "@/components/admin/sync-section";
 import { ThumbnailsSection } from "@/components/admin/thumbnails-section";
+import { PhashSection } from "@/components/admin/phash-section";
 import { TranslationSection } from "@/components/admin/translation-section";
 import { MaintenanceSection } from "@/components/admin/maintenance-section";
 import { HelpSection } from "@/components/admin/help-section";
@@ -74,6 +76,7 @@ export default function AdminPage() {
   // Feature hooks
   const sync = useSync(setMessage, triggerSuccessAnimation);
   const thumbnails = useThumbnails(setMessage, triggerSuccessAnimation);
+  const phash = usePhash(setMessage, triggerSuccessAnimation);
   const translation = useTranslation(setMessage, triggerSuccessAnimation);
 
   // Handlers
@@ -188,6 +191,16 @@ export default function AdminPage() {
             onGenerate={thumbnails.generateThumbnails}
             onResetFailed={thumbnails.resetFailed}
             onClearAll={thumbnails.clearAll}
+            openConfirmModal={openConfirmModal}
+          />
+        );
+      case "phash":
+        return (
+          <PhashSection
+            phashStats={phash.phashStats}
+            isComputing={phash.isComputing}
+            onCompute={phash.computePhashes}
+            onResetAll={phash.resetAll}
             openConfirmModal={openConfirmModal}
           />
         );
