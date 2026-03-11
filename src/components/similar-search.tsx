@@ -144,6 +144,7 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Threshold
         </label>
+        {/* pHash distance is theoretically 0-64, but distances >32 rarely indicate visual similarity, so the slider is capped at 32 for a practical UX range */}
         <input
           type="range"
           min={1}

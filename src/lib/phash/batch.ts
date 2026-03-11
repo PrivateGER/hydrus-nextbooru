@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { availableParallelism } from "os";
 import { prisma } from "@/lib/db";
-import { computePhash, PHASH_SUPPORTED_MIMES } from "./compute";
+import { computePhash, PHASH_SUPPORTED_MIMES } from "@/lib/phash/compute";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { phashLog } from "@/lib/logger";
 

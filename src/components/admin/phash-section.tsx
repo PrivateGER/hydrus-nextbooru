@@ -21,7 +21,8 @@ export function PhashSection({
   onResetAll,
   openConfirmModal,
 }: PhashSectionProps) {
-  const allComplete = phashStats && phashStats.withoutPhash === 0;
+  const allComplete = phashStats && phashStats.withoutPhash === 0 && phashStats.unsupported === 0;
+  const allSupportedComplete = phashStats && phashStats.withoutPhash === 0;
 
   return (
     <div className="space-y-5">
@@ -29,9 +30,9 @@ export function PhashSection({
         <Card>
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-medium text-zinc-800 dark:text-zinc-200">Overview</h3>
-            {allComplete && (
+            {allSupportedComplete && (
               <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircleIcon className="h-4 w-4" /> All hashed
+                <CheckCircleIcon className="h-4 w-4" /> {allComplete ? "All hashed" : "All supported hashed"}
               </span>
             )}
           </div>

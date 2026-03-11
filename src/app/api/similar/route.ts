@@ -66,15 +66,17 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const fileEntry = formData.get("file");
+
+    if (!fileEntry || !(fileEntry instanceof File)) {
+      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    }
+
+    const file = fileEntry;
     const parsedThreshold = parseInt(formData.get("threshold") as string || String(DEFAULT_THRESHOLD), 10);
     const threshold = Number.isFinite(parsedThreshold) ? Math.min(64, Math.max(0, parsedThreshold)) : DEFAULT_THRESHOLD;
     const parsedLimit = parseInt(formData.get("limit") as string || String(DEFAULT_LIMIT), 10);
     const limit = Number.isFinite(parsedLimit) ? Math.min(MAX_LIMIT, Math.max(1, parsedLimit)) : DEFAULT_LIMIT;
-
-    if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
-    }
 
     if (file.size > MAX_UPLOAD_SIZE) {
       return NextResponse.json(
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!PHASH_SUPPORTED_MIMES.has(file.type)) {
+    if (!file.type || !PHASH_SUPPORTED_MIMES.has(file.type)) {
       return NextResponse.json(
         { error: "Unsupported file type. Supported formats: JPEG, PNG, WebP, GIF, BMP, TIFF, AVIF." },
         { status: 415 }
