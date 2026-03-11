@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { SimilarSearch } from "@/components/similar-search";
 
@@ -10,7 +11,7 @@ interface SimilarPageProps {
   searchParams: Promise<{ hash?: string; threshold?: string }>;
 }
 
-export default async function SimilarPage({ searchParams }: SimilarPageProps) {
+async function SimilarPageContent({ searchParams }: SimilarPageProps) {
   const { hash, threshold } = await searchParams;
 
   return (
@@ -27,5 +28,13 @@ export default async function SimilarPage({ searchParams }: SimilarPageProps) {
         initialThreshold={threshold ? parseInt(threshold, 10) : 10}
       />
     </div>
+  );
+}
+
+export default function SimilarPage({ searchParams }: SimilarPageProps) {
+  return (
+    <Suspense>
+      <SimilarPageContent searchParams={searchParams} />
+    </Suspense>
   );
 }
