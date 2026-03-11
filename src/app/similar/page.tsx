@@ -1,7 +1,5 @@
-import { Suspense } from "react";
 import type { Metadata } from "next";
-import { SimilarSearchResults } from "@/components/similar-search-results";
-import { SimilarSearchUpload } from "@/components/similar-search-upload";
+import { SimilarSearch } from "@/components/similar-search";
 
 export const metadata: Metadata = {
   title: "Find Similar - Booru",
@@ -12,7 +10,9 @@ interface SimilarPageProps {
   searchParams: Promise<{ hash?: string; threshold?: string }>;
 }
 
-export default function SimilarPage({ searchParams }: SimilarPageProps) {
+export default async function SimilarPage({ searchParams }: SimilarPageProps) {
+  const { hash, threshold } = await searchParams;
+
   return (
     <div className="space-y-6">
       <div>
@@ -22,37 +22,10 @@ export default function SimilarPage({ searchParams }: SimilarPageProps) {
         </p>
       </div>
 
-      <Suspense fallback={<ResultsSkeleton />}>
-        <SimilarPageContent searchParams={searchParams} />
-      </Suspense>
-    </div>
-  );
-}
-
-async function SimilarPageContent({
-  searchParams,
-}: {
-  searchParams: Promise<{ hash?: string; threshold?: string }>;
-}) {
-  const { hash, threshold } = await searchParams;
-  const parsedThreshold = threshold ? parseInt(threshold, 10) : 10;
-
-  return (
-    <>
-      <SimilarSearchUpload initialThreshold={parsedThreshold} />
-
-      {hash && /^[a-fA-F0-9]{64}$/.test(hash) && (
-        <SimilarSearchResults hash={hash} threshold={parsedThreshold} />
-      )}
-    </>
-  );
-}
-
-function ResultsSkeleton() {
-  return (
-    <div className="animate-pulse space-y-4">
-      <div className="h-10 w-full rounded-lg bg-zinc-300 dark:bg-zinc-700" />
-      <div className="h-32 w-full rounded-xl bg-zinc-300 dark:bg-zinc-700" />
+      <SimilarSearch
+        initialHash={hash}
+        initialThreshold={threshold ? parseInt(threshold, 10) : 10}
+      />
     </div>
   );
 }
