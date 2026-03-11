@@ -154,6 +154,28 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
     if (file) handleUpload(file);
   }, [handleUpload]);
 
+  // Paste image from clipboard
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            handleUpload(file);
+            return;
+          }
+        }
+      }
+    };
+
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [handleUpload]);
+
   return (
     <div className="space-y-4">
       {/* Threshold slider */}
@@ -196,7 +218,7 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
       >
         <ArrowUpTrayIcon className={`h-8 w-8 ${isDragging ? "text-blue-500" : "text-zinc-400"}`} />
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          {isSearching ? "Searching..." : "Drop an image or click to upload"}
+          {isSearching ? "Searching..." : "Drop an image, paste, or click to upload"}
         </p>
         <input
           ref={fileInputRef}
