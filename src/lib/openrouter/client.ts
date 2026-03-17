@@ -84,7 +84,30 @@ export class OpenRouterClient {
 
     aiLog.debug({ model, status: response.status, durationMs }, 'OpenRouter API response');
 
-    return response.json() as Promise<ChatCompletionResponse>;
+    const data = await response.json() as ChatCompletionResponse;
+    const finishReason = data.choices?.[0]?.finish_reason;
+
+    if (finishReason === "content_filter") {
+      aiLog.warn({ model, finishReason, durationMs }, "Response blocked by content filter");
+      throw new OpenRouterApiError(
+        "Content blocked by the model's content filter",
+        451,
+      );
+    }
+
+    if (finishReason === "error") {
+      const errorContent = data.choices?.[0]?.message?.content || "Unknown model error";
+      const safePreview = errorContent.length > 100
+        ? errorContent.slice(0, 100) + "..."
+        : errorContent;
+      aiLog.error({ model, finishReason, durationMs, errorContent: safePreview }, "Model returned an error finish reason");
+      throw new OpenRouterApiError(
+        "Model returned an error",
+        502,
+      );
+    }
+
+    return data;
   }
 
   /**

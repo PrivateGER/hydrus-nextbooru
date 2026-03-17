@@ -20,6 +20,8 @@ export interface MockOpenRouterState {
   modelsUrl?: string;
   /** Set to true to simulate OpenRouter returning empty/malformed translation */
   emptyTranslation?: boolean;
+  /** Override the finish_reason in the response (e.g. "content_filter") */
+  finishReason?: "stop" | "length" | "content_filter" | "error" | "tool_calls";
   /** Tracks the number of API calls made */
   callCount: number;
 }
@@ -61,7 +63,7 @@ function createTranslationResponse(state: MockOpenRouterState): ChatCompletionRe
           role: 'assistant',
           content,
         },
-        finish_reason: 'stop',
+        finish_reason: state.finishReason ?? 'stop',
       },
     ],
     usage: {
@@ -93,7 +95,7 @@ function createImageTranslationResponse(
           role: 'assistant',
           content,
         },
-        finish_reason: 'stop',
+        finish_reason: state.finishReason ?? 'stop',
       },
     ],
     usage: {
