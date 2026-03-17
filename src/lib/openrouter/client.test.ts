@@ -319,7 +319,7 @@ describe("OpenRouterClient", () => {
 
     expect(modelErr).toBeInstanceOf(OpenRouterApiError);
     expect((modelErr as OpenRouterApiError).statusCode).toBe(502);
-    expect((modelErr as OpenRouterApiError).message).toContain("upstream provider failed");
+    expect((modelErr as OpenRouterApiError).message).toBe("Model returned an error");
   });
 
   it("should not throw when finish_reason is stop", async () => {

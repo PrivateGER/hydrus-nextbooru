@@ -97,9 +97,12 @@ export class OpenRouterClient {
 
     if (finishReason === "error") {
       const errorContent = data.choices?.[0]?.message?.content || "Unknown model error";
-      aiLog.error({ model, finishReason, durationMs, errorContent }, "Model returned an error finish reason");
+      const safePreview = errorContent.length > 100
+        ? errorContent.slice(0, 100) + "..."
+        : errorContent;
+      aiLog.error({ model, finishReason, durationMs, errorContent: safePreview }, "Model returned an error finish reason");
       throw new OpenRouterApiError(
-        `Model error: ${errorContent}`,
+        "Model returned an error",
         502,
       );
     }
