@@ -264,6 +264,91 @@ describe("OpenRouterClient", () => {
     ]);
   });
 
+  it("should throw OpenRouterApiError when finish_reason is content_filter", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        id: "cmpl-filtered",
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "" },
+            finish_reason: "content_filter",
+          },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const filterErr = await client.chatCompletion({
+      messages: [{ role: "user", content: "translate this" }],
+    }).catch((e: unknown) => e);
+
+    expect(filterErr).toBeInstanceOf(OpenRouterApiError);
+    expect((filterErr as OpenRouterApiError).statusCode).toBe(451);
+    expect((filterErr as OpenRouterApiError).message).toContain("content filter");
+  });
+
+  it("should throw OpenRouterApiError when finish_reason is error", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        id: "cmpl-error",
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "upstream provider failed" },
+            finish_reason: "error",
+          },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const modelErr = await client.chatCompletion({
+      messages: [{ role: "user", content: "translate this" }],
+    }).catch((e: unknown) => e);
+
+    expect(modelErr).toBeInstanceOf(OpenRouterApiError);
+    expect((modelErr as OpenRouterApiError).statusCode).toBe(502);
+    expect((modelErr as OpenRouterApiError).message).toContain("upstream provider failed");
+  });
+
+  it("should not throw when finish_reason is stop", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        id: "cmpl-ok",
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Hello" },
+            finish_reason: "stop",
+          },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "",
+      baseUrl: "https://example.com/v1",
+    });
+
+    const result = await client.chatCompletion({
+      messages: [{ role: "user", content: "Hi" }],
+    });
+
+    expect(result.choices[0].finish_reason).toBe("stop");
+  });
+
   it("should throw OpenRouterApiError when model listing fails", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({ error: "rate limited" }, false, 429)
