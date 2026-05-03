@@ -145,6 +145,7 @@ export async function GET(
         "Content-Length": String(stats.size),
         "Content-Disposition": `attachment; filename="${downloadFilename}"`,
         "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (err) {

@@ -96,6 +96,7 @@ async function serveFile(
       "Cache-Control": cacheControl,
       "ETag": etag,
       "X-Thumbnail-Source": source,
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }

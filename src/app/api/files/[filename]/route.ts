@@ -134,6 +134,7 @@ export async function GET(
           "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=31536000, immutable",
           "ETag": etag,
+          "X-Content-Type-Options": "nosniff",
         },
       });
     }
@@ -150,6 +151,7 @@ export async function GET(
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=31536000, immutable",
         "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (err) {
