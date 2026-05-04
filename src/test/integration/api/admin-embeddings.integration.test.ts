@@ -3,7 +3,12 @@ import { NextRequest } from "next/server";
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from "../setup";
 import { setTestPrisma } from "@/lib/db";
 import { createPost } from "../factories";
-import { upsertCompleteEmbedding, upsertFailedEmbedding } from "@/lib/embeddings/store";
+import {
+  countPendingEmbeddings,
+  findEmbeddingPostsToProcess,
+  upsertCompleteEmbedding,
+  upsertFailedEmbedding,
+} from "@/lib/embeddings/store";
 
 vi.mock("@/lib/auth", () => ({
   verifyAdminSession: vi.fn().mockResolvedValue({ authorized: true }),
@@ -157,5 +162,44 @@ describe("/api/admin/embeddings", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(1);
     expect(await prisma.postEmbedding.count()).toBe(1);
+  });
+
+  it("selects only failed embeddings when retrying failed rows", async () => {
+    const prisma = getTestPrisma();
+    const pendingPost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const failedPost = await createPost(prisma, { mimeType: "image/jpeg", extension: ".jpg" });
+    const completePost = await createPost(prisma, { mimeType: "image/webp", extension: ".webp" });
+
+    await upsertFailedEmbedding({
+      postId: failedPost.id,
+      config,
+      errorMessage: "provider failed",
+    });
+    await upsertCompleteEmbedding({
+      postId: completePost.id,
+      config,
+      embedding: embedding(),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+
+    await expect(countPendingEmbeddings(config, false)).resolves.toBe(1);
+    await expect(countPendingEmbeddings(config, true)).resolves.toBe(1);
+
+    const pendingPosts = await findEmbeddingPostsToProcess({
+      config,
+      retryFailed: false,
+      take: 10,
+    });
+    const failedPosts = await findEmbeddingPostsToProcess({
+      config,
+      retryFailed: true,
+      take: 10,
+    });
+
+    expect(pendingPosts.map((post) => post.id)).toEqual([pendingPost.id]);
+    expect(failedPosts.map((post) => post.id)).toEqual([failedPost.id]);
   });
 });

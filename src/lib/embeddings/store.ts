@@ -140,8 +140,8 @@ export async function countPendingEmbeddings(
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
     WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
       AND (
-        pe.id IS NULL
-        OR (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+        (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+        OR (${!retryFailed} AND pe.id IS NULL)
       )
   `;
 
@@ -167,8 +167,8 @@ export async function findEmbeddingPostsToProcess(options: {
     WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
       AND (${lastId === undefined} OR p.id > ${lastId ?? 0})
       AND (
-        pe.id IS NULL
-        OR (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+        (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+        OR (${!retryFailed} AND pe.id IS NULL)
       )
     ORDER BY p.id ASC
     LIMIT ${take}

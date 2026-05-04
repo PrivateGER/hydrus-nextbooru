@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchSemanticPosts } from "@/lib/search";
+import {
+  searchSemanticPosts,
+  SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
+} from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 
 const MAX_PAGE = 10000;
-
-const RATE_LIMIT_CONFIG = {
-  prefix: "posts-semantic-search",
-  limit: 30,
-  windowMs: 60 * 1000,
-};
 
 /**
  * Search posts by natural-language text using multimodal image embeddings.
@@ -20,7 +17,7 @@ const RATE_LIMIT_CONFIG = {
  * - `minScore`: optional minimum cosine similarity score
  */
 export async function GET(request: NextRequest) {
-  const rateLimitResponse = checkApiRateLimit(request, RATE_LIMIT_CONFIG);
+  const rateLimitResponse = checkApiRateLimit(request, SEMANTIC_SEARCH_RATE_LIMIT_CONFIG);
   if (rateLimitResponse) return rateLimitResponse;
 
   const searchParams = request.nextUrl.searchParams;

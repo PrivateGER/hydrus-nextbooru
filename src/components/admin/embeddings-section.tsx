@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   CheckCircleIcon,
   CircleStackIcon,
@@ -145,12 +144,6 @@ export function EmbeddingsSection({
                   <CheckCircleIcon className="h-4 w-4" /> All embedded
                 </span>
               )}
-              <Link
-                href="/admin/embeddings/debug"
-                className="rounded-md bg-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600"
-              >
-                Debug View
-              </Link>
             </div>
           </div>
 

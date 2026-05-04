@@ -26,6 +26,7 @@ import {
   normalizeSemanticQuery,
   upsertSemanticQueryEmbedding,
 } from "@/lib/embeddings/query-cache";
+import type { ApiRateLimitConfig } from "@/lib/rate-limit";
 
 /** Default number of results per page */
 const DEFAULT_LIMIT = 48;
@@ -35,6 +36,11 @@ const MAX_LIMIT = 100;
 const MAX_PAGE = 10000;
 /** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
 const SEMANTIC_RESULT_CAP = 96;
+export const SEMANTIC_SEARCH_RATE_LIMIT_CONFIG = {
+  prefix: "posts-semantic-search",
+  limit: 30,
+  windowMs: 60 * 1000,
+} satisfies ApiRateLimitConfig;
 
 /**
  * Minimal post data returned in search results.

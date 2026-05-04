@@ -78,22 +78,33 @@ export function checkRateLimit(
   };
 }
 
+interface HeaderReader {
+  get(name: string): string | null;
+}
+
 /**
  * Extract client IP from request headers.
  */
-function getClientIP(request: NextRequest): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
+export function getClientIPFromHeaders(headers: HeaderReader): string {
+  const forwardedFor = headers.get("x-forwarded-for");
   if (forwardedFor) {
     return forwardedFor.split(",")[0].trim();
   }
 
-  const realIP = request.headers.get("x-real-ip");
+  const realIP = headers.get("x-real-ip");
   if (realIP) {
     return realIP.trim();
   }
 
   // Fallback for direct connections (development)
   return "unknown";
+}
+
+/**
+ * Extract client IP from a Next.js request.
+ */
+function getClientIP(request: NextRequest): string {
+  return getClientIPFromHeaders(request.headers);
 }
 
 /** Rate limit configuration for an API endpoint */

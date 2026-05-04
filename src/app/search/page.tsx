@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { unstable_cache } from "next/cache";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { CameraIcon, ArrowLeftIcon } from "@heroicons/react/24/outline";
 import { PostGrid } from "@/components/post-grid";
@@ -10,7 +11,14 @@ import { SearchBar } from "@/components/search-bar";
 import { SimilarSearch } from "@/components/similar-search";
 import { NoteSearchResult } from "@/components/note-search-result";
 import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
-import { searchPosts, searchNotes, searchSemanticPosts } from "@/lib/search";
+import {
+  searchPosts,
+  searchNotes,
+  searchSemanticPosts,
+  SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
+  type SemanticSearchResult,
+} from "@/lib/search";
+import { checkRateLimit, getClientIPFromHeaders } from "@/lib/rate-limit";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
@@ -56,6 +64,28 @@ interface SearchPageProps {
   searchParams: Promise<SearchPageParams>;
 }
 
+async function checkSemanticSearchPageRateLimit(): Promise<SemanticSearchResult | null> {
+  const headersList = await headers();
+  const ip = getClientIPFromHeaders(headersList);
+  const result = checkRateLimit(
+    `${SEMANTIC_SEARCH_RATE_LIMIT_CONFIG.prefix}:${ip}`,
+    SEMANTIC_SEARCH_RATE_LIMIT_CONFIG.limit,
+    SEMANTIC_SEARCH_RATE_LIMIT_CONFIG.windowMs
+  );
+
+  if (result.allowed) {
+    return null;
+  }
+
+  return {
+    posts: [],
+    totalCount: 0,
+    totalPages: 0,
+    queryTimeMs: 0,
+    error: "Too many semantic searches. Please try again later.",
+  };
+}
+
 async function SearchPageContent({ searchParams }: { searchParams: Promise<SearchPageParams> }) {
   const params = await searchParams;
   const isReverseMode = params.mode === "reverse";
@@ -67,11 +97,15 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   const page = Math.max(1, parseInt(params.page || "1", 10));
   const isSemanticSearch = semanticQuery.length >= 2;
   const isNotesSearch = notesQuery.length >= 2;
+  const shouldRunSemanticSearch = !isReverseMode && isSemanticSearch;
+  const semanticRateLimit = shouldRunSemanticSearch
+    ? await checkSemanticSearchPageRateLimit()
+    : null;
 
   // Execute search. Semantic search is intentionally uncached because it depends
   // on current embedding settings and newly generated vectors.
-  const result = isSemanticSearch
-    ? await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore })
+  const result = shouldRunSemanticSearch
+    ? semanticRateLimit ?? (await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore }))
     : isNotesSearch
     ? await getCachedNoteSearch(notesQuery, page)
     : tags.length > 0
