@@ -1,0 +1,317 @@
+import { Prisma } from "@/generated/prisma/client";
+import { prisma } from "@/lib/db";
+import { getPostHidingSqlCondition } from "@/lib/tag-blacklist";
+import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
+import {
+  type EmbeddingConfig,
+  isSupportedEmbeddingDimensions,
+} from "@/lib/embeddings/settings";
+import { toVectorLiteral, validateEmbeddingVector } from "@/lib/embeddings/vector";
+
+export interface EmbeddingStats {
+  total: number;
+  supported: number;
+  embedded: number;
+  pending: number;
+  failed: number;
+  unsupported: number;
+  extensions: {
+    vector: string | null;
+    vchord: string | null;
+  };
+}
+
+export interface EmbeddingPostToProcess {
+  id: number;
+  hash: string;
+  extension: string;
+  mimeType: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface SemanticPostResult {
+  id: number;
+  hash: string;
+  width: number | null;
+  height: number | null;
+  blurhash: string | null;
+  mimeType: string;
+  distance: number;
+  score: number;
+}
+
+export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
+  const [total, supported, embedded, failed, extensions] = await Promise.all([
+    prisma.post.count(),
+    prisma.post.count({ where: { mimeType: { in: [...EMBEDDING_SUPPORTED_MIMES] } } }),
+    countEmbeddingsByStatus(config, "COMPLETE"),
+    countEmbeddingsByStatus(config, "FAILED"),
+    getVectorExtensionVersions(),
+  ]);
+
+  return {
+    total,
+    supported,
+    embedded,
+    failed,
+    pending: Math.max(0, supported - embedded - failed),
+    unsupported: Math.max(0, total - supported),
+    extensions,
+  };
+}
+
+export async function getVectorExtensionVersions(): Promise<EmbeddingStats["extensions"]> {
+  const rows = await prisma.$queryRaw<{ extname: string; extversion: string }[]>`
+    SELECT extname, extversion
+    FROM pg_extension
+    WHERE extname IN ('vector', 'vchord')
+  `;
+
+  const byName = new Map(rows.map((row) => [row.extname, row.extversion]));
+  return {
+    vector: byName.get("vector") ?? null,
+    vchord: byName.get("vchord") ?? null,
+  };
+}
+
+export async function assertVectorExtensionsAvailable(): Promise<void> {
+  const extensions = await getVectorExtensionVersions();
+  if (!extensions.vector || !extensions.vchord) {
+    throw new Error("Database is missing required vector extensions. Use tensorchord/vchord-postgres:pg18-v1.1.1.");
+  }
+}
+
+export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
+  const result = await prisma.$executeRaw`
+    DELETE FROM "PostEmbedding"
+    WHERE model = ${config.model}
+      AND dimensions = ${config.dimensions}
+      AND "imageMaxResolution" = ${config.imageMaxResolution}
+  `;
+
+  return result;
+}
+
+export async function deleteFailedEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
+  const result = await prisma.$executeRaw`
+    DELETE FROM "PostEmbedding"
+    WHERE model = ${config.model}
+      AND dimensions = ${config.dimensions}
+      AND "imageMaxResolution" = ${config.imageMaxResolution}
+      AND status = 'FAILED'::"EmbeddingStatus"
+  `;
+
+  return result;
+}
+
+export async function countPendingEmbeddings(
+  config: EmbeddingConfig,
+  retryFailed: boolean
+): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*) AS count
+    FROM "Post" p
+    LEFT JOIN "PostEmbedding" pe
+      ON pe."postId" = p.id
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+      AND (
+        pe.id IS NULL
+        OR (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+      )
+  `;
+
+  return Number(rows[0]?.count ?? 0n);
+}
+
+export async function findEmbeddingPostsToProcess(options: {
+  config: EmbeddingConfig;
+  retryFailed: boolean;
+  lastId?: number;
+  take: number;
+}): Promise<EmbeddingPostToProcess[]> {
+  const { config, retryFailed, lastId, take } = options;
+
+  return prisma.$queryRaw<EmbeddingPostToProcess[]>`
+    SELECT p.id, p.hash, p.extension, p."mimeType", p.width, p.height
+    FROM "Post" p
+    LEFT JOIN "PostEmbedding" pe
+      ON pe."postId" = p.id
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+      AND (${lastId === undefined} OR p.id > ${lastId ?? 0})
+      AND (
+        pe.id IS NULL
+        OR (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
+      )
+    ORDER BY p.id ASC
+    LIMIT ${take}
+  `;
+}
+
+export async function upsertCompleteEmbedding(options: {
+  postId: number;
+  config: EmbeddingConfig;
+  embedding: number[];
+  sourceWidth: number | null;
+  sourceHeight: number | null;
+  processedWidth: number;
+  processedHeight: number;
+}): Promise<void> {
+  const { postId, config, sourceWidth, sourceHeight, processedWidth, processedHeight } = options;
+  const embedding = validateEmbeddingVector(options.embedding, config.dimensions);
+  const vector = toVectorLiteral(embedding);
+
+  await prisma.$executeRaw`
+    INSERT INTO "PostEmbedding" (
+      "postId", model, dimensions, "imageMaxResolution",
+      "sourceWidth", "sourceHeight", "processedWidth", "processedHeight",
+      embedding, status, "errorMessage", "computedAt", "updatedAt"
+    )
+    VALUES (
+      ${postId}, ${config.model}, ${config.dimensions}, ${config.imageMaxResolution},
+      ${sourceWidth}, ${sourceHeight}, ${processedWidth}, ${processedHeight},
+      ${vector}::vector, 'COMPLETE'::"EmbeddingStatus", NULL, NOW(), NOW()
+    )
+    ON CONFLICT ("postId", model, dimensions, "imageMaxResolution")
+    DO UPDATE SET
+      "sourceWidth" = EXCLUDED."sourceWidth",
+      "sourceHeight" = EXCLUDED."sourceHeight",
+      "processedWidth" = EXCLUDED."processedWidth",
+      "processedHeight" = EXCLUDED."processedHeight",
+      embedding = EXCLUDED.embedding,
+      status = 'COMPLETE'::"EmbeddingStatus",
+      "errorMessage" = NULL,
+      "computedAt" = NOW(),
+      "updatedAt" = NOW()
+  `;
+}
+
+export async function upsertFailedEmbedding(options: {
+  postId: number;
+  config: EmbeddingConfig;
+  errorMessage: string;
+  sourceWidth?: number | null;
+  sourceHeight?: number | null;
+  processedWidth?: number | null;
+  processedHeight?: number | null;
+}): Promise<void> {
+  const message = options.errorMessage.slice(0, 1000);
+
+  await prisma.$executeRaw`
+    INSERT INTO "PostEmbedding" (
+      "postId", model, dimensions, "imageMaxResolution",
+      "sourceWidth", "sourceHeight", "processedWidth", "processedHeight",
+      embedding, status, "errorMessage", "computedAt", "updatedAt"
+    )
+    VALUES (
+      ${options.postId}, ${options.config.model}, ${options.config.dimensions}, ${options.config.imageMaxResolution},
+      ${options.sourceWidth ?? null}, ${options.sourceHeight ?? null}, ${options.processedWidth ?? null}, ${options.processedHeight ?? null},
+      NULL, 'FAILED'::"EmbeddingStatus", ${message}, NOW(), NOW()
+    )
+    ON CONFLICT ("postId", model, dimensions, "imageMaxResolution")
+    DO UPDATE SET
+      "sourceWidth" = EXCLUDED."sourceWidth",
+      "sourceHeight" = EXCLUDED."sourceHeight",
+      "processedWidth" = EXCLUDED."processedWidth",
+      "processedHeight" = EXCLUDED."processedHeight",
+      embedding = NULL,
+      status = 'FAILED'::"EmbeddingStatus",
+      "errorMessage" = EXCLUDED."errorMessage",
+      "computedAt" = NOW(),
+      "updatedAt" = NOW()
+  `;
+}
+
+export async function searchPostsByEmbedding(options: {
+  config: EmbeddingConfig;
+  embedding: number[];
+  skip: number;
+  limit: number;
+}): Promise<{ posts: SemanticPostResult[]; totalCount: number }> {
+  const { config, skip, limit } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const embedding = validateEmbeddingVector(options.embedding, config.dimensions);
+  const vector = toVectorLiteral(embedding);
+  const vectorType = Prisma.raw(`vector(${config.dimensions})`);
+  const postHidingCondition = getPostHidingSqlCondition("p.id");
+
+  type ResultRow = {
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+    distance: number;
+  };
+
+  const [rows, counts] = await Promise.all([
+    prisma.$queryRaw<ResultRow[]>`
+      SELECT
+        p.id,
+        p.hash,
+        p.width,
+        p.height,
+        p.blurhash,
+        p."mimeType",
+        (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
+      FROM "PostEmbedding" pe
+      JOIN "Post" p ON p.id = pe."postId"
+      WHERE pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+        AND ${postHidingCondition}
+      ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
+      LIMIT ${limit} OFFSET ${skip}
+    `,
+    prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*) AS count
+      FROM "PostEmbedding" pe
+      JOIN "Post" p ON p.id = pe."postId"
+      WHERE pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+        AND ${postHidingCondition}
+    `,
+  ]);
+
+  return {
+    posts: rows.map((row) => ({
+      ...row,
+      distance: Number(row.distance),
+      score: 1 - Number(row.distance),
+    })),
+    totalCount: Number(counts[0]?.count ?? 0n),
+  };
+}
+
+async function countEmbeddingsByStatus(
+  config: EmbeddingConfig,
+  status: "COMPLETE" | "FAILED"
+): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*) AS count
+    FROM "PostEmbedding" pe
+    JOIN "Post" p ON p.id = pe."postId"
+    WHERE pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe.status = ${status}::"EmbeddingStatus"
+      AND p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+  `;
+
+  return Number(rows[0]?.count ?? 0n);
+}

@@ -18,6 +18,9 @@ import {
 } from "@/lib/wildcard";
 import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
+import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
+import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
+import { searchPostsByEmbedding } from "@/lib/embeddings/store";
 
 /** Default number of results per page */
 const DEFAULT_LIMIT = 48;
@@ -37,6 +40,8 @@ export interface PostResult {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  distance?: number;
+  score?: number;
 }
 
 /** Type of search result - either a note or a group title */
@@ -83,12 +88,22 @@ export interface NoteSearchResult extends BaseSearchResult {
   notes: NoteResult[];
 }
 
+/** Result of semantic text-to-image search */
+export interface SemanticSearchResult extends BaseSearchResult {
+  posts: PostResult[];
+}
+
 /** Options for post search */
 export interface SearchPostsOptions {
   /** Results per page (default 48, max 100) */
   limit?: number;
   /** Search query for note content (min 2 chars, uses fulltext search) */
   notesQuery?: string;
+}
+
+export interface SearchSemanticPostsOptions {
+  /** Results per page (default 48, max 100) */
+  limit?: number;
 }
 
 /**
@@ -523,4 +538,90 @@ export async function searchPosts(
     queryTimeMs: performance.now() - startTime,
     resolvedWildcards,
   };
+}
+
+/**
+ * Search image embeddings with a natural-language text query.
+ *
+ * The query is embedded with the active OpenRouter multimodal embedding model,
+ * then compared against image embeddings stored in VectorChord/Postgres.
+ */
+export async function searchSemanticPosts(
+  query: string,
+  page: number,
+  options?: SearchSemanticPostsOptions
+): Promise<SemanticSearchResult> {
+  const trimmedQuery = query.trim();
+  if (trimmedQuery.length < 2) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
+  const validatedPage = Math.min(Math.max(1, page), MAX_PAGE);
+  if (page > MAX_PAGE) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const skip = (validatedPage - 1) * limit;
+  const startTime = performance.now();
+
+  try {
+    const settings = await getEmbeddingOpenRouterSettings();
+    if (!settings.apiKey) {
+      return {
+        posts: [],
+        totalCount: 0,
+        totalPages: 0,
+        queryTimeMs: performance.now() - startTime,
+        error: "OpenRouter API key not configured for embeddings",
+      };
+    }
+
+    const client = new OpenRouterClient({
+      apiKey: settings.apiKey,
+      model: settings.model,
+      baseUrl: settings.baseUrl || undefined,
+    });
+
+    const embedding = await client.createEmbedding({
+      model: settings.model,
+      input: trimmedQuery,
+      dimensions: settings.dimensions,
+      encoding_format: "float",
+      input_type: "search_query",
+    });
+
+    const result = await searchPostsByEmbedding({
+      config: {
+        model: settings.model,
+        dimensions: settings.dimensions,
+        imageMaxResolution: settings.imageMaxResolution,
+      },
+      embedding: embedding.embedding,
+      skip,
+      limit,
+    });
+
+    return {
+      posts: result.posts,
+      totalCount: result.totalCount,
+      totalPages: Math.ceil(result.totalCount / limit),
+      queryTimeMs: performance.now() - startTime,
+    };
+  } catch (error) {
+    console.error("Semantic search error:", error);
+
+    const message =
+      error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
+        ? error.message
+        : "Failed to search image embeddings";
+
+    return {
+      posts: [],
+      totalCount: 0,
+      totalPages: 0,
+      queryTimeMs: performance.now() - startTime,
+      error: message,
+    };
+  }
 }

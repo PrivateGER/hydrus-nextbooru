@@ -6,6 +6,10 @@ import type {
   TranslationResult,
   ImageTranslationRequest,
   ImageTranslationResult,
+  EmbeddingRequest,
+  EmbeddingResponse,
+  EmbeddingResult,
+  ImageEmbeddingRequest,
 } from "./types";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
@@ -294,6 +298,74 @@ TRANSLATION:
       targetLang,
       hasText: true,
     };
+  }
+
+  /**
+   * Generate an embedding from text or multimodal input.
+   */
+  async createEmbedding(request: EmbeddingRequest): Promise<EmbeddingResult> {
+    const model = request.model || this.model;
+    const startTime = Date.now();
+    aiLog.debug({ model, dimensions: request.dimensions }, "OpenRouter embeddings request");
+
+    const response = await fetch(this.getUrl("embeddings"), {
+      method: "POST",
+      headers: this.getHeaders(true),
+      body: JSON.stringify({
+        model,
+        input: request.input,
+        ...(request.dimensions !== undefined && { dimensions: request.dimensions }),
+        encoding_format: request.encoding_format || "float",
+        ...(request.input_type && { input_type: request.input_type }),
+      }),
+    });
+
+    const durationMs = Date.now() - startTime;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      aiLog.error({ model, status: response.status, body: errorText.slice(0, 500), durationMs }, "OpenRouter embeddings error");
+      throw new OpenRouterApiError(
+        `OpenRouter embeddings error: ${response.status} ${response.statusText}`,
+        response.status,
+        errorText
+      );
+    }
+
+    const data = (await response.json()) as EmbeddingResponse;
+    const embedding = data.data?.[0]?.embedding;
+
+    if (!Array.isArray(embedding) || !embedding.every((value) => typeof value === "number" && Number.isFinite(value))) {
+      throw new OpenRouterApiError("No numeric embedding returned from API", 502);
+    }
+
+    aiLog.debug({ model: data.model || model, dimensions: embedding.length, durationMs }, "OpenRouter embeddings response");
+
+    return {
+      embedding,
+      model: data.model || model,
+      usage: data.usage,
+    };
+  }
+
+  /**
+   * Generate an embedding for a single image.
+   */
+  async createImageEmbedding(request: ImageEmbeddingRequest): Promise<EmbeddingResult> {
+    return this.createEmbedding({
+      model: request.model,
+      dimensions: request.dimensions,
+      input: [
+        {
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: request.imageUrl },
+            },
+          ],
+        },
+      ],
+    });
   }
 
   private getLanguageCode(name: string): string | null {

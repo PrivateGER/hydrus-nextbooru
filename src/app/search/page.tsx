@@ -10,7 +10,7 @@ import { SearchBar } from "@/components/search-bar";
 import { SimilarSearch } from "@/components/similar-search";
 import { NoteSearchResult } from "@/components/note-search-result";
 import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
-import { searchPosts, searchNotes } from "@/lib/search";
+import { searchPosts, searchNotes, searchSemanticPosts } from "@/lib/search";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
@@ -44,20 +44,25 @@ function SearchPageSkeleton() {
 }
 
 interface SearchPageProps {
-  searchParams: Promise<{ tags?: string; notes?: string; page?: string; mode?: string }>;
+  searchParams: Promise<{ tags?: string; notes?: string; semantic?: string; page?: string; mode?: string }>;
 }
 
-async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; page?: string; mode?: string }> }) {
+async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; semantic?: string; page?: string; mode?: string }> }) {
   const params = await searchParams;
   const isReverseMode = params.mode === "reverse";
   const tagsParam = params.tags || "";
   const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
   const notesQuery = params.notes?.trim() || "";
+  const semanticQuery = params.semantic?.trim() || "";
   const page = Math.max(1, parseInt(params.page || "1", 10));
+  const isSemanticSearch = semanticQuery.length >= 2;
   const isNotesSearch = notesQuery.length >= 2;
 
-  // Execute search (cached for 5 minutes)
-  const result = isNotesSearch
+  // Execute search. Semantic search is intentionally uncached because it depends
+  // on current embedding settings and newly generated vectors.
+  const result = isSemanticSearch
+    ? await searchSemanticPosts(semanticQuery, page)
+    : isNotesSearch
     ? await getCachedNoteSearch(notesQuery, page)
     : tags.length > 0
       ? await getCachedPostSearch(tags, page)
@@ -81,12 +86,15 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
   const totalCount = result?.totalCount ?? 0;
   const totalPages = result?.totalPages ?? 0;
   const queryTimeMs = result?.queryTimeMs ?? 0;
-  const resolvedWildcards: ResolvedWildcard[] = result && "resolvedWildcards" in result ? result.resolvedWildcards : [];
+  const resolvedWildcards: ResolvedWildcard[] =
+    result && "resolvedWildcards" in result && Array.isArray(result.resolvedWildcards)
+      ? result.resolvedWildcards as ResolvedWildcard[]
+      : [];
   const error = result?.error;
 
   const wildcardMap = new Map(resolvedWildcards.map((w) => [w.pattern, w]));
   const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
-  const hasQuery = isNotesSearch || tags.length > 0;
+  const hasQuery = isSemanticSearch || isNotesSearch || tags.length > 0;
 
   if (isReverseMode) {
     return (
@@ -117,7 +125,12 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
     <div className="space-y-6">
       <div className="flex justify-center">
         <div className="flex w-full max-w-2xl items-end gap-2">
-          <SearchBar initialTags={tags} initialNotesQuery={notesQuery} initialMode={isNotesSearch ? "notes" : "tags"} />
+          <SearchBar
+            initialTags={tags}
+            initialNotesQuery={notesQuery}
+            initialSemanticQuery={semanticQuery}
+            initialMode={isSemanticSearch ? "semantic" : isNotesSearch ? "notes" : "tags"}
+          />
           <Link
             href="/search?mode=reverse"
             className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
@@ -175,7 +188,11 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">
-          {isNotesSearch ? (
+          {isSemanticSearch ? (
+            <>
+              Semantic: <span className="text-purple-400">&ldquo;{semanticQuery}&rdquo;</span>
+            </>
+          ) : isNotesSearch ? (
             <>
               Notes containing: <span className="text-amber-400">&ldquo;{notesQuery}&rdquo;</span>
             </>
@@ -219,18 +236,26 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
 
       {!hasQuery && (
         <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
-          <p className="text-lg text-zinc-500 dark:text-zinc-400">Enter tags or note content to search</p>
-          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">Use the &ldquo;Tags&rdquo; tab to search by tags, or &ldquo;Notes&rdquo; tab to search note content</p>
+          <p className="text-lg text-zinc-500 dark:text-zinc-400">Enter tags, note content, or a semantic image query</p>
+          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">Use Semantic to search images by natural-language description</p>
         </div>
       )}
 
       {hasQuery && !hasResults && !error && (
         <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
           <p className="text-lg text-zinc-500 dark:text-zinc-400">
-            {isNotesSearch ? `No notes found containing "${notesQuery}"` : "No posts found matching all tags"}
+            {isSemanticSearch
+              ? `No embedded images found for "${semanticQuery}"`
+              : isNotesSearch
+                ? `No notes found containing "${notesQuery}"`
+                : "No posts found matching all tags"}
           </p>
           <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">
-            {isNotesSearch ? "Try different search terms or check your spelling" : "Try removing some tags or using different search terms"}
+            {isSemanticSearch
+              ? "Generate image embeddings in Admin or try a different description"
+              : isNotesSearch
+                ? "Try different search terms or check your spelling"
+                : "Try removing some tags or using different search terms"}
           </p>
         </div>
       )}

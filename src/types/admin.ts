@@ -88,7 +88,45 @@ export interface PhashStats {
   batchError: string | null;
 }
 
-export type Section = "sync" | "thumbnails" | "translation" | "phash" | "maintenance" | "help";
+export interface EmbeddingSettings {
+  apiKey: string | null;
+  apiKeyConfigured: boolean;
+  baseUrl: string | null;
+  model: string;
+  dimensions: number;
+  imageMaxResolution: number;
+}
+
+export interface EmbeddingStats {
+  total: number;
+  supported: number;
+  embedded: number;
+  pending: number;
+  failed: number;
+  unsupported: number;
+  extensions: {
+    vector: string | null;
+    vchord: string | null;
+  };
+}
+
+export interface EmbeddingBatchResult {
+  processed: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface EmbeddingAdminStatus {
+  settings: EmbeddingSettings;
+  stats: EmbeddingStats;
+  batchRunning: boolean;
+  batchProgress: { processed: number; total: number } | null;
+  batchStatus: "idle" | "running" | "completed" | "failed";
+  batchError: string | null;
+  lastBatchResult: EmbeddingBatchResult | null;
+}
+
+export type Section = "sync" | "thumbnails" | "translation" | "phash" | "embeddings" | "maintenance" | "help";
 
 export interface Message {
   type: "success" | "error";

@@ -53,6 +53,11 @@ enum ThumbnailStatus {
   UNSUPPORTED // Non-media file, cannot generate thumbnails
 }
 
+enum EmbeddingStatus {
+  COMPLETE
+  FAILED
+}
+
 enum Orientation {
   landscape
   portrait
@@ -106,6 +111,7 @@ model Post {
   recommendations PostRecommendation[] @relation("PostRecommendations")
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
   phashEntry      PhashEntry?
+  embeddings       PostEmbedding[]
 
   @@index([rating])
   @@index([importedAt])
@@ -254,6 +260,33 @@ model PhashEntry {
   computedAt DateTime @default(now())
 
   post Post @relation(fields: [hash], references: [hash], onDelete: Cascade)
+}
+
+// ============================================
+// IMAGE EMBEDDINGS (semantic image search)
+// ============================================
+
+model PostEmbedding {
+  id                 Int             @id @default(autoincrement())
+  postId             Int
+  post               Post            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  model              String
+  dimensions         Int
+  imageMaxResolution Int
+  sourceWidth        Int?
+  sourceHeight       Int?
+  processedWidth     Int?
+  processedHeight    Int?
+  embedding          Unsupported("vector")?
+  status             EmbeddingStatus @default(COMPLETE)
+  errorMessage       String?
+  computedAt         DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@unique([postId, model, dimensions, imageMaxResolution])
+  @@index([postId])
+  @@index([model, dimensions, imageMaxResolution, status])
 }
 
 // ============================================

@@ -23,12 +23,13 @@ import { useTagSuggestions } from "@/components/search-bar/use-tag-suggestions";
 interface SearchBarProps {
   initialTags?: string[];
   initialNotesQuery?: string;
+  initialSemanticQuery?: string;
   initialMode?: SearchMode;
   placeholder?: string;
 }
 
-function getSearchBarStateKey(initialTags: string[], initialNotesQuery: string, initialMode: SearchMode): string {
-  return `${initialMode}:${initialNotesQuery}:${initialTags.join(",")}`;
+function getSearchBarStateKey(initialTags: string[], initialNotesQuery: string, initialSemanticQuery: string, initialMode: SearchMode): string {
+  return `${initialMode}:${initialNotesQuery}:${initialSemanticQuery}:${initialTags.join(",")}`;
 }
 
 /**
@@ -37,16 +38,18 @@ function getSearchBarStateKey(initialTags: string[], initialNotesQuery: string, 
 export function SearchBar({
   initialTags = [],
   initialNotesQuery = "",
+  initialSemanticQuery = "",
   initialMode = "tags",
   placeholder = "Search tags...",
 }: SearchBarProps) {
-  const stateKey = getSearchBarStateKey(initialTags, initialNotesQuery, initialMode);
+  const stateKey = getSearchBarStateKey(initialTags, initialNotesQuery, initialSemanticQuery, initialMode);
 
   return (
     <SearchBarContent
       key={stateKey}
       initialTags={initialTags}
       initialNotesQuery={initialNotesQuery}
+      initialSemanticQuery={initialSemanticQuery}
       initialMode={initialMode}
       placeholder={placeholder}
       stateKey={stateKey}
@@ -57,6 +60,7 @@ export function SearchBar({
 interface SearchBarContentProps {
   initialTags: string[];
   initialNotesQuery: string;
+  initialSemanticQuery: string;
   initialMode: SearchMode;
   placeholder: string;
   stateKey: string;
@@ -65,13 +69,20 @@ interface SearchBarContentProps {
 function SearchBarContent({
   initialTags = [],
   initialNotesQuery = "",
+  initialSemanticQuery = "",
   initialMode = "tags",
   placeholder = "Search tags...",
   stateKey,
 }: SearchBarContentProps) {
   const router = useRouter();
   const [searchMode, setSearchMode] = useState<SearchMode>(initialMode);
-  const [inputValue, setInputValue] = useState(initialMode === "notes" ? initialNotesQuery : "");
+  const [inputValue, setInputValue] = useState(
+    initialMode === "notes"
+      ? initialNotesQuery
+      : initialMode === "semantic"
+        ? initialSemanticQuery
+        : ""
+  );
   const [selectedTags, setSelectedTags] = useState<string[]>(initialTags);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -187,10 +198,10 @@ function SearchBarContent({
   const performSearch = useCallback(() => {
     const params = new URLSearchParams();
 
-    if (searchMode === "notes") {
+    if (searchMode === "notes" || searchMode === "semantic") {
       const query = inputValue.trim();
       if (query.length >= 2) {
-        params.set("notes", query);
+        params.set(searchMode === "notes" ? "notes" : "semantic", query);
         router.push(`/search?${params.toString()}`);
       }
     } else {
@@ -221,7 +232,7 @@ function SearchBarContent({
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (searchMode === "notes") {
+      if (searchMode === "notes" || searchMode === "semantic") {
         performSearch();
       } else {
         if (highlightedIndex >= 0 && displaySuggestions[highlightedIndex]) {
@@ -303,6 +314,8 @@ function SearchBarContent({
           placeholder={
             searchMode === "notes"
               ? "Search note content..."
+              : searchMode === "semantic"
+                ? "Describe images to find..."
               : selectedTags.length === 0
               ? placeholder
               : ""
@@ -325,8 +338,8 @@ function SearchBarContent({
         </button>
       </div>
 
-      {/* Notes mode hint */}
-      {searchMode === "notes" && inputValue.length > 0 && inputValue.length < 2 && (
+      {/* Text search mode hint */}
+      {(searchMode === "notes" || searchMode === "semantic") && inputValue.length > 0 && inputValue.length < 2 && (
         <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
           Enter at least 2 characters to search
         </div>

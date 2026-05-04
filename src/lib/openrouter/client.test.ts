@@ -101,6 +101,102 @@ describe("OpenRouterClient", () => {
     expect(body.max_tokens).toBe(222);
   });
 
+  it("should create text embeddings through the embeddings endpoint", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        model: "google/gemini-embedding-2-preview",
+        data: [
+          {
+            object: "embedding",
+            embedding: [0.1, 0.2, 0.3],
+            index: 0,
+          },
+        ],
+        usage: { prompt_tokens: 3, total_tokens: 3 },
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+      model: "google/gemini-embedding-2-preview",
+    });
+
+    const result = await client.createEmbedding({
+      input: "blue sky",
+      dimensions: 3,
+      input_type: "search_query",
+    });
+
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(requestInit.body));
+
+    expect(url).toBe("https://openrouter.ai/api/v1/embeddings");
+    expect(body).toMatchObject({
+      model: "google/gemini-embedding-2-preview",
+      input: "blue sky",
+      dimensions: 3,
+      encoding_format: "float",
+      input_type: "search_query",
+    });
+    expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it("should create image embeddings with multimodal image input", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        model: "google/gemini-embedding-2-preview",
+        data: [{ object: "embedding", embedding: [1, 0, 0], index: 0 }],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+      model: "google/gemini-embedding-2-preview",
+    });
+
+    await client.createImageEmbedding({
+      imageUrl: "data:image/webp;base64,abc",
+      dimensions: 3,
+    });
+
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(requestInit.body));
+
+    expect(body.input).toEqual([
+      {
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: "data:image/webp;base64,abc" },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("should reject malformed embedding responses", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        model: "bad-model",
+        data: [{ object: "embedding", embedding: "base64", index: 0 }],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+    });
+
+    await expect(client.createEmbedding({ input: "test" })).rejects.toThrow(OpenRouterApiError);
+  });
+
   it("should parse models from LM Studio-style responses", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({

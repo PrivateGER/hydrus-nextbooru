@@ -1,8 +1,8 @@
 "use client";
 
-import { TagIcon, DocumentTextIcon } from "@heroicons/react/24/outline";
+import { TagIcon, DocumentTextIcon, SparklesIcon } from "@heroicons/react/24/outline";
 
-export type SearchMode = "tags" | "notes";
+export type SearchMode = "tags" | "notes" | "semantic";
 
 interface ModeToggleProps {
   mode: SearchMode;
@@ -44,6 +44,20 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
         >
           <DocumentTextIcon className="w-4 h-4" aria-hidden="true" />
           Notes
+        </button>
+        <button
+          type="button"
+          onClick={() => onModeChange("semantic")}
+          aria-pressed={mode === "semantic"}
+          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            mode === "semantic"
+              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
+              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+          }`}
+          title="Semantic image search"
+        >
+          <SparklesIcon className="w-4 h-4" aria-hidden="true" />
+          Semantic
         </button>
       </div>
     </div>
