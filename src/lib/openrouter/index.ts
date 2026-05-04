@@ -34,6 +34,7 @@ export {
   type EmbeddingResponse,
   type EmbeddingResult,
   type ImageEmbeddingRequest,
+  type ImageEmbeddingsRequest,
 } from "./types";
 export {
   estimateTokens,
