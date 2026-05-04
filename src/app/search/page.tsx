@@ -43,17 +43,27 @@ function SearchPageSkeleton() {
   );
 }
 
-interface SearchPageProps {
-  searchParams: Promise<{ tags?: string; notes?: string; semantic?: string; page?: string; mode?: string }>;
+interface SearchPageParams {
+  tags?: string;
+  notes?: string;
+  semantic?: string;
+  page?: string;
+  mode?: string;
+  minScore?: string;
 }
 
-async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tags?: string; notes?: string; semantic?: string; page?: string; mode?: string }> }) {
+interface SearchPageProps {
+  searchParams: Promise<SearchPageParams>;
+}
+
+async function SearchPageContent({ searchParams }: { searchParams: Promise<SearchPageParams> }) {
   const params = await searchParams;
   const isReverseMode = params.mode === "reverse";
   const tagsParam = params.tags || "";
   const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
   const notesQuery = params.notes?.trim() || "";
   const semanticQuery = params.semantic?.trim() || "";
+  const semanticMinScore = params.minScore === undefined ? undefined : Number.parseFloat(params.minScore);
   const page = Math.max(1, parseInt(params.page || "1", 10));
   const isSemanticSearch = semanticQuery.length >= 2;
   const isNotesSearch = notesQuery.length >= 2;
@@ -61,7 +71,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<{ tag
   // Execute search. Semantic search is intentionally uncached because it depends
   // on current embedding settings and newly generated vectors.
   const result = isSemanticSearch
-    ? await searchSemanticPosts(semanticQuery, page)
+    ? await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore })
     : isNotesSearch
     ? await getCachedNoteSearch(notesQuery, page)
     : tags.length > 0

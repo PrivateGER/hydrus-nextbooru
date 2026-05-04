@@ -1,6 +1,9 @@
 import { CircleStackIcon } from "@heroicons/react/24/outline";
 import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
-import { findRelatedPostsByEmbedding } from "@/lib/embeddings/store";
+import {
+  DEFAULT_EMBEDDING_MIN_SCORE,
+  findRelatedPostsByEmbedding,
+} from "@/lib/embeddings/store";
 import { EmbeddingRelatedPostsClient } from "@/components/post/embedding-related-posts-client";
 
 interface EmbeddingRelatedPostsProps {
@@ -13,6 +16,7 @@ export async function EmbeddingRelatedPosts({ hash, limit = 10 }: EmbeddingRelat
   const posts = await findRelatedPostsByEmbedding({
     hash,
     limit,
+    minScore: DEFAULT_EMBEDDING_MIN_SCORE,
     config: {
       model: settings.model,
       dimensions: settings.dimensions,

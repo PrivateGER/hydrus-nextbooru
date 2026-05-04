@@ -52,6 +52,16 @@ export interface EmbeddedRelatedPost {
   score: number;
 }
 
+export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
+
+function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
+  if (minScore === undefined || !Number.isFinite(minScore)) {
+    return null;
+  }
+
+  return Math.min(1, Math.max(-1, minScore));
+}
+
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
   const [total, supported, embedded, failed, extensions] = await Promise.all([
     prisma.post.count(),
@@ -244,6 +254,7 @@ export async function searchPostsByEmbedding(options: {
   embedding: number[];
   skip: number;
   limit: number;
+  minScore?: number;
 }): Promise<{ posts: SemanticPostResult[]; totalCount: number }> {
   const { config, skip, limit } = options;
   if (!isSupportedEmbeddingDimensions(config.dimensions)) {
@@ -254,6 +265,8 @@ export async function searchPostsByEmbedding(options: {
   const vector = toVectorLiteral(embedding);
   const vectorType = Prisma.raw(`vector(${config.dimensions})`);
   const postHidingCondition = getPostHidingSqlCondition("p.id");
+  const minScore = normalizeEmbeddingMinScore(options.minScore);
+  const maxDistance = minScore === null ? null : 1 - minScore;
 
   type ResultRow = {
     id: number;
@@ -283,6 +296,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
         AND ${postHidingCondition}
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
       LIMIT ${limit} OFFSET ${skip}
     `,
@@ -296,6 +310,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
         AND ${postHidingCondition}
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
     `,
   ]);
 
@@ -313,6 +328,7 @@ export async function findRelatedPostsByEmbedding(options: {
   hash: string;
   config: EmbeddingConfig;
   limit: number;
+  minScore?: number;
 }): Promise<EmbeddedRelatedPost[]> {
   const { hash, config } = options;
   const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : 10;
@@ -324,6 +340,8 @@ export async function findRelatedPostsByEmbedding(options: {
 
   const vectorType = Prisma.raw(`vector(${config.dimensions})`);
   const postHidingCondition = getPostHidingSqlCondition("related.id");
+  const minScore = normalizeEmbeddingMinScore(options.minScore);
+  const maxDistance = minScore === null ? null : 1 - minScore;
 
   type ResultRow = {
     id: number;
@@ -366,6 +384,7 @@ export async function findRelatedPostsByEmbedding(options: {
       AND pe."postId" <> source.post_id
     JOIN "Post" related ON related.id = pe."postId"
     WHERE ${postHidingCondition}
+      AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance})
       AND NOT EXISTS (
         SELECT 1
         FROM "PostGroup" source_group

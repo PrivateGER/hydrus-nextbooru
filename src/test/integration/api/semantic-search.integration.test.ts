@@ -79,6 +79,42 @@ describe("semantic image embedding search", () => {
     expect(result.posts[0].distance).toBeLessThan(result.posts[1].distance);
   });
 
+  it("filters embedding search results by minimum score", async () => {
+    const prisma = getTestPrisma();
+    const closePost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const farPost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+
+    await upsertCompleteEmbedding({
+      postId: closePost.id,
+      config,
+      embedding: embedding(1, 0),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+    await upsertCompleteEmbedding({
+      postId: farPost.id,
+      config,
+      embedding: embedding(0, 1),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+
+    const result = await searchPostsByEmbedding({
+      config,
+      embedding: embedding(1, 0),
+      skip: 0,
+      limit: 10,
+      minScore: 0.25,
+    });
+
+    expect(result.totalCount).toBe(1);
+    expect(result.posts.map((post) => post.id)).toEqual([closePost.id]);
+  });
+
   it("finds related posts from the source post embedding", async () => {
     const prisma = getTestPrisma();
     const sourcePost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
@@ -215,11 +251,21 @@ describe("semantic image embedding search", () => {
   it("caches semantic query embeddings by normalized query hash", async () => {
     const prisma = getTestPrisma();
     const post = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const farPost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
 
     await upsertCompleteEmbedding({
       postId: post.id,
       config,
       embedding: embedding(1, 0),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+    await upsertCompleteEmbedding({
+      postId: farPost.id,
+      config,
+      embedding: embedding(0, 1),
       sourceWidth: 100,
       sourceHeight: 100,
       processedWidth: 100,
@@ -255,6 +301,7 @@ describe("semantic image embedding search", () => {
 
     const first = await searchSemanticPosts(" blue   sky ", 1);
     expect(first.posts.map((result) => result.id)).toEqual([post.id]);
+    expect(first.totalCount).toBe(1);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(await prisma.semanticQueryEmbedding.count()).toBe(1);
 
@@ -262,6 +309,7 @@ describe("semantic image embedding search", () => {
 
     const second = await searchSemanticPosts("blue sky", 1);
     expect(second.posts.map((result) => result.id)).toEqual([post.id]);
+    expect(second.totalCount).toBe(1);
     expect(second.error).toBeUndefined();
     expect(global.fetch).toHaveBeenCalledTimes(1);
 

@@ -20,7 +20,10 @@ import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } fro
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
-import { searchPostsByEmbedding } from "@/lib/embeddings/store";
+import {
+  DEFAULT_EMBEDDING_MIN_SCORE,
+  searchPostsByEmbedding,
+} from "@/lib/embeddings/store";
 import {
   getCachedSemanticQueryEmbedding,
   normalizeSemanticQuery,
@@ -109,6 +112,25 @@ export interface SearchPostsOptions {
 export interface SearchSemanticPostsOptions {
   /** Results per page (default 48, max 100) */
   limit?: number;
+  /** Minimum cosine similarity score to include (default 0.25) */
+  minScore?: number;
+}
+
+function normalizeSemanticMinScore(minScore: number | undefined): number {
+  const score = minScore ?? DEFAULT_EMBEDDING_MIN_SCORE;
+  if (!Number.isFinite(score)) {
+    return DEFAULT_EMBEDDING_MIN_SCORE;
+  }
+
+  return Math.min(1, Math.max(-1, score));
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(1, Math.floor(value)), max);
 }
 
 /**
@@ -561,9 +583,11 @@ export async function searchSemanticPosts(
     return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
   }
 
-  const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
-  const validatedPage = Math.min(Math.max(1, page), MAX_PAGE);
-  if (page > MAX_PAGE) {
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const minScore = normalizeSemanticMinScore(options?.minScore);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = Math.min(Math.max(1, requestedPage), MAX_PAGE);
+  if (requestedPage > MAX_PAGE) {
     return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
   }
 
@@ -620,6 +644,7 @@ export async function searchSemanticPosts(
       embedding: queryEmbedding,
       skip,
       limit,
+      minScore,
     });
 
     return {
