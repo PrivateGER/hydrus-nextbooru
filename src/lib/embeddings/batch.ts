@@ -174,7 +174,8 @@ async function computeEmbeddingPostBatch(options: {
       aiLog.warn({ count: prepared.length, error: message }, "Failed to compute batched image embeddings; retrying individually");
 
       const fallbackLimit = pLimit(FALLBACK_CONCURRENCY);
-      await Promise.all(prepared.map(({ post, processedImage }) =>
+      const unresolved = prepared.filter(({ post }) => results.get(post.id) !== true);
+      await Promise.all(unresolved.map(({ post, processedImage }) =>
         fallbackLimit(async () => {
           const succeeded = await computePreparedImageEmbedding({
             client,

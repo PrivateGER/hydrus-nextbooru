@@ -182,4 +182,26 @@ describe("batchComputeImageEmbeddings", () => {
     expect(mocks.createImageEmbeddings).toHaveBeenCalledTimes(1);
     expect(mocks.createImageEmbedding).toHaveBeenCalledTimes(posts.length);
   });
+
+  it("only retries prepared posts not already persisted after partial batched processing", async () => {
+    const posts = [post(1), post(2), post(3)];
+
+    mocks.countPendingEmbeddings.mockResolvedValue(posts.length);
+    mocks.findEmbeddingPostsToProcess.mockResolvedValue(posts);
+    mocks.preprocessImageForEmbedding.mockImplementation(async (filePath: string) => {
+      const id = Number(filePath.match(/hash-(\d+)/)?.[1] ?? 0);
+      return processedImage(id);
+    });
+    mocks.createImageEmbeddings.mockResolvedValue([
+      { embedding: [1, 0, 0], model: config.model },
+    ]);
+    mocks.createImageEmbedding.mockResolvedValue({ embedding: [0, 1, 0], model: config.model });
+
+    const result = await batchComputeImageEmbeddings({ batchSize: posts.length });
+
+    expect(result).toEqual({ processed: posts.length, succeeded: posts.length, failed: 0 });
+    expect(mocks.upsertCompleteEmbedding).toHaveBeenCalledTimes(posts.length);
+    expect(mocks.upsertCompleteEmbedding.mock.calls.map(([call]) => call.postId)).toEqual([1, 2, 3]);
+    expect(mocks.createImageEmbedding).toHaveBeenCalledTimes(2);
+  });
 });
