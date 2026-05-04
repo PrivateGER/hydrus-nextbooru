@@ -21,6 +21,11 @@ import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
 import { searchPostsByEmbedding } from "@/lib/embeddings/store";
+import {
+  getCachedSemanticQueryEmbedding,
+  normalizeSemanticQuery,
+  upsertSemanticQueryEmbedding,
+} from "@/lib/embeddings/query-cache";
 
 /** Default number of results per page */
 const DEFAULT_LIMIT = 48;
@@ -551,8 +556,8 @@ export async function searchSemanticPosts(
   page: number,
   options?: SearchSemanticPostsOptions
 ): Promise<SemanticSearchResult> {
-  const trimmedQuery = query.trim();
-  if (trimmedQuery.length < 2) {
+  const normalizedQuery = normalizeSemanticQuery(query);
+  if (normalizedQuery.length < 2) {
     return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
   }
 
@@ -567,29 +572,44 @@ export async function searchSemanticPosts(
 
   try {
     const settings = await getEmbeddingOpenRouterSettings();
-    if (!settings.apiKey) {
-      return {
-        posts: [],
-        totalCount: 0,
-        totalPages: 0,
-        queryTimeMs: performance.now() - startTime,
-        error: "OpenRouter API key not configured for embeddings",
-      };
-    }
-
-    const client = new OpenRouterClient({
-      apiKey: settings.apiKey,
+    const queryConfig = {
       model: settings.model,
-      baseUrl: settings.baseUrl || undefined,
-    });
-
-    const embedding = await client.createEmbedding({
-      model: settings.model,
-      input: trimmedQuery,
       dimensions: settings.dimensions,
-      encoding_format: "float",
-      input_type: "search_query",
-    });
+    };
+    const cachedEmbedding = await getCachedSemanticQueryEmbedding(normalizedQuery, queryConfig);
+    let queryEmbedding = cachedEmbedding?.embedding ?? null;
+
+    if (!queryEmbedding) {
+      if (!settings.apiKey) {
+        return {
+          posts: [],
+          totalCount: 0,
+          totalPages: 0,
+          queryTimeMs: performance.now() - startTime,
+          error: "OpenRouter API key not configured for embeddings",
+        };
+      }
+
+      const client = new OpenRouterClient({
+        apiKey: settings.apiKey,
+        model: settings.model,
+        baseUrl: settings.baseUrl || undefined,
+      });
+
+      const embedding = await client.createEmbedding({
+        model: settings.model,
+        input: normalizedQuery,
+        dimensions: settings.dimensions,
+        encoding_format: "float",
+        input_type: "search_query",
+      });
+
+      queryEmbedding = (await upsertSemanticQueryEmbedding({
+        query: normalizedQuery,
+        config: queryConfig,
+        embedding: embedding.embedding,
+      })).embedding;
+    }
 
     const result = await searchPostsByEmbedding({
       config: {
@@ -597,7 +617,7 @@ export async function searchSemanticPosts(
         dimensions: settings.dimensions,
         imageMaxResolution: settings.imageMaxResolution,
       },
-      embedding: embedding.embedding,
+      embedding: queryEmbedding,
       skip,
       limit,
     });

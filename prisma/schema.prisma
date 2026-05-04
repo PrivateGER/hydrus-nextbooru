@@ -289,6 +289,21 @@ model PostEmbedding {
   @@index([model, dimensions, imageMaxResolution, status])
 }
 
+model SemanticQueryEmbedding {
+  queryHash String @db.Char(64)
+  query     String
+  model     String
+  dimensions Int
+  embedding Unsupported("vector")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastUsedAt DateTime @default(now())
+
+  @@id([queryHash, model, dimensions])
+  @@index([model, dimensions, lastUsedAt])
+}
+
 // ============================================
 // SETTINGS (key-value configuration store)
 // ============================================

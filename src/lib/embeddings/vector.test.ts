@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toVectorLiteral, validateEmbeddingVector } from "@/lib/embeddings/vector";
+import { parseVectorLiteral, toVectorLiteral, validateEmbeddingVector } from "@/lib/embeddings/vector";
 
 describe("embedding vector helpers", () => {
   it("validates expected dimensions and finite values", () => {
@@ -11,5 +11,10 @@ describe("embedding vector helpers", () => {
 
   it("formats a pgvector literal", () => {
     expect(toVectorLiteral([0.1, -2, 3.5])).toBe("[0.1,-2,3.5]");
+  });
+
+  it("parses a pgvector text literal", () => {
+    expect(parseVectorLiteral("[0.1,-2,3.5,1e-3]")).toEqual([0.1, -2, 3.5, 0.001]);
+    expect(() => parseVectorLiteral('"not a vector"')).toThrow(TypeError);
   });
 });

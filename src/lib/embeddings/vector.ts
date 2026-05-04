@@ -19,3 +19,17 @@ export function validateEmbeddingVector(values: number[], expectedDimensions: nu
 export function toVectorLiteral(values: number[]): string {
   return `[${values.map((value) => Number(value).toString()).join(",")}]`;
 }
+
+export function parseVectorLiteral(value: string): number[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("Vector literal must parse to an array");
+  }
+
+  return parsed.map((entry) => {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      throw new TypeError("Vector literal contains a non-finite value");
+    }
+    return entry;
+  });
+}
