@@ -41,6 +41,17 @@ export interface SemanticPostResult {
   score: number;
 }
 
+export interface EmbeddedRelatedPost {
+  id: number;
+  hash: string;
+  width: number | null;
+  height: number | null;
+  blurhash: string | null;
+  mimeType: string;
+  distance: number;
+  score: number;
+}
+
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
   const [total, supported, embedded, failed, extensions] = await Promise.all([
     prisma.post.count(),
@@ -296,6 +307,81 @@ export async function searchPostsByEmbedding(options: {
     })),
     totalCount: Number(counts[0]?.count ?? 0n),
   };
+}
+
+export async function findRelatedPostsByEmbedding(options: {
+  hash: string;
+  config: EmbeddingConfig;
+  limit: number;
+}): Promise<EmbeddedRelatedPost[]> {
+  const { hash, config } = options;
+  const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : 10;
+  const limit = Math.min(Math.max(1, requestedLimit), 20);
+
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const vectorType = Prisma.raw(`vector(${config.dimensions})`);
+  const postHidingCondition = getPostHidingSqlCondition("related.id");
+
+  type ResultRow = {
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+    distance: number;
+  };
+
+  const rows = await prisma.$queryRaw<ResultRow[]>`
+    WITH source AS (
+      SELECT pe.embedding::${vectorType} AS embedding, p.id AS post_id
+      FROM "Post" p
+      JOIN "PostEmbedding" pe ON pe."postId" = p.id
+      WHERE p.hash = ${hash}
+        AND pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+      LIMIT 1
+    )
+    SELECT
+      related.id,
+      related.hash,
+      related.width,
+      related.height,
+      related.blurhash,
+      related."mimeType",
+      (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+    FROM source
+    JOIN "PostEmbedding" pe
+      ON pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+      AND pe.embedding IS NOT NULL
+      AND pe."postId" <> source.post_id
+    JOIN "Post" related ON related.id = pe."postId"
+    WHERE ${postHidingCondition}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "PostGroup" source_group
+        JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
+        WHERE source_group."postId" = source.post_id
+          AND related_group."postId" = related.id
+      )
+    ORDER BY pe.embedding::${vectorType} <=> source.embedding
+    LIMIT ${limit}
+  `;
+
+  return rows.map((row) => ({
+    ...row,
+    distance: Number(row.distance),
+    score: 1 - Number(row.distance),
+  }));
 }
 
 async function countEmbeddingsByStatus(
