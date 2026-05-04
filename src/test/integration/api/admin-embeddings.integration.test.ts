@@ -4,8 +4,15 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase }
 import { setTestPrisma } from "@/lib/db";
 import { createPost } from "../factories";
 import {
+  batchComputeImageEmbeddings,
+  getCurrentEmbeddingStats,
+} from "@/lib/embeddings/batch";
+import {
+  claimEmbeddingBatchIfIdle,
+  completeEmbeddingBatch,
   countPendingEmbeddings,
   findEmbeddingPostsToProcess,
+  getEmbeddingBatchState,
   upsertCompleteEmbedding,
   upsertFailedEmbedding,
 } from "@/lib/embeddings/store";
@@ -20,6 +27,7 @@ let DELETE: typeof import("@/app/api/admin/embeddings/route").DELETE;
 
 const dimensions = 768;
 const config = {
+  baseUrl: "https://openrouter.ai/api/v1",
   model: "google/gemini-embedding-2-preview",
   dimensions,
   imageMaxResolution: 1024,
@@ -114,8 +122,86 @@ describe("/api/admin/embeddings", () => {
     const values = new Map(rows.map((row) => [row.key, row.value]));
 
     expect(values.get("openrouter.apiKey")).toBe("sk-or-v1-test");
+    expect(values.get("openrouter.baseUrl")).toBe("https://openrouter.ai/api/v1");
     expect(values.get("openrouter.embedding.dimensions")).toBe("1536");
     expect(values.get("openrouter.embedding.imageMaxResolution")).toBe("1536");
+  });
+
+  it("clears a stored embedding API key when an empty key is submitted", async () => {
+    const prisma = getTestPrisma();
+    await prisma.settings.create({ data: { key: "openrouter.apiKey", value: "sk-or-v1-old" } });
+
+    const request = new NextRequest("http://localhost/api/admin/embeddings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "  " }),
+    });
+
+    const response = await PUT(request);
+    expect(response.status).toBe(200);
+
+    const row = await prisma.settings.findUniqueOrThrow({ where: { key: "openrouter.apiKey" } });
+    expect(row.value).toBe("");
+  });
+
+  it("redacts raw API keys from the current stats helper", async () => {
+    const prisma = getTestPrisma();
+    await prisma.settings.createMany({
+      data: [
+        { key: "openrouter.apiKey", value: "sk-or-v1-secret" },
+        { key: "openrouter.embedding.model", value: config.model },
+        { key: "openrouter.embedding.dimensions", value: String(config.dimensions) },
+        { key: "openrouter.embedding.imageMaxResolution", value: String(config.imageMaxResolution) },
+      ],
+    });
+
+    const result = await getCurrentEmbeddingStats();
+
+    expect(result.settings).not.toHaveProperty("apiKey");
+    expect(result.settings.apiKeyConfigured).toBe(true);
+    expect(result.settings.maskedApiKey).not.toBe("sk-or-v1-secret");
+  });
+
+  it("uses persisted batch state to block settings updates while running", async () => {
+    await expect(claimEmbeddingBatchIfIdle()).resolves.toBe(true);
+    await expect(claimEmbeddingBatchIfIdle()).resolves.toBe(false);
+
+    const request = new NextRequest("http://localhost/api/admin/embeddings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.model }),
+    });
+
+    const response = await PUT(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(data.error).toContain("batch is running");
+    await expect(getEmbeddingBatchState()).resolves.toMatchObject({
+      batchRunning: true,
+      batchStatus: "running",
+      batchProgress: { processed: 0, total: 0 },
+    });
+
+    await completeEmbeddingBatch({ processed: 0, succeeded: 0, failed: 0 });
+  });
+
+  it("allows custom embedding backends without an API key", async () => {
+    const prisma = getTestPrisma();
+    await prisma.settings.createMany({
+      data: [
+        { key: "openrouter.baseUrl", value: "https://embeddings.example/v1" },
+        { key: "openrouter.embedding.model", value: config.model },
+        { key: "openrouter.embedding.dimensions", value: String(config.dimensions) },
+        { key: "openrouter.embedding.imageMaxResolution", value: String(config.imageMaxResolution) },
+      ],
+    });
+
+    await expect(batchComputeImageEmbeddings({ limit: 0 })).resolves.toEqual({
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+    });
   });
 
   it("clears embeddings for the active config only", async () => {

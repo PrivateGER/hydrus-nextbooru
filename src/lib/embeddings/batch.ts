@@ -4,8 +4,12 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 import { aiLog } from "@/lib/logger";
 import { preprocessImageForEmbedding } from "@/lib/embeddings/image";
 import {
+  getEmbeddingSettings,
   getEmbeddingOpenRouterSettings,
+  isEmbeddingProviderConfigured,
+  toEmbeddingConfig,
   type EmbeddingConfig,
+  type EmbeddingSettings,
 } from "@/lib/embeddings/settings";
 import {
   assertVectorExtensionsAvailable,
@@ -54,23 +58,19 @@ export async function batchComputeImageEmbeddings(
   await assertVectorExtensionsAvailable();
 
   const settings = await getEmbeddingOpenRouterSettings();
-  if (!settings.apiKey) {
+  if (!isEmbeddingProviderConfigured(settings)) {
     throw new OpenRouterConfigError("OpenRouter API key not configured. Set it in Admin Embeddings.");
   }
 
-  const config: EmbeddingConfig = {
-    model: settings.model,
-    dimensions: settings.dimensions,
-    imageMaxResolution: settings.imageMaxResolution,
-  };
+  const config: EmbeddingConfig = toEmbeddingConfig(settings);
 
   const totalPending = await countPendingEmbeddings(config, retryFailed);
   const total = limit !== undefined ? Math.min(totalPending, limit) : totalPending;
 
   const client = new OpenRouterClient({
-    apiKey: settings.apiKey,
+    apiKey: settings.apiKey ?? "",
     model: settings.model,
-    baseUrl: settings.baseUrl || undefined,
+    baseUrl: settings.baseUrl,
   });
 
   let processed = 0;
@@ -146,15 +146,25 @@ export async function batchComputeImageEmbeddings(
 }
 
 export async function getCurrentEmbeddingStats(): Promise<{
-  settings: Awaited<ReturnType<typeof getEmbeddingOpenRouterSettings>>;
+  settings: Pick<
+    EmbeddingSettings,
+    "apiKeyConfigured" | "apiKeyRequired" | "maskedApiKey" | "baseUrl" | "model" | "dimensions" | "imageMaxResolution"
+  >;
   stats: EmbeddingStats;
 }> {
-  const settings = await getEmbeddingOpenRouterSettings();
-  const stats = await getEmbeddingStats({
-    model: settings.model,
-    dimensions: settings.dimensions,
-    imageMaxResolution: settings.imageMaxResolution,
-  });
+  const settings = await getEmbeddingSettings();
+  const stats = await getEmbeddingStats(toEmbeddingConfig(settings));
 
-  return { settings, stats };
+  return {
+    settings: {
+      apiKeyConfigured: settings.apiKeyConfigured,
+      apiKeyRequired: settings.apiKeyRequired,
+      maskedApiKey: settings.maskedApiKey,
+      baseUrl: settings.baseUrl,
+      model: settings.model,
+      dimensions: settings.dimensions,
+      imageMaxResolution: settings.imageMaxResolution,
+    },
+    stats,
+  };
 }

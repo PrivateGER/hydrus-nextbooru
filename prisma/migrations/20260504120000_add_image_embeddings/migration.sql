@@ -21,6 +21,7 @@ CREATE TYPE "EmbeddingStatus" AS ENUM ('COMPLETE', 'FAILED');
 CREATE TABLE "PostEmbedding" (
   "id" SERIAL NOT NULL,
   "postId" INTEGER NOT NULL,
+  "baseUrl" TEXT NOT NULL,
   "model" TEXT NOT NULL,
   "dimensions" INTEGER NOT NULL,
   "imageMaxResolution" INTEGER NOT NULL,
@@ -47,12 +48,12 @@ CREATE TABLE "PostEmbedding" (
   )
 );
 
-CREATE UNIQUE INDEX "PostEmbedding_postId_model_dimensions_imageMaxResolution_key"
-  ON "PostEmbedding"("postId", "model", "dimensions", "imageMaxResolution");
+CREATE UNIQUE INDEX "PostEmbedding_config_key"
+  ON "PostEmbedding"("postId", "baseUrl", "model", "dimensions", "imageMaxResolution");
 
 CREATE INDEX "PostEmbedding_postId_idx" ON "PostEmbedding"("postId");
-CREATE INDEX "PostEmbedding_model_dimensions_imageMaxResolution_status_idx"
-  ON "PostEmbedding"("model", "dimensions", "imageMaxResolution", "status");
+CREATE INDEX "PostEmbedding_config_status_idx"
+  ON "PostEmbedding"("baseUrl", "model", "dimensions", "imageMaxResolution", "status");
 
 -- OpenRouter's current multimodal Gemini embedding model recommends 768,
 -- 1536, or 3072 output dimensions. Use expression indexes because the table
@@ -71,3 +72,28 @@ CREATE INDEX "PostEmbedding_embedding_3072_vchord_idx"
   ON "PostEmbedding"
   USING vchordrq (("embedding"::vector(3072)) vector_cosine_ops)
   WHERE "status" = 'COMPLETE' AND "dimensions" = 3072;
+
+CREATE TABLE "EmbeddingBatchState" (
+  "key" TEXT NOT NULL,
+  "status" TEXT NOT NULL DEFAULT 'idle',
+  "processed" INTEGER NOT NULL DEFAULT 0,
+  "total" INTEGER NOT NULL DEFAULT 0,
+  "errorMessage" TEXT,
+  "lastProcessed" INTEGER,
+  "lastSucceeded" INTEGER,
+  "lastFailed" INTEGER,
+  "claimedAt" TIMESTAMP(3),
+  "startedAt" TIMESTAMP(3),
+  "completedAt" TIMESTAMP(3),
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  CONSTRAINT "EmbeddingBatchState_pkey" PRIMARY KEY ("key"),
+  CONSTRAINT "EmbeddingBatchState_status_check" CHECK ("status" IN ('idle', 'running', 'completed', 'failed')),
+  CONSTRAINT "EmbeddingBatchState_progress_nonnegative_check" CHECK ("processed" >= 0 AND "total" >= 0),
+  CONSTRAINT "EmbeddingBatchState_last_result_nonnegative_check" CHECK (
+    ("lastProcessed" IS NULL OR "lastProcessed" >= 0)
+    AND ("lastSucceeded" IS NULL OR "lastSucceeded" >= 0)
+    AND ("lastFailed" IS NULL OR "lastFailed" >= 0)
+  )
+);

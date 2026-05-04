@@ -8,10 +8,15 @@ import {
   searchPostsByEmbedding,
   upsertCompleteEmbedding,
 } from "@/lib/embeddings/store";
+import {
+  getCachedSemanticQueryEmbedding,
+  upsertSemanticQueryEmbedding,
+} from "@/lib/embeddings/query-cache";
 import { searchSemanticPosts } from "@/lib/search";
 
 const dimensions = 768;
 const config = {
+  baseUrl: "https://openrouter.ai/api/v1",
   model: "google/gemini-embedding-2-preview",
   dimensions,
   imageMaxResolution: 1024,
@@ -77,6 +82,51 @@ describe("semantic image embedding search", () => {
     expect(result.totalCount).toBe(2);
     expect(result.posts.map((post) => post.id)).toEqual([closePost.id, farPost.id]);
     expect(result.posts[0].distance).toBeLessThan(result.posts[1].distance);
+  });
+
+  it("scopes stored image embeddings by backend URL", async () => {
+    const prisma = getTestPrisma();
+    const post = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const otherBackend = { ...config, baseUrl: "https://embeddings.example/v1" };
+
+    await upsertCompleteEmbedding({
+      postId: post.id,
+      config,
+      embedding: embedding(1, 0),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+    await upsertCompleteEmbedding({
+      postId: post.id,
+      config: otherBackend,
+      embedding: embedding(0, 1),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+
+    expect(await prisma.postEmbedding.count()).toBe(2);
+
+    const defaultBackendResults = await searchPostsByEmbedding({
+      config,
+      embedding: embedding(1, 0),
+      skip: 0,
+      limit: 10,
+    });
+    const customBackendResults = await searchPostsByEmbedding({
+      config: otherBackend,
+      embedding: embedding(0, 1),
+      skip: 0,
+      limit: 10,
+    });
+
+    expect(defaultBackendResults.posts).toHaveLength(1);
+    expect(customBackendResults.posts).toHaveLength(1);
+    expect(defaultBackendResults.posts[0].distance).toBeCloseTo(0);
+    expect(customBackendResults.posts[0].distance).toBeCloseTo(0);
   });
 
   it("filters embedding search results by minimum score", async () => {
@@ -376,5 +426,78 @@ describe("semantic image embedding search", () => {
     const cached = await prisma.semanticQueryEmbedding.findMany();
     expect(cached).toHaveLength(1);
     expect(cached[0].query).toBe("blue sky");
+  });
+
+  it("scopes cached semantic query embeddings by backend URL", async () => {
+    const otherBackend = { ...config, baseUrl: "https://embeddings.example/v1" };
+
+    await upsertSemanticQueryEmbedding({
+      query: " blue   sky ",
+      config,
+      embedding: embedding(1, 0),
+    });
+    await upsertSemanticQueryEmbedding({
+      query: "blue sky",
+      config: otherBackend,
+      embedding: embedding(0, 1),
+    });
+
+    const defaultCached = await getCachedSemanticQueryEmbedding("blue sky", config);
+    const customCached = await getCachedSemanticQueryEmbedding("blue sky", otherBackend);
+
+    expect(defaultCached?.embedding.slice(0, 2)).toEqual([1, 0]);
+    expect(customCached?.embedding.slice(0, 2)).toEqual([0, 1]);
+    expect(await getTestPrisma().semanticQueryEmbedding.count()).toBe(2);
+  });
+
+  it("uses a custom embedding backend without requiring an API key", async () => {
+    const prisma = getTestPrisma();
+    const customConfig = { ...config, baseUrl: "https://embeddings.example/v1" };
+    const post = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+
+    await upsertCompleteEmbedding({
+      postId: post.id,
+      config: customConfig,
+      embedding: embedding(1, 0),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+
+    await prisma.settings.createMany({
+      data: [
+        { key: "openrouter.baseUrl", value: customConfig.baseUrl },
+        { key: "openrouter.embedding.model", value: customConfig.model },
+        { key: "openrouter.embedding.dimensions", value: String(customConfig.dimensions) },
+        { key: "openrouter.embedding.imageMaxResolution", value: String(customConfig.imageMaxResolution) },
+      ],
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: vi.fn().mockResolvedValue({
+        object: "list",
+        model: customConfig.model,
+        data: [
+          {
+            object: "embedding",
+            embedding: embedding(1, 0),
+            index: 0,
+          },
+        ],
+      }),
+      text: vi.fn(),
+    } as unknown as Response);
+
+    const result = await searchSemanticPosts("blue sky", 1);
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+
+    expect(result.posts.map((item) => item.id)).toEqual([post.id]);
+    expect(url).toBe("https://embeddings.example/v1/embeddings");
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
   });
 });

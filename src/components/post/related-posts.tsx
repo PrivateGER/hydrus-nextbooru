@@ -1,6 +1,6 @@
 import { SparklesIcon } from "@heroicons/react/24/outline";
 import { getOrComputeRecommendationsByHash } from "@/lib/recommendations";
-import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
+import { getEmbeddingOpenRouterSettings, toEmbeddingConfig } from "@/lib/embeddings/settings";
 import {
   DEFAULT_EMBEDDING_MIN_SCORE,
   findRelatedPostsByEmbedding,
@@ -20,11 +20,7 @@ async function getSemanticRelatedPosts(hash: string, limit: number): Promise<Emb
       hash,
       limit,
       minScore: DEFAULT_EMBEDDING_MIN_SCORE,
-      config: {
-        model: settings.model,
-        dimensions: settings.dimensions,
-        imageMaxResolution: settings.imageMaxResolution,
-      },
+      config: toEmbeddingConfig(settings),
     });
   } catch (error) {
     console.error("Failed to load semantically related posts:", error);

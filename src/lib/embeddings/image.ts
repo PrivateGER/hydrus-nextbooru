@@ -28,7 +28,6 @@ export async function preprocessImageBufferForEmbedding(
 ): Promise<ProcessedEmbeddingImage> {
   return preprocessSharpImage(sharp(buffer, {
     limitInputPixels: 268402689,
-    sequentialRead: true,
   }), imageMaxResolution);
 }
 

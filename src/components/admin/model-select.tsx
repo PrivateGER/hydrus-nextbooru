@@ -5,13 +5,14 @@ import { BanknotesIcon, ChevronDownIcon, EyeIcon } from "@heroicons/react/24/out
 import type { ModelDefinition } from "@/lib/openrouter/types";
 
 export interface ModelSelectProps {
+  id?: string;
   value: string;
   onChange: (value: string) => void;
   models: ModelDefinition[];
   allowCustom?: boolean;
 }
 
-export function ModelSelect({ value, onChange, models, allowCustom = false }: ModelSelectProps) {
+export function ModelSelect({ id, value, onChange, models, allowCustom = false }: ModelSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +57,7 @@ export function ModelSelect({ value, onChange, models, allowCustom = false }: Mo
   return (
     <div ref={containerRef} className="relative">
       <button
+        id={id}
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         onKeyDown={handleKeyDown}

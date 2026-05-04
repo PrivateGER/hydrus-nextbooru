@@ -111,7 +111,7 @@ model Post {
   recommendations PostRecommendation[] @relation("PostRecommendations")
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
   phashEntry      PhashEntry?
-  embeddings       PostEmbedding[]
+  embeddings      PostEmbedding[]
 
   @@index([rating])
   @@index([importedAt])
@@ -255,7 +255,7 @@ model Thumbnail {
 
 model PhashEntry {
   hash  String @id @db.Char(64) // Same as Post.hash
-  phash BigInt                   // 64-bit DCT perceptual hash
+  phash BigInt // 64-bit DCT perceptual hash
 
   computedAt DateTime @default(now())
 
@@ -267,9 +267,10 @@ model PhashEntry {
 // ============================================
 
 model PostEmbedding {
-  id                 Int             @id @default(autoincrement())
+  id                 Int                    @id @default(autoincrement())
   postId             Int
-  post               Post            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post               Post                   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  baseUrl            String
   model              String
   dimensions         Int
   imageMaxResolution Int
@@ -278,30 +279,47 @@ model PostEmbedding {
   processedWidth     Int?
   processedHeight    Int?
   embedding          Unsupported("vector")?
-  status             EmbeddingStatus @default(COMPLETE)
+  status             EmbeddingStatus        @default(COMPLETE)
   errorMessage       String?
   computedAt         DateTime?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
-  @@unique([postId, model, dimensions, imageMaxResolution])
+  @@unique([postId, baseUrl, model, dimensions, imageMaxResolution], map: "PostEmbedding_config_key")
   @@index([postId])
-  @@index([model, dimensions, imageMaxResolution, status])
+  @@index([baseUrl, model, dimensions, imageMaxResolution, status], map: "PostEmbedding_config_status_idx")
 }
 
 model SemanticQueryEmbedding {
-  queryHash String @db.Char(64)
-  query     String
-  model     String
+  queryHash  String                @db.Char(64)
+  query      String
+  baseUrl    String
+  model      String
   dimensions Int
-  embedding Unsupported("vector")
+  embedding  Unsupported("vector")
 
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   lastUsedAt DateTime @default(now())
 
-  @@id([queryHash, model, dimensions])
-  @@index([model, dimensions, lastUsedAt])
+  @@id([queryHash, baseUrl, model, dimensions])
+  @@index([baseUrl, model, dimensions, lastUsedAt], map: "SemanticQueryEmbedding_config_lastUsedAt_idx")
+}
+
+model EmbeddingBatchState {
+  key           String    @id
+  status        String    @default("idle")
+  processed     Int       @default(0)
+  total         Int       @default(0)
+  errorMessage  String?
+  lastProcessed Int?
+  lastSucceeded Int?
+  lastFailed    Int?
+  claimedAt     DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }
 
 // ============================================

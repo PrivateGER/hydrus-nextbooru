@@ -95,9 +95,14 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   const semanticQuery = params.semantic?.trim() || "";
   const semanticMinScore = params.minScore === undefined ? undefined : Number.parseFloat(params.minScore);
   const page = Math.max(1, parseInt(params.page || "1", 10));
-  const isSemanticSearch = semanticQuery.length >= 2;
-  const isNotesSearch = notesQuery.length >= 2;
-  const shouldRunSemanticSearch = !isReverseMode && isSemanticSearch;
+  const requestedSearchMode = semanticQuery.length >= 2
+    ? "semantic"
+    : notesQuery.length >= 2
+      ? "notes"
+      : "tags";
+  const isSemanticSearch = !isReverseMode && requestedSearchMode === "semantic";
+  const isNotesSearch = !isReverseMode && requestedSearchMode === "notes";
+  const shouldRunSemanticSearch = isSemanticSearch;
   const semanticRateLimit = shouldRunSemanticSearch
     ? await checkSemanticSearchPageRateLimit()
     : null;

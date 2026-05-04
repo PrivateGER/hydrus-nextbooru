@@ -91,7 +91,8 @@ export interface PhashStats {
 export interface EmbeddingSettings {
   apiKey: string | null;
   apiKeyConfigured: boolean;
-  baseUrl: string | null;
+  apiKeyRequired: boolean;
+  baseUrl: string;
   model: string;
   dimensions: number;
   imageMaxResolution: number;

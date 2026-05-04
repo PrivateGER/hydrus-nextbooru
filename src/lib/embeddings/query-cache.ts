@@ -23,7 +23,7 @@ export function hashSemanticQuery(query: string): string {
 
 export async function getCachedSemanticQueryEmbedding(
   query: string,
-  config: Pick<EmbeddingConfig, "model" | "dimensions">
+  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions">
 ): Promise<CachedSemanticQueryEmbedding | null> {
   const normalizedQuery = normalizeSemanticQuery(query);
   const queryHash = hashSemanticQuery(normalizedQuery);
@@ -32,6 +32,7 @@ export async function getCachedSemanticQueryEmbedding(
     UPDATE "SemanticQueryEmbedding"
     SET "lastUsedAt" = NOW(), "updatedAt" = NOW()
     WHERE "queryHash" = ${queryHash}
+      AND "baseUrl" = ${config.baseUrl}
       AND model = ${config.model}
       AND dimensions = ${config.dimensions}
     RETURNING query, embedding::text AS embedding
@@ -49,7 +50,7 @@ export async function getCachedSemanticQueryEmbedding(
 
 export async function upsertSemanticQueryEmbedding(options: {
   query: string;
-  config: Pick<EmbeddingConfig, "model" | "dimensions">;
+  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions">;
   embedding: number[];
 }): Promise<CachedSemanticQueryEmbedding> {
   const normalizedQuery = normalizeSemanticQuery(options.query);
@@ -59,13 +60,13 @@ export async function upsertSemanticQueryEmbedding(options: {
 
   await prisma.$executeRaw`
     INSERT INTO "SemanticQueryEmbedding" (
-      "queryHash", query, model, dimensions, embedding, "lastUsedAt", "updatedAt"
+      "queryHash", query, "baseUrl", model, dimensions, embedding, "lastUsedAt", "updatedAt"
     )
     VALUES (
-      ${queryHash}, ${normalizedQuery}, ${options.config.model}, ${options.config.dimensions},
+      ${queryHash}, ${normalizedQuery}, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions},
       ${vector}::vector, NOW(), NOW()
     )
-    ON CONFLICT ("queryHash", model, dimensions)
+    ON CONFLICT ("queryHash", "baseUrl", model, dimensions)
     DO UPDATE SET
       query = EXCLUDED.query,
       embedding = EXCLUDED.embedding,

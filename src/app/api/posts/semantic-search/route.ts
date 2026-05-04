@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  MAX_PAGE,
   searchSemanticPosts,
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
 } from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
-
-const MAX_PAGE = 10000;
 
 /**
  * Search posts by natural-language text using multimodal image embeddings.

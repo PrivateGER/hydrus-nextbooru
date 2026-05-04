@@ -19,7 +19,11 @@ import {
 import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
-import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
+import {
+  getEmbeddingOpenRouterSettings,
+  isEmbeddingProviderConfigured,
+  toEmbeddingConfig,
+} from "@/lib/embeddings/settings";
 import { searchPostsByEmbedding } from "@/lib/embeddings/store";
 import {
   getCachedSemanticQueryEmbedding,
@@ -33,7 +37,7 @@ const DEFAULT_LIMIT = 48;
 /** Maximum allowed results per page */
 const MAX_LIMIT = 100;
 /** Maximum page number to prevent expensive offset queries */
-const MAX_PAGE = 10000;
+export const MAX_PAGE = 10000;
 /** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
 const SEMANTIC_RESULT_CAP = 96;
 export const SEMANTIC_SEARCH_RATE_LIMIT_CONFIG = {
@@ -600,15 +604,17 @@ export async function searchSemanticPosts(
 
   try {
     const settings = await getEmbeddingOpenRouterSettings();
+    const embeddingConfig = toEmbeddingConfig(settings);
     const queryConfig = {
-      model: settings.model,
-      dimensions: settings.dimensions,
+      baseUrl: embeddingConfig.baseUrl,
+      model: embeddingConfig.model,
+      dimensions: embeddingConfig.dimensions,
     };
     const cachedEmbedding = await getCachedSemanticQueryEmbedding(normalizedQuery, queryConfig);
     let queryEmbedding = cachedEmbedding?.embedding ?? null;
 
     if (!queryEmbedding) {
-      if (!settings.apiKey) {
+      if (!isEmbeddingProviderConfigured(settings)) {
         return {
           posts: [],
           totalCount: 0,
@@ -619,9 +625,9 @@ export async function searchSemanticPosts(
       }
 
       const client = new OpenRouterClient({
-        apiKey: settings.apiKey,
+        apiKey: settings.apiKey ?? "",
         model: settings.model,
-        baseUrl: settings.baseUrl || undefined,
+        baseUrl: embeddingConfig.baseUrl,
       });
 
       const embedding = await client.createEmbedding({
@@ -640,11 +646,7 @@ export async function searchSemanticPosts(
     }
 
     const result = await searchPostsByEmbedding({
-      config: {
-        model: settings.model,
-        dimensions: settings.dimensions,
-        imageMaxResolution: settings.imageMaxResolution,
-      },
+      config: embeddingConfig,
       embedding: queryEmbedding,
       skip,
       limit,

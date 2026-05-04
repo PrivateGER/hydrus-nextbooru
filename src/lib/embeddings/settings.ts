@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL } from "@/lib/openrouter/base-url";
+import { DEFAULT_BASE_URL, isCustomEndpointUrl, normalizeBaseUrl } from "@/lib/openrouter/base-url";
 import { prisma } from "@/lib/db";
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
@@ -11,17 +11,21 @@ import {
 } from "@/lib/openrouter/types";
 import { maskApiKey, updateSettings } from "@/lib/openrouter/settings";
 
+const MAX_EMBEDDING_BASE_URL_LENGTH = 2048;
+
 export interface EmbeddingSettings {
   apiKey: string | null;
   apiKeyConfigured: boolean;
+  apiKeyRequired: boolean;
   maskedApiKey: string | null;
-  baseUrl: string | null;
+  baseUrl: string;
   model: string;
   dimensions: number;
   imageMaxResolution: number;
 }
 
 export interface EmbeddingConfig {
+  baseUrl: string;
   model: string;
   dimensions: number;
   imageMaxResolution: number;
@@ -33,6 +37,28 @@ export function isSupportedEmbeddingDimensions(value: number): value is typeof E
 
 export function isSupportedEmbeddingResolution(value: number): value is typeof EMBEDDING_RESOLUTION_OPTIONS[number] {
   return (EMBEDDING_RESOLUTION_OPTIONS as readonly number[]).includes(value);
+}
+
+export function normalizeEmbeddingBaseUrl(baseUrl: string | null | undefined): string {
+  const trimmed = baseUrl?.trim();
+  return normalizeBaseUrl(trimmed ? trimmed : DEFAULT_BASE_URL);
+}
+
+export function isEmbeddingApiKeyRequired(baseUrl: string | null | undefined): boolean {
+  return !isCustomEndpointUrl(normalizeEmbeddingBaseUrl(baseUrl));
+}
+
+export function isEmbeddingProviderConfigured(settings: Pick<EmbeddingSettings, "apiKey" | "baseUrl">): boolean {
+  return Boolean(settings.apiKey) || !isEmbeddingApiKeyRequired(settings.baseUrl);
+}
+
+export function toEmbeddingConfig(settings: Pick<EmbeddingSettings, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">): EmbeddingConfig {
+  return {
+    baseUrl: normalizeEmbeddingBaseUrl(settings.baseUrl),
+    model: settings.model,
+    dimensions: settings.dimensions,
+    imageMaxResolution: settings.imageMaxResolution,
+  };
 }
 
 function parseIntegerSetting(value: string | null, fallback: number): number {
@@ -59,6 +85,7 @@ export async function getEmbeddingSettings(): Promise<EmbeddingSettings> {
   const settings = new Map(rows.map((row) => [row.key, row.value]));
 
   const apiKey = settings.get(SETTINGS_KEYS.API_KEY) || null;
+  const baseUrl = normalizeEmbeddingBaseUrl(settings.get(SETTINGS_KEYS.BASE_URL) || DEFAULT_BASE_URL);
   const dimensions = parseIntegerSetting(settings.get(SETTINGS_KEYS.EMBEDDING_DIMENSIONS) || null, DEFAULT_EMBEDDING_DIMENSIONS);
   const imageMaxResolution = parseIntegerSetting(
     settings.get(SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION) || null,
@@ -75,8 +102,9 @@ export async function getEmbeddingSettings(): Promise<EmbeddingSettings> {
   return {
     apiKey,
     apiKeyConfigured: Boolean(apiKey),
+    apiKeyRequired: isEmbeddingApiKeyRequired(baseUrl),
     maskedApiKey: apiKey ? maskApiKey(apiKey) : null,
-    baseUrl: settings.get(SETTINGS_KEYS.BASE_URL) || DEFAULT_BASE_URL,
+    baseUrl,
     model: settings.get(SETTINGS_KEYS.EMBEDDING_MODEL) || DEFAULT_EMBEDDING_MODEL,
     dimensions: safeDimensions,
     imageMaxResolution: safeResolution,
@@ -106,14 +134,15 @@ export async function updateEmbeddingSettings(input: {
   const settings: Partial<Record<string, string>> = {};
 
   if (input.apiKey !== undefined) {
-    const trimmed = input.apiKey.trim();
-    if (trimmed) {
-      settings[SETTINGS_KEYS.API_KEY] = trimmed;
-    }
+    settings[SETTINGS_KEYS.API_KEY] = input.apiKey.trim();
   }
 
   if (input.baseUrl !== undefined) {
-    settings[SETTINGS_KEYS.BASE_URL] = input.baseUrl.trim();
+    const baseUrl = normalizeEmbeddingBaseUrl(input.baseUrl);
+    if (baseUrl.length > MAX_EMBEDDING_BASE_URL_LENGTH) {
+      throw new Error(`Embedding base URL must be ${MAX_EMBEDDING_BASE_URL_LENGTH} characters or fewer`);
+    }
+    settings[SETTINGS_KEYS.BASE_URL] = baseUrl;
   }
 
   if (input.model !== undefined) {

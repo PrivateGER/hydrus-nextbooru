@@ -59,6 +59,7 @@ export function EmbeddingsSection({
   const settings = status?.settings;
   const extensionsReady = Boolean(stats?.extensions.vector && stats?.extensions.vchord);
   const allEmbedded = stats && stats.pending === 0 && stats.failed === 0;
+  const missingRequiredApiKey = Boolean(settings?.apiKeyRequired && !settings.apiKeyConfigured);
 
   return (
     <div className="space-y-5">
@@ -70,8 +71,9 @@ export function EmbeddingsSection({
 
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">OpenRouter Base URL</label>
+            <label htmlFor="embedding-base-url-input" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">OpenRouter Base URL</label>
             <Input
+              id="embedding-base-url-input"
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
               placeholder="https://openrouter.ai/api/v1"
@@ -79,8 +81,9 @@ export function EmbeddingsSection({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key</label>
+            <label htmlFor="embedding-api-key-input" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">API Key</label>
             <Input
+              id="embedding-api-key-input"
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
@@ -90,8 +93,9 @@ export function EmbeddingsSection({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Embedding Model</label>
+            <label htmlFor="embedding-model-select" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Embedding Model</label>
             <ModelSelect
+              id="embedding-model-select"
               value={model}
               onChange={setModel}
               models={POPULAR_EMBEDDING_MODELS}
@@ -99,7 +103,9 @@ export function EmbeddingsSection({
             />
             {model === "custom" && (
               <div className="mt-2">
+                <label htmlFor="embedding-custom-model-input" className="sr-only">Custom Model ID</label>
                 <Input
+                  id="embedding-custom-model-input"
                   value={customModel}
                   onChange={(event) => setCustomModel(event.target.value)}
                   placeholder="provider/model-name"
@@ -110,16 +116,16 @@ export function EmbeddingsSection({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Dimensions</label>
-              <Select value={String(dimensions)} onChange={(event) => setDimensions(Number(event.target.value))}>
+              <label htmlFor="embedding-dimensions-select" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Dimensions</label>
+              <Select id="embedding-dimensions-select" value={String(dimensions)} onChange={(event) => setDimensions(Number(event.target.value))}>
                 {EMBEDDING_DIMENSION_OPTIONS.map((option) => (
                   <option key={option} value={option}>{option}</option>
                 ))}
               </Select>
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Image Resolution</label>
-              <Select value={String(imageMaxResolution)} onChange={(event) => setImageMaxResolution(Number(event.target.value))}>
+              <label htmlFor="embedding-image-resolution-select" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Image Resolution</label>
+              <Select id="embedding-image-resolution-select" value={String(imageMaxResolution)} onChange={(event) => setImageMaxResolution(Number(event.target.value))}>
                 {EMBEDDING_RESOLUTION_OPTIONS.map((option) => (
                   <option key={option} value={option}>{option}px longest side</option>
                 ))}
@@ -127,7 +133,7 @@ export function EmbeddingsSection({
             </div>
           </div>
 
-          <Button onClick={saveSettings} loading={isSaving}>
+          <Button onClick={saveSettings} loading={isSaving} disabled={isSaving || status?.batchRunning}>
             <CheckCircleIconSolid className="h-4 w-4" />
             Save
           </Button>
@@ -158,6 +164,7 @@ export function EmbeddingsSection({
           <div className="mt-4 rounded-lg bg-zinc-100 p-3 text-xs text-zinc-500 dark:bg-zinc-800/70 dark:text-zinc-400">
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               <span>Model: {settings?.model}</span>
+              <span>Backend: {settings?.baseUrl}</span>
               <span>Dimensions: {settings?.dimensions}</span>
               <span>Resolution: {settings?.imageMaxResolution}px</span>
               <span>vector: {stats.extensions.vector || "missing"}</span>
@@ -188,7 +195,7 @@ export function EmbeddingsSection({
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={computeMissing}
-            disabled={isComputing || status?.batchRunning || !extensionsReady || !settings?.apiKeyConfigured || (stats?.pending ?? 0) === 0}
+            disabled={isComputing || status?.batchRunning || !extensionsReady || missingRequiredApiKey || (stats?.pending ?? 0) === 0}
             loading={isComputing || status?.batchRunning}
             className="bg-purple-600 hover:bg-purple-500"
           >
@@ -198,7 +205,7 @@ export function EmbeddingsSection({
 
           <Button
             onClick={retryFailed}
-            disabled={isComputing || status?.batchRunning || !extensionsReady || !settings?.apiKeyConfigured || (stats?.failed ?? 0) === 0}
+            disabled={isComputing || status?.batchRunning || !extensionsReady || missingRequiredApiKey || (stats?.failed ?? 0) === 0}
             variant="secondary"
           >
             <CircleStackIcon className="h-4 w-4" />
@@ -206,7 +213,7 @@ export function EmbeddingsSection({
           </Button>
         </div>
 
-        {!settings?.apiKeyConfigured && (
+        {missingRequiredApiKey && (
           <InfoBox variant="tip" className="mt-3">
             Save an OpenRouter API key before generating embeddings.
           </InfoBox>
@@ -217,7 +224,7 @@ export function EmbeddingsSection({
         <Card className="border-red-500/20">
           <h3 className="mb-2 font-medium text-red-500 dark:text-red-400">Danger Zone</h3>
           <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
-            Clear embeddings for the current model, dimension, and resolution.
+            Clear embeddings for the current backend, model, dimension, and resolution.
           </p>
           <div className="flex flex-wrap gap-2">
             {(stats?.failed ?? 0) > 0 && (
@@ -231,7 +238,7 @@ export function EmbeddingsSection({
                     onConfirm: clearFailed,
                   })
                 }
-                disabled={isComputing}
+                disabled={isComputing || status?.batchRunning}
                 variant="danger"
               >
                 <TrashIcon className="h-4 w-4" />
@@ -249,7 +256,7 @@ export function EmbeddingsSection({
                     onConfirm: clearCurrent,
                   })
                 }
-                disabled={isComputing}
+                disabled={isComputing || status?.batchRunning}
                 variant="danger"
               >
                 <TrashIcon className="h-4 w-4" />

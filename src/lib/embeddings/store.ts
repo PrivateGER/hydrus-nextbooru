@@ -52,7 +52,24 @@ export interface EmbeddedRelatedPost {
   score: number;
 }
 
+export type EmbeddingBatchStatus = "idle" | "running" | "completed" | "failed";
+
+export interface EmbeddingBatchResult {
+  processed: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface EmbeddingBatchState {
+  batchRunning: boolean;
+  batchProgress: { processed: number; total: number } | null;
+  batchStatus: EmbeddingBatchStatus;
+  batchError: string | null;
+  lastBatchResult: EmbeddingBatchResult | null;
+}
+
 export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
+const EMBEDDING_BATCH_STATE_KEY = "image_embeddings";
 
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
@@ -60,6 +77,43 @@ function normalizeEmbeddingMinScore(minScore: number | undefined): number | null
   }
 
   return Math.min(1, Math.max(-1, minScore));
+}
+
+interface EmbeddingBatchStateRow {
+  status: string;
+  processed: number;
+  total: number;
+  errorMessage: string | null;
+  lastProcessed: number | null;
+  lastSucceeded: number | null;
+  lastFailed: number | null;
+}
+
+function normalizeBatchStatus(status: string | null | undefined): EmbeddingBatchStatus {
+  return status === "running" || status === "completed" || status === "failed"
+    ? status
+    : "idle";
+}
+
+function mapEmbeddingBatchState(row: EmbeddingBatchStateRow | null | undefined): EmbeddingBatchState {
+  const batchStatus = normalizeBatchStatus(row?.status);
+  const lastBatchResult = row?.lastProcessed === null || row?.lastProcessed === undefined
+    ? null
+    : {
+        processed: row.lastProcessed,
+        succeeded: row.lastSucceeded ?? 0,
+        failed: row.lastFailed ?? 0,
+      };
+
+  return {
+    batchRunning: batchStatus === "running",
+    batchProgress: batchStatus === "running"
+      ? { processed: row?.processed ?? 0, total: row?.total ?? 0 }
+      : null,
+    batchStatus,
+    batchError: row?.errorMessage ?? null,
+    lastBatchResult,
+  };
 }
 
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
@@ -103,10 +157,119 @@ export async function assertVectorExtensionsAvailable(): Promise<void> {
   }
 }
 
+export async function getEmbeddingBatchState(): Promise<EmbeddingBatchState> {
+  const rows = await prisma.$queryRaw<EmbeddingBatchStateRow[]>`
+    SELECT
+      status,
+      processed,
+      total,
+      "errorMessage",
+      "lastProcessed",
+      "lastSucceeded",
+      "lastFailed"
+    FROM "EmbeddingBatchState"
+    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
+  `;
+
+  return mapEmbeddingBatchState(rows[0]);
+}
+
+export async function claimEmbeddingBatchIfIdle(): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ key: string }[]>`
+    INSERT INTO "EmbeddingBatchState" (
+      key,
+      status,
+      processed,
+      total,
+      "errorMessage",
+      "lastProcessed",
+      "lastSucceeded",
+      "lastFailed",
+      "claimedAt",
+      "startedAt",
+      "completedAt",
+      "updatedAt"
+    )
+    VALUES (
+      ${EMBEDDING_BATCH_STATE_KEY},
+      'running',
+      0,
+      0,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NOW(),
+      NOW(),
+      NULL,
+      NOW()
+    )
+    ON CONFLICT (key)
+    DO UPDATE SET
+      status = 'running',
+      processed = 0,
+      total = 0,
+      "errorMessage" = NULL,
+      "lastProcessed" = NULL,
+      "lastSucceeded" = NULL,
+      "lastFailed" = NULL,
+      "claimedAt" = NOW(),
+      "startedAt" = NOW(),
+      "completedAt" = NULL,
+      "updatedAt" = NOW()
+    WHERE "EmbeddingBatchState".status <> 'running'
+    RETURNING key
+  `;
+
+  return rows.length > 0;
+}
+
+export async function updateEmbeddingBatchProgress(processed: number, total: number): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "EmbeddingBatchState"
+    SET
+      processed = ${Math.max(0, Math.floor(processed))},
+      total = ${Math.max(0, Math.floor(total))},
+      "updatedAt" = NOW()
+    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
+      AND status = 'running'
+  `;
+}
+
+export async function completeEmbeddingBatch(result: EmbeddingBatchResult): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "EmbeddingBatchState"
+    SET
+      status = 'completed',
+      processed = ${result.processed},
+      total = ${result.processed},
+      "errorMessage" = NULL,
+      "lastProcessed" = ${result.processed},
+      "lastSucceeded" = ${result.succeeded},
+      "lastFailed" = ${result.failed},
+      "completedAt" = NOW(),
+      "updatedAt" = NOW()
+    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
+  `;
+}
+
+export async function failEmbeddingBatch(errorMessage: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "EmbeddingBatchState"
+    SET
+      status = 'failed',
+      "errorMessage" = ${errorMessage.slice(0, 1000)},
+      "completedAt" = NOW(),
+      "updatedAt" = NOW()
+    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
+  `;
+}
+
 export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
   const result = await prisma.$executeRaw`
     DELETE FROM "PostEmbedding"
-    WHERE model = ${config.model}
+    WHERE "baseUrl" = ${config.baseUrl}
+      AND model = ${config.model}
       AND dimensions = ${config.dimensions}
       AND "imageMaxResolution" = ${config.imageMaxResolution}
   `;
@@ -117,7 +280,8 @@ export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise
 export async function deleteFailedEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
   const result = await prisma.$executeRaw`
     DELETE FROM "PostEmbedding"
-    WHERE model = ${config.model}
+    WHERE "baseUrl" = ${config.baseUrl}
+      AND model = ${config.model}
       AND dimensions = ${config.dimensions}
       AND "imageMaxResolution" = ${config.imageMaxResolution}
       AND status = 'FAILED'::"EmbeddingStatus"
@@ -135,6 +299,7 @@ export async function countPendingEmbeddings(
     FROM "Post" p
     LEFT JOIN "PostEmbedding" pe
       ON pe."postId" = p.id
+      AND pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
@@ -161,6 +326,7 @@ export async function findEmbeddingPostsToProcess(options: {
     FROM "Post" p
     LEFT JOIN "PostEmbedding" pe
       ON pe."postId" = p.id
+      AND pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
@@ -190,16 +356,16 @@ export async function upsertCompleteEmbedding(options: {
 
   await prisma.$executeRaw`
     INSERT INTO "PostEmbedding" (
-      "postId", model, dimensions, "imageMaxResolution",
+      "postId", "baseUrl", model, dimensions, "imageMaxResolution",
       "sourceWidth", "sourceHeight", "processedWidth", "processedHeight",
       embedding, status, "errorMessage", "computedAt", "updatedAt"
     )
     VALUES (
-      ${postId}, ${config.model}, ${config.dimensions}, ${config.imageMaxResolution},
+      ${postId}, ${config.baseUrl}, ${config.model}, ${config.dimensions}, ${config.imageMaxResolution},
       ${sourceWidth}, ${sourceHeight}, ${processedWidth}, ${processedHeight},
       ${vector}::vector, 'COMPLETE'::"EmbeddingStatus", NULL, NOW(), NOW()
     )
-    ON CONFLICT ("postId", model, dimensions, "imageMaxResolution")
+    ON CONFLICT ("postId", "baseUrl", model, dimensions, "imageMaxResolution")
     DO UPDATE SET
       "sourceWidth" = EXCLUDED."sourceWidth",
       "sourceHeight" = EXCLUDED."sourceHeight",
@@ -226,16 +392,16 @@ export async function upsertFailedEmbedding(options: {
 
   await prisma.$executeRaw`
     INSERT INTO "PostEmbedding" (
-      "postId", model, dimensions, "imageMaxResolution",
+      "postId", "baseUrl", model, dimensions, "imageMaxResolution",
       "sourceWidth", "sourceHeight", "processedWidth", "processedHeight",
       embedding, status, "errorMessage", "computedAt", "updatedAt"
     )
     VALUES (
-      ${options.postId}, ${options.config.model}, ${options.config.dimensions}, ${options.config.imageMaxResolution},
+      ${options.postId}, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions}, ${options.config.imageMaxResolution},
       ${options.sourceWidth ?? null}, ${options.sourceHeight ?? null}, ${options.processedWidth ?? null}, ${options.processedHeight ?? null},
       NULL, 'FAILED'::"EmbeddingStatus", ${message}, NOW(), NOW()
     )
-    ON CONFLICT ("postId", model, dimensions, "imageMaxResolution")
+    ON CONFLICT ("postId", "baseUrl", model, dimensions, "imageMaxResolution")
     DO UPDATE SET
       "sourceWidth" = EXCLUDED."sourceWidth",
       "sourceHeight" = EXCLUDED."sourceHeight",
@@ -294,7 +460,8 @@ export async function searchPostsByEmbedding(options: {
         (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
       FROM "PostEmbedding" pe
       JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe.model = ${config.model}
+      WHERE pe."baseUrl" = ${config.baseUrl}
+        AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
@@ -327,7 +494,8 @@ export async function searchPostsByEmbedding(options: {
         (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
       FROM "PostEmbedding" pe
       JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe.model = ${config.model}
+      WHERE pe."baseUrl" = ${config.baseUrl}
+        AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
@@ -341,7 +509,8 @@ export async function searchPostsByEmbedding(options: {
       SELECT COUNT(*) AS count
       FROM "PostEmbedding" pe
       JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe.model = ${config.model}
+      WHERE pe."baseUrl" = ${config.baseUrl}
+        AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
@@ -396,6 +565,7 @@ export async function findRelatedPostsByEmbedding(options: {
       FROM "Post" p
       JOIN "PostEmbedding" pe ON pe."postId" = p.id
       WHERE p.hash = ${hash}
+        AND pe."baseUrl" = ${config.baseUrl}
         AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
@@ -413,7 +583,8 @@ export async function findRelatedPostsByEmbedding(options: {
       (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
     FROM source
     JOIN "PostEmbedding" pe
-      ON pe.model = ${config.model}
+      ON pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
       AND pe.status = 'COMPLETE'::"EmbeddingStatus"
@@ -448,7 +619,8 @@ async function countEmbeddingsByStatus(
     SELECT COUNT(*) AS count
     FROM "PostEmbedding" pe
     JOIN "Post" p ON p.id = pe."postId"
-    WHERE pe.model = ${config.model}
+    WHERE pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
       AND pe.status = ${status}::"EmbeddingStatus"
