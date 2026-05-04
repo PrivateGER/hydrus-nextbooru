@@ -25,7 +25,9 @@ import {
   type EmbeddingStats,
 } from "@/lib/embeddings/store";
 
-const DEFAULT_BATCH_SIZE = 8;
+export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
+export const MAX_EMBEDDING_BATCH_SIZE = 32;
+const PREPROCESS_CONCURRENCY = 2;
 const FALLBACK_CONCURRENCY = 2;
 
 export interface BatchEmbeddingOptions {
@@ -45,7 +47,7 @@ export async function batchComputeImageEmbeddings(
   options: BatchEmbeddingOptions = {}
 ): Promise<BatchEmbeddingResult> {
   const {
-    batchSize = DEFAULT_BATCH_SIZE,
+    batchSize = DEFAULT_EMBEDDING_BATCH_SIZE,
     limit,
     retryFailed = false,
     onProgress,
@@ -53,6 +55,9 @@ export async function batchComputeImageEmbeddings(
 
   if (!Number.isInteger(batchSize) || batchSize < 1) {
     throw new RangeError(`batchSize must be a positive integer, got ${batchSize}`);
+  }
+  if (batchSize > MAX_EMBEDDING_BATCH_SIZE) {
+    throw new RangeError(`batchSize must be ${MAX_EMBEDDING_BATCH_SIZE} or less, got ${batchSize}`);
   }
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
     throw new RangeError(`limit must be a non-negative integer, got ${limit}`);
@@ -123,21 +128,24 @@ async function computeEmbeddingPostBatch(options: {
   }> = [];
   const results = new Map<number, boolean>();
 
-  await Promise.all(posts.map(async (post) => {
-    try {
-      const filePath = buildFilePath(post.hash, post.extension);
-      const processedImage = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
-      prepared.push({ post, processedImage });
-    } catch (error) {
-      await recordFailedEmbedding({
-        post,
-        config,
-        processedImage: null,
-        error,
-      });
-      results.set(post.id, false);
-    }
-  }));
+  const preprocessLimit = pLimit(PREPROCESS_CONCURRENCY);
+  await Promise.all(posts.map((post) =>
+    preprocessLimit(async () => {
+      try {
+        const filePath = buildFilePath(post.hash, post.extension);
+        const processedImage = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
+        prepared.push({ post, processedImage });
+      } catch (error) {
+        await recordFailedEmbedding({
+          post,
+          config,
+          processedImage: null,
+          error,
+        });
+        results.set(post.id, false);
+      }
+    })
+  ));
 
   if (prepared.length > 0) {
     try {

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   batchComputeImageEmbeddings,
   clearEmbeddingsForConfig,
+  DEFAULT_EMBEDDING_BATCH_SIZE,
   deleteFailedEmbeddingsForConfig,
   getEmbeddingSettings,
   getEmbeddingStats,
+  MAX_EMBEDDING_BATCH_SIZE,
   toEmbeddingConfig,
   updateEmbeddingSettings,
 } from "@/lib/embeddings";
@@ -90,6 +92,9 @@ export async function POST(request: NextRequest) {
     if (batchSize !== undefined && (!Number.isFinite(batchSize) || !Number.isInteger(batchSize) || batchSize < 1)) {
       return NextResponse.json({ error: "batchSize must be a positive integer" }, { status: 400 });
     }
+    if (batchSize !== undefined && batchSize > MAX_EMBEDDING_BATCH_SIZE) {
+      return NextResponse.json({ error: `batchSize must be ${MAX_EMBEDDING_BATCH_SIZE} or less` }, { status: 400 });
+    }
     if (limit !== undefined && (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0)) {
       return NextResponse.json({ error: "limit must be a non-negative integer" }, { status: 400 });
     }
@@ -104,7 +109,7 @@ export async function POST(request: NextRequest) {
     batchError = null;
     lastBatchResult = null;
 
-    aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? 8, retryFailed }, "Starting image embedding batch");
+    aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE, retryFailed }, "Starting image embedding batch");
 
     batchComputeImageEmbeddings({
       limit,
@@ -131,7 +136,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       message: "Image embedding batch started",
       limit: limit ?? "unlimited",
-      batchSize: batchSize ?? 8,
+      batchSize: batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE,
       retryFailed,
     });
   } catch (error) {
