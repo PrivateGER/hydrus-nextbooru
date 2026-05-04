@@ -255,6 +255,7 @@ export async function searchPostsByEmbedding(options: {
   skip: number;
   limit: number;
   minScore?: number;
+  resultCap?: number;
 }): Promise<{ posts: SemanticPostResult[]; totalCount: number }> {
   const { config, skip, limit } = options;
   if (!isSupportedEmbeddingDimensions(config.dimensions)) {
@@ -267,6 +268,9 @@ export async function searchPostsByEmbedding(options: {
   const postHidingCondition = getPostHidingSqlCondition("p.id");
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
+  const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
+    ? null
+    : Math.min(Math.max(1, Math.floor(options.resultCap)), 1000);
 
   type ResultRow = {
     id: number;
@@ -277,6 +281,39 @@ export async function searchPostsByEmbedding(options: {
     mimeType: string;
     distance: number;
   };
+
+  if (resultCap !== null) {
+    const rows = await prisma.$queryRaw<ResultRow[]>`
+      SELECT
+        p.id,
+        p.hash,
+        p.width,
+        p.height,
+        p.blurhash,
+        p."mimeType",
+        (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
+      FROM "PostEmbedding" pe
+      JOIN "Post" p ON p.id = pe."postId"
+      WHERE pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+        AND ${postHidingCondition}
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
+      ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
+      LIMIT ${resultCap}
+    `;
+
+    return {
+      posts: rows.slice(skip, skip + limit).map((row) => ({
+        ...row,
+        distance: Number(row.distance),
+        score: 1 - Number(row.distance),
+      })),
+      totalCount: rows.length,
+    };
+  }
 
   const [rows, counts] = await Promise.all([
     prisma.$queryRaw<ResultRow[]>`

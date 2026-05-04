@@ -17,7 +17,7 @@ const RATE_LIMIT_CONFIG = {
  * - `q`: text query
  * - `page`: page number (default 1, max 10000)
  * - `limit`: results per page (default 48, max 100)
- * - `minScore`: minimum cosine similarity score (default 0.25)
+ * - `minScore`: optional minimum cosine similarity score
  */
 export async function GET(request: NextRequest) {
   const rateLimitResponse = checkApiRateLimit(request, RATE_LIMIT_CONFIG);

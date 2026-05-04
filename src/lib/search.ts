@@ -20,10 +20,7 @@ import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } fro
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { getEmbeddingOpenRouterSettings } from "@/lib/embeddings/settings";
-import {
-  DEFAULT_EMBEDDING_MIN_SCORE,
-  searchPostsByEmbedding,
-} from "@/lib/embeddings/store";
+import { searchPostsByEmbedding } from "@/lib/embeddings/store";
 import {
   getCachedSemanticQueryEmbedding,
   normalizeSemanticQuery,
@@ -36,6 +33,8 @@ const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 100;
 /** Maximum page number to prevent expensive offset queries */
 const MAX_PAGE = 10000;
+/** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
+const SEMANTIC_RESULT_CAP = 96;
 
 /**
  * Minimal post data returned in search results.
@@ -112,17 +111,16 @@ export interface SearchPostsOptions {
 export interface SearchSemanticPostsOptions {
   /** Results per page (default 48, max 100) */
   limit?: number;
-  /** Minimum cosine similarity score to include (default 0.25) */
+  /** Optional minimum cosine similarity score to include */
   minScore?: number;
 }
 
-function normalizeSemanticMinScore(minScore: number | undefined): number {
-  const score = minScore ?? DEFAULT_EMBEDDING_MIN_SCORE;
-  if (!Number.isFinite(score)) {
-    return DEFAULT_EMBEDDING_MIN_SCORE;
+function normalizeSemanticMinScore(minScore: number | undefined): number | undefined {
+  if (minScore === undefined || !Number.isFinite(minScore)) {
+    return undefined;
   }
 
-  return Math.min(1, Math.max(-1, score));
+  return Math.min(1, Math.max(-1, minScore));
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
@@ -645,6 +643,7 @@ export async function searchSemanticPosts(
       skip,
       limit,
       minScore,
+      resultCap: SEMANTIC_RESULT_CAP,
     });
 
     return {

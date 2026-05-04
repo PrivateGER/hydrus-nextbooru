@@ -115,6 +115,66 @@ describe("semantic image embedding search", () => {
     expect(result.posts.map((post) => post.id)).toEqual([closePost.id]);
   });
 
+  it("caps semantic search to the top 96 nearest results", async () => {
+    const prisma = getTestPrisma();
+    const postIds: number[] = [];
+
+    for (let index = 0; index < 100; index += 1) {
+      const post = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+      postIds.push(post.id);
+      await upsertCompleteEmbedding({
+        postId: post.id,
+        config,
+        embedding: embedding(1, index / 100),
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+    }
+
+    await prisma.settings.createMany({
+      data: [
+        { key: "openrouter.apiKey", value: "sk-or-v1-test" },
+        { key: "openrouter.embedding.model", value: config.model },
+        { key: "openrouter.embedding.dimensions", value: String(config.dimensions) },
+        { key: "openrouter.embedding.imageMaxResolution", value: String(config.imageMaxResolution) },
+      ],
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: vi.fn().mockResolvedValue({
+        object: "list",
+        model: config.model,
+        data: [
+          {
+            object: "embedding",
+            embedding: embedding(1, 0),
+            index: 0,
+          },
+        ],
+      }),
+      text: vi.fn(),
+    } as unknown as Response);
+
+    const firstPage = await searchSemanticPosts("blue sky", 1);
+    const secondPage = await searchSemanticPosts("blue sky", 2);
+    const thirdPage = await searchSemanticPosts("blue sky", 3);
+
+    expect(firstPage.totalCount).toBe(96);
+    expect(firstPage.totalPages).toBe(2);
+    expect(firstPage.posts).toHaveLength(48);
+    expect(firstPage.posts.map((post) => post.id)).toEqual(postIds.slice(0, 48));
+    expect(secondPage.posts).toHaveLength(48);
+    expect(secondPage.posts.map((post) => post.id)).toEqual(postIds.slice(48, 96));
+    expect(thirdPage.posts).toHaveLength(0);
+    expect(thirdPage.totalCount).toBe(96);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("finds related posts from the source post embedding", async () => {
     const prisma = getTestPrisma();
     const sourcePost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
@@ -300,16 +360,16 @@ describe("semantic image embedding search", () => {
     } as unknown as Response);
 
     const first = await searchSemanticPosts(" blue   sky ", 1);
-    expect(first.posts.map((result) => result.id)).toEqual([post.id]);
-    expect(first.totalCount).toBe(1);
+    expect(first.posts.map((result) => result.id)).toEqual([post.id, farPost.id]);
+    expect(first.totalCount).toBe(2);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(await prisma.semanticQueryEmbedding.count()).toBe(1);
 
     await prisma.settings.delete({ where: { key: "openrouter.apiKey" } });
 
     const second = await searchSemanticPosts("blue sky", 1);
-    expect(second.posts.map((result) => result.id)).toEqual([post.id]);
-    expect(second.totalCount).toBe(1);
+    expect(second.posts.map((result) => result.id)).toEqual([post.id, farPost.id]);
+    expect(second.totalCount).toBe(2);
     expect(second.error).toBeUndefined();
     expect(global.fetch).toHaveBeenCalledTimes(1);
 
