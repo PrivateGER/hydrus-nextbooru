@@ -16,7 +16,6 @@ import { isValidCreatorName } from "@/lib/groups";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
-import { EmbeddingRelatedPosts, EmbeddingRelatedPostsSkeleton } from "@/components/post/embedding-related-posts";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 
 interface PostPageProps {
@@ -348,14 +347,9 @@ export default async function PostPage({ params }: PostPageProps) {
           );
         })}
 
-        {/* Similar posts based on tag similarity */}
+        {/* Related posts based on tags and embeddings */}
         <Suspense fallback={<RelatedPostsSkeleton />}>
           <RelatedPosts hash={post.hash} />
-        </Suspense>
-
-        {/* Related posts based on image embeddings */}
-        <Suspense fallback={<EmbeddingRelatedPostsSkeleton />}>
-          <EmbeddingRelatedPosts hash={post.hash} />
         </Suspense>
 
         {/* Navigation */}
