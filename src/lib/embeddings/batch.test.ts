@@ -204,4 +204,33 @@ describe("batchComputeImageEmbeddings", () => {
     expect(mocks.upsertCompleteEmbedding.mock.calls.map(([call]) => call.postId)).toEqual([1, 2, 3]);
     expect(mocks.createImageEmbedding).toHaveBeenCalledTimes(2);
   });
+
+  it("waits for in-flight batched writes before selecting fallback retries", async () => {
+    const posts = [post(1), post(2), post(3)];
+
+    mocks.countPendingEmbeddings.mockResolvedValue(posts.length);
+    mocks.findEmbeddingPostsToProcess.mockResolvedValue(posts);
+    mocks.preprocessImageForEmbedding.mockImplementation(async (filePath: string) => {
+      const id = Number(filePath.match(/hash-(\d+)/)?.[1] ?? 0);
+      return processedImage(id);
+    });
+    mocks.createImageEmbeddings.mockResolvedValue([
+      { embedding: [1, 0, 0], model: config.model },
+    ]);
+    mocks.upsertCompleteEmbedding.mockImplementation(async ({ postId }: { postId: number }) => {
+      if (postId === 1) {
+        await wait(20);
+      }
+    });
+    mocks.createImageEmbedding.mockResolvedValue({ embedding: [0, 1, 0], model: config.model });
+
+    const result = await batchComputeImageEmbeddings({ batchSize: posts.length });
+
+    expect(result).toEqual({ processed: posts.length, succeeded: posts.length, failed: 0 });
+    expect(mocks.createImageEmbedding).toHaveBeenCalledTimes(2);
+    expect(mocks.createImageEmbedding.mock.calls.map(([call]) => call.imageUrl)).toEqual([
+      "data:image/webp;base64,2",
+      "data:image/webp;base64,3",
+    ]);
+  });
 });

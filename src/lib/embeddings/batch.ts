@@ -155,7 +155,7 @@ async function computeEmbeddingPostBatch(options: {
         dimensions: config.dimensions,
       });
 
-      await Promise.all(prepared.map(async ({ post, processedImage }, index) => {
+      const persistenceResults = await Promise.allSettled(prepared.map(async ({ post, processedImage }, index) => {
         const result = embeddingResults[index];
         if (!result) {
           throw new Error("Embedding response did not include every requested input");
@@ -169,6 +169,12 @@ async function computeEmbeddingPostBatch(options: {
         });
         results.set(post.id, succeeded);
       }));
+      const rejectedPersistence = persistenceResults.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+      if (rejectedPersistence) {
+        throw rejectedPersistence.reason;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       aiLog.warn({ count: prepared.length, error: message }, "Failed to compute batched image embeddings; retrying individually");
