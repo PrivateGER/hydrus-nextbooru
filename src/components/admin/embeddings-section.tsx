@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   CheckCircleIcon,
   CircleStackIcon,
@@ -138,11 +139,19 @@ export function EmbeddingsSection({
         <Card>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h3 className="font-medium text-zinc-800 dark:text-zinc-200">Overview</h3>
-            {allEmbedded && (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircleIcon className="h-4 w-4" /> All embedded
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              {allEmbedded && (
+                <span className="flex items-center gap-1 text-xs text-emerald-400">
+                  <CheckCircleIcon className="h-4 w-4" /> All embedded
+                </span>
+              )}
+              <Link
+                href="/admin/embeddings/debug"
+                className="rounded-md bg-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600"
+              >
+                Debug View
+              </Link>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
