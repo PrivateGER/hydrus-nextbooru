@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { CircleStackIcon, SparklesIcon } from "@heroicons/react/24/outline";
 import { ThumbnailCard } from "../thumbnail-card";
@@ -14,21 +14,97 @@ interface RelatedPostsClientProps {
 }
 
 type RelatedPostsMode = "similar" | "semantic";
+const RELATED_POSTS_MODE_STORAGE_KEY = "nextbooru.relatedPostsMode";
+const RELATED_POSTS_MODE_CHANGED_EVENT = "nextbooru:relatedPostsModeChanged";
+let inMemoryRelatedPostsMode: RelatedPostsMode | null = null;
+
+function isRelatedPostsMode(value: string | null): value is RelatedPostsMode {
+  return value === "similar" || value === "semantic";
+}
+
+function getActiveMode(
+  preferredMode: RelatedPostsMode,
+  hasSimilarPosts: boolean,
+  hasSemanticPosts: boolean
+): RelatedPostsMode {
+  if (preferredMode === "similar" && hasSimilarPosts) return "similar";
+  if (preferredMode === "semantic" && hasSemanticPosts) return "semantic";
+  return hasSimilarPosts ? "similar" : "semantic";
+}
+
+function getStoredRelatedPostsMode(fallback: RelatedPostsMode): RelatedPostsMode {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  try {
+    const storedMode = window.localStorage.getItem(RELATED_POSTS_MODE_STORAGE_KEY);
+    if (isRelatedPostsMode(storedMode)) {
+      return storedMode;
+    }
+  } catch {
+    // Ignore storage access errors in restricted browsing contexts.
+  }
+
+  return inMemoryRelatedPostsMode ?? fallback;
+}
+
+function setStoredRelatedPostsMode(mode: RelatedPostsMode) {
+  inMemoryRelatedPostsMode = mode;
+
+  try {
+    window.localStorage.setItem(RELATED_POSTS_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Ignore storage access errors in restricted browsing contexts.
+  }
+
+  window.dispatchEvent(new Event(RELATED_POSTS_MODE_CHANGED_EVENT));
+}
+
+function subscribeRelatedPostsMode(onStoreChange: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const onLocalChange = () => onStoreChange();
+  const onStorageChange = (event: StorageEvent) => {
+    if (event.key === RELATED_POSTS_MODE_STORAGE_KEY) {
+      onStoreChange();
+    }
+  };
+
+  window.addEventListener(RELATED_POSTS_MODE_CHANGED_EVENT, onLocalChange);
+  window.addEventListener("storage", onStorageChange);
+
+  return () => {
+    window.removeEventListener(RELATED_POSTS_MODE_CHANGED_EVENT, onLocalChange);
+    window.removeEventListener("storage", onStorageChange);
+  };
+}
 
 /**
  * Client component that displays recommended posts with enhanced visuals.
  * Features: scroll indicators, larger thumbnails, header icon.
  */
 export function RelatedPostsClient({ recommendations, semanticPosts = [] }: RelatedPostsClientProps) {
-  const [mode, setMode] = useState<RelatedPostsMode>(recommendations.length > 0 ? "similar" : "semantic");
   const hasSimilarPosts = recommendations.length > 0;
   const hasSemanticPosts = semanticPosts.length > 0;
+  const fallbackMode = hasSimilarPosts ? "similar" : "semantic";
+  const getModeSnapshot = useCallback(
+    () => getStoredRelatedPostsMode(fallbackMode),
+    [fallbackMode]
+  );
+  const mode = useSyncExternalStore(
+    subscribeRelatedPostsMode,
+    getModeSnapshot,
+    () => fallbackMode
+  );
 
   if (!hasSimilarPosts && !hasSemanticPosts) {
     return null;
   }
 
-  const activeMode = mode === "similar" && hasSimilarPosts ? "similar" : "semantic";
+  const activeMode = getActiveMode(mode, hasSimilarPosts, hasSemanticPosts);
   const title = activeMode === "similar" ? "Similar Posts" : "Semantically Related";
   const Icon = activeMode === "similar" ? SparklesIcon : CircleStackIcon;
   const iconClassName = activeMode === "similar" ? "text-amber-400" : "text-purple-400";
@@ -41,6 +117,9 @@ export function RelatedPostsClient({ recommendations, semanticPosts = [] }: Rela
         post,
         title: `Cosine distance ${post.distance.toFixed(3)}`,
       }));
+  const selectMode = (nextMode: RelatedPostsMode) => {
+    setStoredRelatedPostsMode(nextMode);
+  };
 
   return (
     <div className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -60,7 +139,7 @@ export function RelatedPostsClient({ recommendations, semanticPosts = [] }: Rela
               type="button"
               role="tab"
               aria-selected={activeMode === "similar"}
-              onClick={() => setMode("similar")}
+              onClick={() => selectMode("similar")}
               className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                 activeMode === "similar"
                   ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
@@ -75,7 +154,7 @@ export function RelatedPostsClient({ recommendations, semanticPosts = [] }: Rela
               type="button"
               role="tab"
               aria-selected={activeMode === "semantic"}
-              onClick={() => setMode("semantic")}
+              onClick={() => selectMode("semantic")}
               className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                 activeMode === "semantic"
                   ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
