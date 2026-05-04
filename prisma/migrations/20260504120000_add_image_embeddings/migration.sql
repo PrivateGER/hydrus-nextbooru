@@ -72,28 +72,3 @@ CREATE INDEX "PostEmbedding_embedding_3072_vchord_idx"
   ON "PostEmbedding"
   USING vchordrq (("embedding"::vector(3072)) vector_cosine_ops)
   WHERE "status" = 'COMPLETE' AND "dimensions" = 3072;
-
-CREATE TABLE "EmbeddingBatchState" (
-  "key" TEXT NOT NULL,
-  "status" TEXT NOT NULL DEFAULT 'idle',
-  "processed" INTEGER NOT NULL DEFAULT 0,
-  "total" INTEGER NOT NULL DEFAULT 0,
-  "errorMessage" TEXT,
-  "lastProcessed" INTEGER,
-  "lastSucceeded" INTEGER,
-  "lastFailed" INTEGER,
-  "claimedAt" TIMESTAMP(3),
-  "startedAt" TIMESTAMP(3),
-  "completedAt" TIMESTAMP(3),
-  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-  CONSTRAINT "EmbeddingBatchState_pkey" PRIMARY KEY ("key"),
-  CONSTRAINT "EmbeddingBatchState_status_check" CHECK ("status" IN ('idle', 'running', 'completed', 'failed')),
-  CONSTRAINT "EmbeddingBatchState_progress_nonnegative_check" CHECK ("processed" >= 0 AND "total" >= 0),
-  CONSTRAINT "EmbeddingBatchState_last_result_nonnegative_check" CHECK (
-    ("lastProcessed" IS NULL OR "lastProcessed" >= 0)
-    AND ("lastSucceeded" IS NULL OR "lastSucceeded" >= 0)
-    AND ("lastFailed" IS NULL OR "lastFailed" >= 0)
-  )
-);

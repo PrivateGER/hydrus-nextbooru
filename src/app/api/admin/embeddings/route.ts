@@ -1,20 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   batchComputeImageEmbeddings,
-  claimEmbeddingBatchIfIdle,
   clearEmbeddingsForConfig,
-  completeEmbeddingBatch,
   deleteFailedEmbeddingsForConfig,
-  failEmbeddingBatch,
-  getEmbeddingBatchState,
   getEmbeddingSettings,
   getEmbeddingStats,
   toEmbeddingConfig,
   updateEmbeddingSettings,
-  updateEmbeddingBatchProgress,
 } from "@/lib/embeddings";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
+
+type EmbeddingBatchStatus = "idle" | "running" | "completed" | "failed";
+type EmbeddingBatchResult = { processed: number; succeeded: number; failed: number };
+
+// The app is deployed as a single instance, matching the other admin batch tasks.
+let batchRunning = false;
+let batchProgress = { processed: 0, total: 0 };
+let batchStatus: EmbeddingBatchStatus = "idle";
+let batchError: string | null = null;
+let lastBatchResult: EmbeddingBatchResult | null = null;
 
 export async function GET() {
   const auth = await verifyAdminSession();
@@ -23,7 +28,6 @@ export async function GET() {
   try {
     const settings = await getEmbeddingSettings();
     const stats = await getEmbeddingStats(toEmbeddingConfig(settings));
-    const batchState = await getEmbeddingBatchState();
 
     return NextResponse.json({
       settings: {
@@ -36,7 +40,11 @@ export async function GET() {
         imageMaxResolution: settings.imageMaxResolution,
       },
       stats,
-      ...batchState,
+      batchRunning,
+      batchProgress: batchRunning ? batchProgress : null,
+      batchStatus,
+      batchError,
+      lastBatchResult,
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to get embedding stats");
@@ -48,8 +56,7 @@ export async function PUT(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  const batchState = await getEmbeddingBatchState();
-  if (batchState.batchRunning) {
+  if (batchRunning) {
     return NextResponse.json({ error: "Cannot update embedding settings while a batch is running" }, { status: 409 });
   }
 
@@ -86,10 +93,16 @@ export async function POST(request: NextRequest) {
     if (limit !== undefined && (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0)) {
       return NextResponse.json({ error: "limit must be a non-negative integer" }, { status: 400 });
     }
-    const claimed = await claimEmbeddingBatchIfIdle();
-    if (!claimed) {
+
+    if (batchRunning) {
       return NextResponse.json({ error: "Embedding batch is already running" }, { status: 409 });
     }
+
+    batchRunning = true;
+    batchProgress = { processed: 0, total: 0 };
+    batchStatus = "running";
+    batchError = null;
+    lastBatchResult = null;
 
     aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? 8, retryFailed }, "Starting image embedding batch");
 
@@ -98,23 +111,21 @@ export async function POST(request: NextRequest) {
       batchSize,
       retryFailed,
       onProgress: (processed, total) => {
-        void updateEmbeddingBatchProgress(processed, total).catch((error) => {
-          apiLog.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to update embedding batch progress");
-        });
+        batchProgress = { processed, total };
       },
     })
-      .then(async (result) => {
-        await completeEmbeddingBatch(result);
+      .then((result) => {
+        batchStatus = "completed";
+        lastBatchResult = result;
         aiLog.info(result, "Image embedding batch completed");
       })
-      .catch(async (error) => {
-        const batchError = error instanceof Error ? error.message : String(error);
-        try {
-          await failEmbeddingBatch(batchError);
-        } catch (stateError) {
-          apiLog.error({ error: stateError instanceof Error ? stateError.message : String(stateError) }, "Failed to persist embedding batch failure");
-        }
+      .catch((error) => {
+        batchStatus = "failed";
+        batchError = error instanceof Error ? error.message : String(error);
         aiLog.error({ error: batchError }, "Image embedding batch failed");
+      })
+      .finally(() => {
+        batchRunning = false;
       });
 
     return NextResponse.json({
@@ -133,8 +144,7 @@ export async function DELETE(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  const batchState = await getEmbeddingBatchState();
-  if (batchState.batchRunning) {
+  if (batchRunning) {
     return NextResponse.json({ error: "Cannot clear embeddings while a batch is running" }, { status: 409 });
   }
 

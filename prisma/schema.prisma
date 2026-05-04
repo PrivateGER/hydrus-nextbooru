@@ -306,22 +306,6 @@ model SemanticQueryEmbedding {
   @@index([baseUrl, model, dimensions, lastUsedAt], map: "SemanticQueryEmbedding_config_lastUsedAt_idx")
 }
 
-model EmbeddingBatchState {
-  key           String    @id
-  status        String    @default("idle")
-  processed     Int       @default(0)
-  total         Int       @default(0)
-  errorMessage  String?
-  lastProcessed Int?
-  lastSucceeded Int?
-  lastFailed    Int?
-  claimedAt     DateTime?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-}
-
 // ============================================
 // SETTINGS (key-value configuration store)
 // ============================================

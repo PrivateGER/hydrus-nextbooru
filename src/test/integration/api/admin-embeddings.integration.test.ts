@@ -8,11 +8,8 @@ import {
   getCurrentEmbeddingStats,
 } from "@/lib/embeddings/batch";
 import {
-  claimEmbeddingBatchIfIdle,
-  completeEmbeddingBatch,
   countPendingEmbeddings,
   findEmbeddingPostsToProcess,
-  getEmbeddingBatchState,
   upsertCompleteEmbedding,
   upsertFailedEmbedding,
 } from "@/lib/embeddings/store";
@@ -160,30 +157,6 @@ describe("/api/admin/embeddings", () => {
     expect(result.settings).not.toHaveProperty("apiKey");
     expect(result.settings.apiKeyConfigured).toBe(true);
     expect(result.settings.maskedApiKey).not.toBe("sk-or-v1-secret");
-  });
-
-  it("uses persisted batch state to block settings updates while running", async () => {
-    await expect(claimEmbeddingBatchIfIdle()).resolves.toBe(true);
-    await expect(claimEmbeddingBatchIfIdle()).resolves.toBe(false);
-
-    const request = new NextRequest("http://localhost/api/admin/embeddings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: config.model }),
-    });
-
-    const response = await PUT(request);
-    const data = await response.json();
-
-    expect(response.status).toBe(409);
-    expect(data.error).toContain("batch is running");
-    await expect(getEmbeddingBatchState()).resolves.toMatchObject({
-      batchRunning: true,
-      batchStatus: "running",
-      batchProgress: { processed: 0, total: 0 },
-    });
-
-    await completeEmbeddingBatch({ processed: 0, succeeded: 0, failed: 0 });
   });
 
   it("allows custom embedding backends without an API key", async () => {

@@ -52,24 +52,7 @@ export interface EmbeddedRelatedPost {
   score: number;
 }
 
-export type EmbeddingBatchStatus = "idle" | "running" | "completed" | "failed";
-
-export interface EmbeddingBatchResult {
-  processed: number;
-  succeeded: number;
-  failed: number;
-}
-
-export interface EmbeddingBatchState {
-  batchRunning: boolean;
-  batchProgress: { processed: number; total: number } | null;
-  batchStatus: EmbeddingBatchStatus;
-  batchError: string | null;
-  lastBatchResult: EmbeddingBatchResult | null;
-}
-
 export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
-const EMBEDDING_BATCH_STATE_KEY = "image_embeddings";
 
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
@@ -77,43 +60,6 @@ function normalizeEmbeddingMinScore(minScore: number | undefined): number | null
   }
 
   return Math.min(1, Math.max(-1, minScore));
-}
-
-interface EmbeddingBatchStateRow {
-  status: string;
-  processed: number;
-  total: number;
-  errorMessage: string | null;
-  lastProcessed: number | null;
-  lastSucceeded: number | null;
-  lastFailed: number | null;
-}
-
-function normalizeBatchStatus(status: string | null | undefined): EmbeddingBatchStatus {
-  return status === "running" || status === "completed" || status === "failed"
-    ? status
-    : "idle";
-}
-
-function mapEmbeddingBatchState(row: EmbeddingBatchStateRow | null | undefined): EmbeddingBatchState {
-  const batchStatus = normalizeBatchStatus(row?.status);
-  const lastBatchResult = row?.lastProcessed === null || row?.lastProcessed === undefined
-    ? null
-    : {
-        processed: row.lastProcessed,
-        succeeded: row.lastSucceeded ?? 0,
-        failed: row.lastFailed ?? 0,
-      };
-
-  return {
-    batchRunning: batchStatus === "running",
-    batchProgress: batchStatus === "running"
-      ? { processed: row?.processed ?? 0, total: row?.total ?? 0 }
-      : null,
-    batchStatus,
-    batchError: row?.errorMessage ?? null,
-    lastBatchResult,
-  };
 }
 
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
@@ -155,114 +101,6 @@ export async function assertVectorExtensionsAvailable(): Promise<void> {
   if (!extensions.vector || !extensions.vchord) {
     throw new Error("Database is missing required vector extensions. Use tensorchord/vchord-postgres:pg18-v1.1.1.");
   }
-}
-
-export async function getEmbeddingBatchState(): Promise<EmbeddingBatchState> {
-  const rows = await prisma.$queryRaw<EmbeddingBatchStateRow[]>`
-    SELECT
-      status,
-      processed,
-      total,
-      "errorMessage",
-      "lastProcessed",
-      "lastSucceeded",
-      "lastFailed"
-    FROM "EmbeddingBatchState"
-    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
-  `;
-
-  return mapEmbeddingBatchState(rows[0]);
-}
-
-export async function claimEmbeddingBatchIfIdle(): Promise<boolean> {
-  const rows = await prisma.$queryRaw<{ key: string }[]>`
-    INSERT INTO "EmbeddingBatchState" (
-      key,
-      status,
-      processed,
-      total,
-      "errorMessage",
-      "lastProcessed",
-      "lastSucceeded",
-      "lastFailed",
-      "claimedAt",
-      "startedAt",
-      "completedAt",
-      "updatedAt"
-    )
-    VALUES (
-      ${EMBEDDING_BATCH_STATE_KEY},
-      'running',
-      0,
-      0,
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      NOW(),
-      NOW(),
-      NULL,
-      NOW()
-    )
-    ON CONFLICT (key)
-    DO UPDATE SET
-      status = 'running',
-      processed = 0,
-      total = 0,
-      "errorMessage" = NULL,
-      "lastProcessed" = NULL,
-      "lastSucceeded" = NULL,
-      "lastFailed" = NULL,
-      "claimedAt" = NOW(),
-      "startedAt" = NOW(),
-      "completedAt" = NULL,
-      "updatedAt" = NOW()
-    WHERE "EmbeddingBatchState".status <> 'running'
-    RETURNING key
-  `;
-
-  return rows.length > 0;
-}
-
-export async function updateEmbeddingBatchProgress(processed: number, total: number): Promise<void> {
-  await prisma.$executeRaw`
-    UPDATE "EmbeddingBatchState"
-    SET
-      processed = ${Math.max(0, Math.floor(processed))},
-      total = ${Math.max(0, Math.floor(total))},
-      "updatedAt" = NOW()
-    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
-      AND status = 'running'
-  `;
-}
-
-export async function completeEmbeddingBatch(result: EmbeddingBatchResult): Promise<void> {
-  await prisma.$executeRaw`
-    UPDATE "EmbeddingBatchState"
-    SET
-      status = 'completed',
-      processed = ${result.processed},
-      total = ${result.processed},
-      "errorMessage" = NULL,
-      "lastProcessed" = ${result.processed},
-      "lastSucceeded" = ${result.succeeded},
-      "lastFailed" = ${result.failed},
-      "completedAt" = NOW(),
-      "updatedAt" = NOW()
-    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
-  `;
-}
-
-export async function failEmbeddingBatch(errorMessage: string): Promise<void> {
-  await prisma.$executeRaw`
-    UPDATE "EmbeddingBatchState"
-    SET
-      status = 'failed',
-      "errorMessage" = ${errorMessage.slice(0, 1000)},
-      "completedAt" = NOW(),
-      "updatedAt" = NOW()
-    WHERE key = ${EMBEDDING_BATCH_STATE_KEY}
-  `;
 }
 
 export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
