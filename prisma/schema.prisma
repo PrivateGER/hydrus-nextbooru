@@ -53,6 +53,11 @@ enum ThumbnailStatus {
   UNSUPPORTED // Non-media file, cannot generate thumbnails
 }
 
+enum EmbeddingStatus {
+  COMPLETE
+  FAILED
+}
+
 enum Orientation {
   landscape
   portrait
@@ -106,6 +111,7 @@ model Post {
   recommendations PostRecommendation[] @relation("PostRecommendations")
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
   phashEntry      PhashEntry?
+  embeddings      PostEmbedding[]
 
   @@index([rating])
   @@index([importedAt])
@@ -249,11 +255,55 @@ model Thumbnail {
 
 model PhashEntry {
   hash  String @id @db.Char(64) // Same as Post.hash
-  phash BigInt                   // 64-bit DCT perceptual hash
+  phash BigInt // 64-bit DCT perceptual hash
 
   computedAt DateTime @default(now())
 
   post Post @relation(fields: [hash], references: [hash], onDelete: Cascade)
+}
+
+// ============================================
+// IMAGE EMBEDDINGS (semantic image search)
+// ============================================
+
+model PostEmbedding {
+  id                 Int                    @id @default(autoincrement())
+  postId             Int
+  post               Post                   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  baseUrl            String
+  model              String
+  dimensions         Int
+  imageMaxResolution Int
+  sourceWidth        Int?
+  sourceHeight       Int?
+  processedWidth     Int?
+  processedHeight    Int?
+  embedding          Unsupported("vector")?
+  status             EmbeddingStatus        @default(COMPLETE)
+  errorMessage       String?
+  computedAt         DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@unique([postId, baseUrl, model, dimensions, imageMaxResolution], map: "PostEmbedding_config_key")
+  @@index([postId])
+  @@index([baseUrl, model, dimensions, imageMaxResolution, status], map: "PostEmbedding_config_status_idx")
+}
+
+model SemanticQueryEmbedding {
+  queryHash  String                @db.Char(64)
+  query      String
+  baseUrl    String
+  model      String
+  dimensions Int
+  embedding  Unsupported("vector")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastUsedAt DateTime @default(now())
+
+  @@id([queryHash, baseUrl, model, dimensions])
+  @@index([baseUrl, model, dimensions, lastUsedAt], map: "SemanticQueryEmbedding_config_lastUsedAt_idx")
 }
 
 // ============================================

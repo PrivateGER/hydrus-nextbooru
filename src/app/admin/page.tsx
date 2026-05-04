@@ -14,6 +14,7 @@ import { useSync } from "@/hooks/admin/use-sync";
 import { useThumbnails } from "@/hooks/admin/use-thumbnails";
 import { usePhash } from "@/hooks/admin/use-phash";
 import { useTranslation } from "@/hooks/admin/use-translation";
+import { useEmbeddings } from "@/hooks/admin/use-embeddings";
 
 // UI Components
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -25,6 +26,7 @@ import { MessageToast } from "@/components/admin/message-toast";
 import { SyncSection } from "@/components/admin/sync-section";
 import { ThumbnailsSection } from "@/components/admin/thumbnails-section";
 import { PhashSection } from "@/components/admin/phash-section";
+import { EmbeddingsSection } from "@/components/admin/embeddings-section";
 import { TranslationSection } from "@/components/admin/translation-section";
 import { MaintenanceSection } from "@/components/admin/maintenance-section";
 import { HelpSection } from "@/components/admin/help-section";
@@ -78,6 +80,7 @@ export default function AdminPage() {
   const thumbnails = useThumbnails(setMessage, triggerSuccessAnimation);
   const phash = usePhash(setMessage, triggerSuccessAnimation);
   const translation = useTranslation(setMessage, triggerSuccessAnimation);
+  const embeddings = useEmbeddings(setMessage, triggerSuccessAnimation);
 
   // Handlers
   const handleLogout = async () => {
@@ -201,6 +204,13 @@ export default function AdminPage() {
             isComputing={phash.isComputing}
             onCompute={phash.computePhashes}
             onResetAll={phash.resetAll}
+            openConfirmModal={openConfirmModal}
+          />
+        );
+      case "embeddings":
+        return (
+          <EmbeddingsSection
+            embeddings={embeddings}
             openConfirmModal={openConfirmModal}
           />
         );

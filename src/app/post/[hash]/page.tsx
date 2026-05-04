@@ -347,7 +347,7 @@ export default async function PostPage({ params }: PostPageProps) {
           );
         })}
 
-        {/* Similar posts based on tag similarity */}
+        {/* Related posts based on tags and embeddings */}
         <Suspense fallback={<RelatedPostsSkeleton />}>
           <RelatedPosts hash={post.hash} />
         </Suspense>

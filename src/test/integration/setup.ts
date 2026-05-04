@@ -52,7 +52,7 @@ export async function setupTestDatabase(): Promise<{
   connectionString: string;
 }> {
   // Start PostgreSQL container
-  container = await new PostgreSqlContainer('postgres:18-alpine')
+  container = await new PostgreSqlContainer('tensorchord/vchord-postgres:pg18-v1.1.1')
     .withDatabase('booru_test')
     .withUsername('test')
     .withPassword('test')
@@ -169,6 +169,8 @@ export async function cleanDatabase(): Promise<void> {
   await p.note.deleteMany();
   await p.contentTranslation.deleteMany();
   await p.phashEntry.deleteMany();
+  await p.semanticQueryEmbedding.deleteMany();
+  await p.postEmbedding.deleteMany();
   await p.post.deleteMany();
   await p.tag.deleteMany();
   await p.group.deleteMany();

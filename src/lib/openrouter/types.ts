@@ -73,6 +73,56 @@ export interface ImageTranslationResult {
   hasText: boolean;
 }
 
+export interface EmbeddingContentText {
+  type: "text";
+  text: string;
+}
+
+export interface EmbeddingContentImage {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+export interface EmbeddingMultimodalInput {
+  content: (EmbeddingContentText | EmbeddingContentImage)[];
+}
+
+export type EmbeddingInput = string | string[] | EmbeddingMultimodalInput[];
+
+export interface EmbeddingRequest {
+  model?: string;
+  input: EmbeddingInput;
+  dimensions?: number;
+  encoding_format?: "float";
+  input_type?: string;
+}
+
+export interface ImageEmbeddingRequest {
+  model?: string;
+  imageUrl: string;
+  dimensions?: number;
+}
+
+export interface EmbeddingResponse {
+  object: "list";
+  data: Array<{
+    object: "embedding";
+    embedding: number[] | string;
+    index: number;
+  }>;
+  model: string;
+  usage?: {
+    prompt_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+export interface EmbeddingResult {
+  embedding: number[];
+  model: string;
+  usage?: EmbeddingResponse["usage"];
+}
+
 // Settings keys stored in database
 export const SETTINGS_KEYS = {
   PROVIDER: "openrouter.provider",
@@ -83,6 +133,9 @@ export const SETTINGS_KEYS = {
   LOCAL_API_KEY: "openrouter.local.apiKey",
   LOCAL_MODEL: "openrouter.local.model",
   LOCAL_BASE_URL: "openrouter.local.baseUrl",
+  EMBEDDING_MODEL: "openrouter.embedding.model",
+  EMBEDDING_DIMENSIONS: "openrouter.embedding.dimensions",
+  EMBEDDING_IMAGE_MAX_RESOLUTION: "openrouter.embedding.imageMaxResolution",
 } as const;
 
 export interface OpenRouterSettings {
@@ -113,6 +166,7 @@ export interface ModelDefinition {
   name: string;
   vision?: boolean;
   expensive?: boolean;
+  dimensions?: number[];
 }
 
 // Popular models available for selection
@@ -126,6 +180,27 @@ export const POPULAR_MODELS: ModelDefinition[] = [
   // Text-only models (notes only)
   { id: "deepseek/deepseek-v3.2", name: "DeepSeek V3.2" },
   { id: "mistralai/mistral-small-creative", name: "Mistral Small Creative" },
+];
+
+export const DEFAULT_EMBEDDING_MODEL = "google/gemini-embedding-2-preview";
+export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
+export const DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION = 1024;
+
+export const EMBEDDING_DIMENSION_OPTIONS = [768, 1536, 3072] as const;
+export const EMBEDDING_RESOLUTION_OPTIONS = [512, 768, 1024, 1536, 2048] as const;
+
+export const POPULAR_EMBEDDING_MODELS: ModelDefinition[] = [
+  {
+    id: DEFAULT_EMBEDDING_MODEL,
+    name: "Gemini Embedding 2 Preview",
+    vision: true,
+    dimensions: [...EMBEDDING_DIMENSION_OPTIONS],
+  },
+  {
+    id: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+    name: "Llama Nemotron Embed VL 1B V2 (free)",
+    vision: true,
+  },
 ];
 
 /**

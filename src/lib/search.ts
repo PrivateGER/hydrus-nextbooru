@@ -18,13 +18,33 @@ import {
 } from "@/lib/wildcard";
 import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
+import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
+import {
+  getEmbeddingOpenRouterSettings,
+  isEmbeddingProviderConfigured,
+  toEmbeddingConfig,
+} from "@/lib/embeddings/settings";
+import { searchPostsByEmbedding } from "@/lib/embeddings/store";
+import {
+  getCachedSemanticQueryEmbedding,
+  normalizeSemanticQuery,
+  upsertSemanticQueryEmbedding,
+} from "@/lib/embeddings/query-cache";
+import type { ApiRateLimitConfig } from "@/lib/rate-limit";
 
 /** Default number of results per page */
 const DEFAULT_LIMIT = 48;
 /** Maximum allowed results per page */
 const MAX_LIMIT = 100;
 /** Maximum page number to prevent expensive offset queries */
-const MAX_PAGE = 10000;
+export const MAX_PAGE = 10000;
+/** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
+const SEMANTIC_RESULT_CAP = 96;
+export const SEMANTIC_SEARCH_RATE_LIMIT_CONFIG = {
+  prefix: "posts-semantic-search",
+  limit: 30,
+  windowMs: 60 * 1000,
+} satisfies ApiRateLimitConfig;
 
 /**
  * Minimal post data returned in search results.
@@ -37,6 +57,8 @@ export interface PostResult {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  distance?: number;
+  score?: number;
 }
 
 /** Type of search result - either a note or a group title */
@@ -83,12 +105,40 @@ export interface NoteSearchResult extends BaseSearchResult {
   notes: NoteResult[];
 }
 
+/** Result of semantic text-to-image search */
+export interface SemanticSearchResult extends BaseSearchResult {
+  posts: PostResult[];
+}
+
 /** Options for post search */
 export interface SearchPostsOptions {
   /** Results per page (default 48, max 100) */
   limit?: number;
   /** Search query for note content (min 2 chars, uses fulltext search) */
   notesQuery?: string;
+}
+
+export interface SearchSemanticPostsOptions {
+  /** Results per page (default 48, max 100) */
+  limit?: number;
+  /** Optional minimum cosine similarity score to include */
+  minScore?: number;
+}
+
+function normalizeSemanticMinScore(minScore: number | undefined): number | undefined {
+  if (minScore === undefined || !Number.isFinite(minScore)) {
+    return undefined;
+  }
+
+  return Math.min(1, Math.max(-1, minScore));
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(1, Math.floor(value)), max);
 }
 
 /**
@@ -523,4 +573,107 @@ export async function searchPosts(
     queryTimeMs: performance.now() - startTime,
     resolvedWildcards,
   };
+}
+
+/**
+ * Search image embeddings with a natural-language text query.
+ *
+ * The query is embedded with the active OpenRouter multimodal embedding model,
+ * then compared against image embeddings stored in VectorChord/Postgres.
+ */
+export async function searchSemanticPosts(
+  query: string,
+  page: number,
+  options?: SearchSemanticPostsOptions
+): Promise<SemanticSearchResult> {
+  const normalizedQuery = normalizeSemanticQuery(query);
+  if (normalizedQuery.length < 2) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const minScore = normalizeSemanticMinScore(options?.minScore);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = Math.min(Math.max(1, requestedPage), MAX_PAGE);
+  if (requestedPage > MAX_PAGE) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const skip = (validatedPage - 1) * limit;
+  const startTime = performance.now();
+
+  try {
+    const settings = await getEmbeddingOpenRouterSettings();
+    const embeddingConfig = toEmbeddingConfig(settings);
+    const queryConfig = {
+      baseUrl: embeddingConfig.baseUrl,
+      model: embeddingConfig.model,
+      dimensions: embeddingConfig.dimensions,
+    };
+    const cachedEmbedding = await getCachedSemanticQueryEmbedding(normalizedQuery, queryConfig);
+    let queryEmbedding = cachedEmbedding?.embedding ?? null;
+
+    if (!queryEmbedding) {
+      if (!isEmbeddingProviderConfigured(settings)) {
+        return {
+          posts: [],
+          totalCount: 0,
+          totalPages: 0,
+          queryTimeMs: performance.now() - startTime,
+          error: "OpenRouter API key not configured for embeddings",
+        };
+      }
+
+      const client = new OpenRouterClient({
+        apiKey: settings.apiKey ?? "",
+        model: settings.model,
+        baseUrl: embeddingConfig.baseUrl,
+      });
+
+      const embedding = await client.createEmbedding({
+        model: settings.model,
+        input: normalizedQuery,
+        dimensions: settings.dimensions,
+        encoding_format: "float",
+        input_type: "search_query",
+      });
+
+      queryEmbedding = (await upsertSemanticQueryEmbedding({
+        query: normalizedQuery,
+        config: queryConfig,
+        embedding: embedding.embedding,
+      })).embedding;
+    }
+
+    const result = await searchPostsByEmbedding({
+      config: embeddingConfig,
+      embedding: queryEmbedding,
+      skip,
+      limit,
+      minScore,
+      resultCap: SEMANTIC_RESULT_CAP,
+    });
+
+    return {
+      posts: result.posts,
+      totalCount: result.totalCount,
+      totalPages: Math.ceil(result.totalCount / limit),
+      queryTimeMs: performance.now() - startTime,
+    };
+  } catch (error) {
+    console.error("Semantic search error:", error);
+
+    const message =
+      error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
+        ? error.message
+        : "Failed to search image embeddings";
+
+    return {
+      posts: [],
+      totalCount: 0,
+      totalPages: 0,
+      queryTimeMs: performance.now() - startTime,
+      error: message,
+    };
+  }
 }

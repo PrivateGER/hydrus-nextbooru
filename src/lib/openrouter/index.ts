@@ -13,6 +13,12 @@ export {
 export {
   SETTINGS_KEYS,
   POPULAR_MODELS,
+  POPULAR_EMBEDDING_MODELS,
+  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_EMBEDDING_DIMENSIONS,
+  DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION,
+  EMBEDDING_DIMENSION_OPTIONS,
+  EMBEDDING_RESOLUTION_OPTIONS,
   modelSupportsVision,
   type ModelDefinition,
   type OpenRouterClientConfig,
@@ -24,6 +30,10 @@ export {
   type TranslationResult,
   type ImageTranslationRequest,
   type ImageTranslationResult,
+  type EmbeddingRequest,
+  type EmbeddingResponse,
+  type EmbeddingResult,
+  type ImageEmbeddingRequest,
 } from "./types";
 export {
   estimateTokens,

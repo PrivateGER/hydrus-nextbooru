@@ -1,5 +1,11 @@
 import { SparklesIcon } from "@heroicons/react/24/outline";
 import { getOrComputeRecommendationsByHash } from "@/lib/recommendations";
+import { getEmbeddingOpenRouterSettings, toEmbeddingConfig } from "@/lib/embeddings/settings";
+import {
+  DEFAULT_EMBEDDING_MIN_SCORE,
+  findRelatedPostsByEmbedding,
+  type EmbeddedRelatedPost,
+} from "@/lib/embeddings/store";
 import { RelatedPostsClient } from "./related-posts-client";
 
 interface RelatedPostsProps {
@@ -7,18 +13,36 @@ interface RelatedPostsProps {
   limit?: number;
 }
 
+async function getSemanticRelatedPosts(hash: string, limit: number): Promise<EmbeddedRelatedPost[]> {
+  try {
+    const settings = await getEmbeddingOpenRouterSettings();
+    return findRelatedPostsByEmbedding({
+      hash,
+      limit,
+      minScore: DEFAULT_EMBEDDING_MIN_SCORE,
+      config: toEmbeddingConfig(settings),
+    });
+  } catch (error) {
+    console.error("Failed to load semantically related posts:", error);
+    return [];
+  }
+}
+
 /**
  * Server component that fetches and displays recommended posts.
  * Uses RelatedPostsClient for the enhanced UI rendering.
  */
 export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
-  const recommendations = await getOrComputeRecommendationsByHash(hash, limit);
+  const [recommendations, semanticPosts] = await Promise.all([
+    getOrComputeRecommendationsByHash(hash, limit),
+    getSemanticRelatedPosts(hash, limit),
+  ]);
 
-  if (recommendations.length === 0) {
+  if (recommendations.length === 0 && semanticPosts.length === 0) {
     return null;
   }
 
-  return <RelatedPostsClient recommendations={recommendations} />;
+  return <RelatedPostsClient recommendations={recommendations} semanticPosts={semanticPosts} />;
 }
 
 /**
