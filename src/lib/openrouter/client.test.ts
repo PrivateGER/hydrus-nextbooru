@@ -232,6 +232,35 @@ describe("OpenRouterClient", () => {
     ]);
   });
 
+  it("should accept embedding responses without indexes when response order matches input order", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        model: "google/gemini-embedding-2-preview",
+        data: [
+          { object: "embedding", embedding: [1, 0, 0] },
+          { object: "embedding", embedding: [0, 1, 0] },
+        ],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+      model: "google/gemini-embedding-2-preview",
+    });
+
+    const results = await client.createImageEmbeddings({
+      imageUrls: ["data:image/webp;base64,abc", "data:image/webp;base64,def"],
+      dimensions: 3,
+    });
+
+    expect(results.map((result) => result.embedding)).toEqual([
+      [1, 0, 0],
+      [0, 1, 0],
+    ]);
+  });
+
   it("should reject malformed embedding responses", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({
@@ -255,6 +284,26 @@ describe("OpenRouterClient", () => {
         object: "list",
         model: "bad-model",
         data: [{ object: "embedding", embedding: [1, 0, 0], index: 1 }],
+      })
+    );
+
+    const client = new OpenRouterClient({
+      apiKey: "or-key",
+      baseUrl: OpenRouterClient.getDefaultBaseUrl(),
+    });
+
+    await expect(client.createEmbeddings({ input: ["first", "second"] })).rejects.toThrow(OpenRouterApiError);
+  });
+
+  it("should reject embedding responses with mixed missing and explicit indexes", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      createResponse({
+        object: "list",
+        model: "bad-model",
+        data: [
+          { object: "embedding", embedding: [1, 0, 0], index: 0 },
+          { object: "embedding", embedding: [0, 1, 0] },
+        ],
       })
     );
 
