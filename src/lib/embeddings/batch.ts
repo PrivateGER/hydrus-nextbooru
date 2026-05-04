@@ -2,7 +2,10 @@ import pLimit from "p-limit";
 import { OpenRouterClient, OpenRouterConfigError } from "@/lib/openrouter";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { aiLog } from "@/lib/logger";
-import { preprocessImageForEmbedding } from "@/lib/embeddings/image";
+import {
+  preprocessImageForEmbedding,
+  type ProcessedEmbeddingImage,
+} from "@/lib/embeddings/image";
 import {
   getEmbeddingSettings,
   getEmbeddingOpenRouterSettings,
@@ -18,12 +21,12 @@ import {
   getEmbeddingStats,
   upsertCompleteEmbedding,
   upsertFailedEmbedding,
+  type EmbeddingPostToProcess,
   type EmbeddingStats,
 } from "@/lib/embeddings/store";
 
 const DEFAULT_BATCH_SIZE = 8;
-const DEFAULT_CONCURRENCY = 2;
-const apiLimit = pLimit(DEFAULT_CONCURRENCY);
+const FALLBACK_CONCURRENCY = 2;
 
 export interface BatchEmbeddingOptions {
   batchSize?: number;
@@ -89,48 +92,11 @@ export async function batchComputeImageEmbeddings(
 
     if (posts.length === 0) break;
 
-    const results = await Promise.all(
-      posts.map((post) =>
-        apiLimit(async () => {
-          let processedImage: Awaited<ReturnType<typeof preprocessImageForEmbedding>> | null = null;
-
-          try {
-            const filePath = buildFilePath(post.hash, post.extension);
-            processedImage = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
-            const result = await client.createImageEmbedding({
-              model: config.model,
-              imageUrl: processedImage.dataUrl,
-              dimensions: config.dimensions,
-            });
-
-            await upsertCompleteEmbedding({
-              postId: post.id,
-              config,
-              embedding: result.embedding,
-              sourceWidth: processedImage.sourceWidth,
-              sourceHeight: processedImage.sourceHeight,
-              processedWidth: processedImage.processedWidth,
-              processedHeight: processedImage.processedHeight,
-            });
-
-            return true;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            aiLog.warn({ hash: post.hash, error: message }, "Failed to compute image embedding");
-            await upsertFailedEmbedding({
-              postId: post.id,
-              config,
-              errorMessage: message,
-              sourceWidth: processedImage?.sourceWidth ?? post.width,
-              sourceHeight: processedImage?.sourceHeight ?? post.height,
-              processedWidth: processedImage?.processedWidth ?? null,
-              processedHeight: processedImage?.processedHeight ?? null,
-            });
-            return false;
-          }
-        })
-      )
-    );
+    const results = await computeEmbeddingPostBatch({
+      client,
+      config,
+      posts,
+    });
 
     for (const success of results) {
       processed++;
@@ -143,6 +109,161 @@ export async function batchComputeImageEmbeddings(
   }
 
   return { processed, succeeded, failed };
+}
+
+async function computeEmbeddingPostBatch(options: {
+  client: OpenRouterClient;
+  config: EmbeddingConfig;
+  posts: EmbeddingPostToProcess[];
+}): Promise<boolean[]> {
+  const { client, config, posts } = options;
+  const prepared: Array<{
+    post: EmbeddingPostToProcess;
+    processedImage: ProcessedEmbeddingImage;
+  }> = [];
+  const results = new Map<number, boolean>();
+
+  await Promise.all(posts.map(async (post) => {
+    try {
+      const filePath = buildFilePath(post.hash, post.extension);
+      const processedImage = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
+      prepared.push({ post, processedImage });
+    } catch (error) {
+      await recordFailedEmbedding({
+        post,
+        config,
+        processedImage: null,
+        error,
+      });
+      results.set(post.id, false);
+    }
+  }));
+
+  if (prepared.length > 0) {
+    try {
+      const embeddingResults = await client.createImageEmbeddings({
+        model: config.model,
+        imageUrls: prepared.map(({ processedImage }) => processedImage.dataUrl),
+        dimensions: config.dimensions,
+      });
+
+      await Promise.all(prepared.map(async ({ post, processedImage }, index) => {
+        const result = embeddingResults[index];
+        if (!result) {
+          throw new Error("Embedding response did not include every requested input");
+        }
+
+        const succeeded = await recordCompleteEmbedding({
+          post,
+          config,
+          processedImage,
+          embedding: result.embedding,
+        });
+        results.set(post.id, succeeded);
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      aiLog.warn({ count: prepared.length, error: message }, "Failed to compute batched image embeddings; retrying individually");
+
+      const fallbackLimit = pLimit(FALLBACK_CONCURRENCY);
+      await Promise.all(prepared.map(({ post, processedImage }) =>
+        fallbackLimit(async () => {
+          const succeeded = await computePreparedImageEmbedding({
+            client,
+            config,
+            post,
+            processedImage,
+          });
+          results.set(post.id, succeeded);
+        })
+      ));
+    }
+  }
+
+  return posts.map((post) => results.get(post.id) ?? false);
+}
+
+async function computePreparedImageEmbedding(options: {
+  client: OpenRouterClient;
+  config: EmbeddingConfig;
+  post: EmbeddingPostToProcess;
+  processedImage: ProcessedEmbeddingImage;
+}): Promise<boolean> {
+  const { client, config, post, processedImage } = options;
+
+  try {
+    const result = await client.createImageEmbedding({
+      model: config.model,
+      imageUrl: processedImage.dataUrl,
+      dimensions: config.dimensions,
+    });
+
+    return recordCompleteEmbedding({
+      post,
+      config,
+      processedImage,
+      embedding: result.embedding,
+    });
+  } catch (error) {
+    await recordFailedEmbedding({
+      post,
+      config,
+      processedImage,
+      error,
+    });
+    return false;
+  }
+}
+
+async function recordCompleteEmbedding(options: {
+  post: EmbeddingPostToProcess;
+  config: EmbeddingConfig;
+  processedImage: ProcessedEmbeddingImage;
+  embedding: number[];
+}): Promise<boolean> {
+  const { post, config, processedImage, embedding } = options;
+
+  try {
+    await upsertCompleteEmbedding({
+      postId: post.id,
+      config,
+      embedding,
+      sourceWidth: processedImage.sourceWidth,
+      sourceHeight: processedImage.sourceHeight,
+      processedWidth: processedImage.processedWidth,
+      processedHeight: processedImage.processedHeight,
+    });
+    return true;
+  } catch (error) {
+    await recordFailedEmbedding({
+      post,
+      config,
+      processedImage,
+      error,
+    });
+    return false;
+  }
+}
+
+async function recordFailedEmbedding(options: {
+  post: EmbeddingPostToProcess;
+  config: EmbeddingConfig;
+  processedImage: ProcessedEmbeddingImage | null;
+  error: unknown;
+}): Promise<void> {
+  const { post, config, processedImage, error } = options;
+  const message = error instanceof Error ? error.message : String(error);
+
+  aiLog.warn({ hash: post.hash, error: message }, "Failed to compute image embedding");
+  await upsertFailedEmbedding({
+    postId: post.id,
+    config,
+    errorMessage: message,
+    sourceWidth: processedImage?.sourceWidth ?? post.width,
+    sourceHeight: processedImage?.sourceHeight ?? post.height,
+    processedWidth: processedImage?.processedWidth ?? null,
+    processedHeight: processedImage?.processedHeight ?? null,
+  });
 }
 
 export async function getCurrentEmbeddingStats(): Promise<{

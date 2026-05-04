@@ -10,6 +10,8 @@ import type {
   EmbeddingResponse,
   EmbeddingResult,
   ImageEmbeddingRequest,
+  ImageEmbeddingsRequest,
+  EmbeddingMultimodalInput,
 } from "./types";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
@@ -304,9 +306,22 @@ TRANSLATION:
    * Generate an embedding from text or multimodal input.
    */
   async createEmbedding(request: EmbeddingRequest): Promise<EmbeddingResult> {
+    const results = await this.createEmbeddings(request);
+    return results[0];
+  }
+
+  /**
+   * Generate embeddings from text or multimodal input.
+   */
+  async createEmbeddings(request: EmbeddingRequest): Promise<EmbeddingResult[]> {
     const model = request.model || this.model;
     const startTime = Date.now();
-    aiLog.debug({ model, dimensions: request.dimensions }, "OpenRouter embeddings request");
+    const inputCount = this.getEmbeddingInputCount(request.input);
+    if (inputCount < 1) {
+      throw new RangeError("Embedding input must include at least one item");
+    }
+
+    aiLog.debug({ model, dimensions: request.dimensions, inputCount }, "OpenRouter embeddings request");
 
     const response = await fetch(this.getUrl("embeddings"), {
       method: "POST",
@@ -333,39 +348,71 @@ TRANSLATION:
     }
 
     const data = (await response.json()) as EmbeddingResponse;
-    const embedding = data.data?.[0]?.embedding;
+    const embeddingsByIndex = new Map<number, number[]>();
 
-    if (!Array.isArray(embedding) || !embedding.every((value) => typeof value === "number" && Number.isFinite(value))) {
-      throw new OpenRouterApiError("No numeric embedding returned from API", 502);
+    for (const item of data.data ?? []) {
+      const embedding = item.embedding;
+      if (!Array.isArray(embedding) || !embedding.every((value) => typeof value === "number" && Number.isFinite(value))) {
+        throw new OpenRouterApiError("No numeric embedding returned from API", 502);
+      }
+      embeddingsByIndex.set(item.index, embedding);
     }
 
-    aiLog.debug({ model: data.model || model, dimensions: embedding.length, durationMs }, "OpenRouter embeddings response");
+    const results: EmbeddingResult[] = [];
+    for (let index = 0; index < inputCount; index++) {
+      const embedding = embeddingsByIndex.get(index);
+      if (!embedding) {
+        throw new OpenRouterApiError("Embedding response did not include every requested input", 502);
+      }
+      results.push({
+        embedding,
+        model: data.model || model,
+        usage: data.usage,
+      });
+    }
 
-    return {
-      embedding,
+    aiLog.debug({
       model: data.model || model,
-      usage: data.usage,
-    };
+      dimensions: results[0]?.embedding.length,
+      inputCount,
+      durationMs,
+    }, "OpenRouter embeddings response");
+
+    return results;
   }
 
   /**
    * Generate an embedding for a single image.
    */
   async createImageEmbedding(request: ImageEmbeddingRequest): Promise<EmbeddingResult> {
-    return this.createEmbedding({
+    const results = await this.createImageEmbeddings({
+      model: request.model,
+      imageUrls: [request.imageUrl],
+      dimensions: request.dimensions,
+    });
+    return results[0];
+  }
+
+  /**
+   * Generate embeddings for multiple images in one embeddings request.
+   */
+  async createImageEmbeddings(request: ImageEmbeddingsRequest): Promise<EmbeddingResult[]> {
+    return this.createEmbeddings({
       model: request.model,
       dimensions: request.dimensions,
-      input: [
-        {
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: request.imageUrl },
-            },
-          ],
-        },
-      ],
+      input: request.imageUrls.map<EmbeddingMultimodalInput>((imageUrl) => ({
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: imageUrl },
+          },
+        ],
+      })),
     });
+  }
+
+  private getEmbeddingInputCount(input: EmbeddingRequest["input"]): number {
+    return typeof input === "string" ? 1 : input.length;
   }
 
   private getLanguageCode(name: string): string | null {

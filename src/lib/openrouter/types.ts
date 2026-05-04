@@ -103,6 +103,12 @@ export interface ImageEmbeddingRequest {
   dimensions?: number;
 }
 
+export interface ImageEmbeddingsRequest {
+  model?: string;
+  imageUrls: string[];
+  dimensions?: number;
+}
+
 export interface EmbeddingResponse {
   object: "list";
   data: Array<{
