@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from "../setup";
 import { setTestPrisma } from "@/lib/db";
 import { SourceType } from "@/generated/prisma/client";
-import { createGroup, createPost } from "../factories";
+import { createGroup, createPost, createPostsBulk } from "../factories";
 import {
   findRelatedPostsByEmbedding,
   searchPostsByEmbedding,
@@ -165,15 +165,18 @@ describe("semantic image embedding search", () => {
     expect(result.posts.map((post) => post.id)).toEqual([closePost.id]);
   });
 
-  it("caps semantic search to the top 96 nearest results", async () => {
+  it("caps semantic search to the top 288 nearest results", async () => {
     const prisma = getTestPrisma();
-    const postIds: number[] = [];
+    const defaultPageSize = 48;
+    const semanticResultCap = defaultPageSize * 6;
+    const postIds = await createPostsBulk(prisma, semanticResultCap + 12, {
+      mimeType: "image/png",
+      extension: ".png",
+    });
 
-    for (let index = 0; index < 100; index += 1) {
-      const post = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
-      postIds.push(post.id);
+    for (let index = 0; index < postIds.length; index += 1) {
       await upsertCompleteEmbedding({
-        postId: post.id,
+        postId: postIds[index],
         config,
         embedding: embedding(1, index / 100),
         sourceWidth: 100,
@@ -211,17 +214,19 @@ describe("semantic image embedding search", () => {
     } as unknown as Response);
 
     const firstPage = await searchSemanticPosts("blue sky", 1);
-    const secondPage = await searchSemanticPosts("blue sky", 2);
-    const thirdPage = await searchSemanticPosts("blue sky", 3);
+    const lastCappedPage = await searchSemanticPosts("blue sky", 6);
+    const overflowPage = await searchSemanticPosts("blue sky", 7);
 
-    expect(firstPage.totalCount).toBe(96);
-    expect(firstPage.totalPages).toBe(2);
-    expect(firstPage.posts).toHaveLength(48);
-    expect(firstPage.posts.map((post) => post.id)).toEqual(postIds.slice(0, 48));
-    expect(secondPage.posts).toHaveLength(48);
-    expect(secondPage.posts.map((post) => post.id)).toEqual(postIds.slice(48, 96));
-    expect(thirdPage.posts).toHaveLength(0);
-    expect(thirdPage.totalCount).toBe(96);
+    expect(firstPage.totalCount).toBe(semanticResultCap);
+    expect(firstPage.totalPages).toBe(6);
+    expect(firstPage.posts).toHaveLength(defaultPageSize);
+    expect(firstPage.posts.map((post) => post.id)).toEqual(postIds.slice(0, defaultPageSize));
+    expect(lastCappedPage.posts).toHaveLength(defaultPageSize);
+    expect(lastCappedPage.posts.map((post) => post.id)).toEqual(
+      postIds.slice(semanticResultCap - defaultPageSize, semanticResultCap)
+    );
+    expect(overflowPage.posts).toHaveLength(0);
+    expect(overflowPage.totalCount).toBe(semanticResultCap);
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
