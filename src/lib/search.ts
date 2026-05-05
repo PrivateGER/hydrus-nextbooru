@@ -40,7 +40,8 @@ const MAX_LIMIT = 100;
 /** Maximum page number to prevent expensive offset queries */
 export const MAX_PAGE = 10000;
 /** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
-const SEMANTIC_RESULT_CAP = 96;
+/** Multiples of 48 (the standard per-page size). **/
+const SEMANTIC_RESULT_CAP = 48 * 6;
 export const SEMANTIC_SEARCH_RATE_LIMIT_CONFIG = {
   prefix: "posts-semantic-search",
   limit: 30,
