@@ -89,12 +89,19 @@ export interface EmbeddingMultimodalInput {
 
 export type EmbeddingInput = string | string[] | EmbeddingMultimodalInput[];
 
+export const EMBEDDING_INPUT_TYPES = {
+  SEARCH_QUERY: "search_query",
+  SEARCH_DOCUMENT: "search_document",
+} as const;
+
+export type EmbeddingInputType = typeof EMBEDDING_INPUT_TYPES[keyof typeof EMBEDDING_INPUT_TYPES];
+
 export interface EmbeddingRequest {
   model?: string;
   input: EmbeddingInput;
   dimensions?: number;
   encoding_format?: "float";
-  input_type?: string;
+  input_type?: EmbeddingInputType;
 }
 
 export interface ImageEmbeddingRequest {

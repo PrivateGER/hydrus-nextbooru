@@ -19,6 +19,7 @@ import {
 import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
+import { EMBEDDING_INPUT_TYPES } from "@/lib/openrouter/types";
 import {
   getEmbeddingOpenRouterSettings,
   isEmbeddingProviderConfigured,
@@ -635,7 +636,7 @@ export async function searchSemanticPosts(
         input: normalizedQuery,
         dimensions: settings.dimensions,
         encoding_format: "float",
-        input_type: "search_query",
+        input_type: EMBEDDING_INPUT_TYPES.SEARCH_QUERY,
       });
 
       queryEmbedding = (await upsertSemanticQueryEmbedding({

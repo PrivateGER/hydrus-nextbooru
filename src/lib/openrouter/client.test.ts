@@ -178,6 +178,7 @@ describe("OpenRouterClient", () => {
         ],
       },
     ]);
+    expect(body.input_type).toBe("search_document");
   });
 
   it("should create multiple image embeddings in one multimodal request", async () => {
@@ -226,6 +227,7 @@ describe("OpenRouterClient", () => {
         ],
       },
     ]);
+    expect(body.input_type).toBe("search_document");
     expect(results.map((result) => result.embedding)).toEqual([
       [1, 0, 0],
       [0, 1, 0],
