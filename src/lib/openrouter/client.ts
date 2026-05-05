@@ -348,14 +348,26 @@ TRANSLATION:
     }
 
     const data = (await response.json()) as EmbeddingResponse;
+    const responseItems = data.data ?? [];
+    const hasExplicitIndexes = responseItems.some((item) => item.index !== undefined);
     const embeddingsByIndex = new Map<number, number[]>();
 
-    for (const item of data.data ?? []) {
+    if (responseItems.length !== inputCount) {
+      throw new OpenRouterApiError("Embedding response did not include every requested input", 502);
+    }
+
+    for (const [fallbackIndex, item] of responseItems.entries()) {
       const embedding = item.embedding;
       if (!Array.isArray(embedding) || !embedding.every((value) => typeof value === "number" && Number.isFinite(value))) {
         throw new OpenRouterApiError("No numeric embedding returned from API", 502);
       }
-      embeddingsByIndex.set(item.index, embedding);
+
+      const responseIndex = hasExplicitIndexes ? item.index : fallbackIndex;
+      if (typeof responseIndex !== "number" || !Number.isInteger(responseIndex)) {
+        throw new OpenRouterApiError("Embedding response included invalid indexes", 502);
+      }
+
+      embeddingsByIndex.set(responseIndex, embedding);
     }
 
     const results: EmbeddingResult[] = [];

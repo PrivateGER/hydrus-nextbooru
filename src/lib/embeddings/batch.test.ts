@@ -233,4 +233,31 @@ describe("batchComputeImageEmbeddings", () => {
       "data:image/webp;base64,3",
     ]);
   });
+
+  it("continues processing later batches after one batch fails unexpectedly", async () => {
+    const posts = [post(1), post(2), post(3), post(4)];
+
+    mocks.countPendingEmbeddings.mockResolvedValue(posts.length);
+    mocks.findEmbeddingPostsToProcess.mockImplementation(async ({ lastId }: { lastId?: number }) =>
+      lastId === undefined ? posts.slice(0, 2) : posts.slice(2)
+    );
+    mocks.preprocessImageForEmbedding.mockImplementation(async (filePath: string) => {
+      const id = Number(filePath.match(/hash-(\d+)/)?.[1] ?? 0);
+      if (id <= 2) {
+        throw new Error("sharp failed");
+      }
+      return processedImage(id);
+    });
+    mocks.upsertFailedEmbedding.mockRejectedValue(new Error("failed status write failed"));
+    mocks.createImageEmbeddings.mockImplementation(async ({ imageUrls }: { imageUrls: string[] }) =>
+      imageUrls.map((_, index) => ({ embedding: [index + 1, 0, 0], model: config.model }))
+    );
+
+    const result = await batchComputeImageEmbeddings({ batchSize: 2 });
+
+    expect(result).toEqual({ processed: posts.length, succeeded: 2, failed: 2 });
+    expect(mocks.findEmbeddingPostsToProcess).toHaveBeenCalledTimes(2);
+    expect(mocks.createImageEmbeddings).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertCompleteEmbedding.mock.calls.map(([call]) => call.postId)).toEqual([3, 4]);
+  });
 });

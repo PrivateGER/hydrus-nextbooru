@@ -114,7 +114,7 @@ export interface EmbeddingResponse {
   data: Array<{
     object: "embedding";
     embedding: number[] | string;
-    index: number;
+    index?: number;
   }>;
   model: string;
   usage?: {

@@ -97,11 +97,20 @@ export async function batchComputeImageEmbeddings(
 
     if (posts.length === 0) break;
 
-    const results = await computeEmbeddingPostBatch({
-      client,
-      config,
-      posts,
-    });
+    let results: boolean[];
+    try {
+      results = await computeEmbeddingPostBatch({
+        client,
+        config,
+        posts,
+      });
+    } catch (error) {
+      results = await recordFailedEmbeddingBatch({
+        posts,
+        config,
+        error,
+      });
+    }
 
     for (const success of results) {
       processed++;
@@ -114,6 +123,38 @@ export async function batchComputeImageEmbeddings(
   }
 
   return { processed, succeeded, failed };
+}
+
+async function recordFailedEmbeddingBatch(options: {
+  posts: EmbeddingPostToProcess[];
+  config: EmbeddingConfig;
+  error: unknown;
+}): Promise<boolean[]> {
+  const { posts, config, error } = options;
+  const message = error instanceof Error ? error.message : String(error);
+
+  aiLog.warn({ count: posts.length, error: message }, "Image embedding batch failed; continuing with next batch");
+
+  const recordLimit = pLimit(FALLBACK_CONCURRENCY);
+  await Promise.all(posts.map((post) =>
+    recordLimit(async () => {
+      try {
+        await recordFailedEmbedding({
+          post,
+          config,
+          processedImage: null,
+          error,
+        });
+      } catch (recordError) {
+        aiLog.warn({
+          hash: post.hash,
+          error: recordError instanceof Error ? recordError.message : String(recordError),
+        }, "Failed to record image embedding batch failure");
+      }
+    })
+  ));
+
+  return posts.map(() => false);
 }
 
 async function computeEmbeddingPostBatch(options: {
