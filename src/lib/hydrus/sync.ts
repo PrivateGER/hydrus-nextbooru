@@ -2,7 +2,6 @@ import { prisma } from "@/lib/db";
 import { HydrusClient } from "./client";
 import type { HydrusFileMetadata } from "./types";
 import { parseTag, normalizeTagForStorage } from "./tag-mapper";
-import { isTagBlacklisted } from "@/lib/tag-blacklist";
 import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
@@ -913,9 +912,6 @@ function extractTags(metadata: HydrusFileMetadata): ReturnType<typeof parseTag>[
 
         // Skip system tags
         if (tag.startsWith("system:")) continue;
-
-        // Skip blacklisted tags
-        if (isTagBlacklisted(tag)) continue;
 
         // Deduplicate
         if (seenTags.has(tag.toLowerCase())) continue;

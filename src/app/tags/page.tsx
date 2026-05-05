@@ -7,7 +7,6 @@ import { TagCategory, Prisma } from "@/generated/prisma/client";
 import { Pagination } from "@/components/pagination";
 import { TagSearch } from "./tag-search";
 import { PageHeaderSkeleton, FiltersSkeleton, TagsSkeleton, Skeleton } from "@/components/skeletons";
-import { withBlacklistFilter } from "@/lib/tag-blacklist";
 import { TAG_LINK_COLORS } from "@/lib/tag-colors";
 import { TAGS_PER_PAGE } from "@/lib/pagination";
 import {
@@ -95,8 +94,7 @@ async function getTags(options: {
     baseWhere.category = category;
   }
 
-  // Apply blacklist filter
-  const where = withBlacklistFilter(baseWhere);
+  const where = baseWhere;
 
   let orderBy: Prisma.TagOrderByWithRelationInput;
   switch (sort) {
@@ -154,13 +152,9 @@ async function getCategoryCounts(): Promise<TagsCategoryCounts> {
   const cached = tagsCategoryCountsCache.get("counts");
   if (cached) return cached;
 
-  // Get counts per category using single groupBy query (avoids N+1)
-  const blacklistConditions = withBlacklistFilter({});
-
   const counts = await prisma.tag.groupBy({
     by: ["category"],
     _count: { _all: true },
-    where: blacklistConditions,
   });
 
   const result: TagsCategoryCounts = {

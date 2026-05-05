@@ -5,7 +5,6 @@ import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
 import { TagCategory } from '@/generated/prisma/client';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 
 let GET: typeof import('@/app/api/tags/tree/route').GET;
 
@@ -25,7 +24,6 @@ describe('GET /api/tags/tree (Integration)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
   });
 
   describe('no selected tags', () => {
@@ -184,14 +182,14 @@ describe('GET /api/tags/tree (Integration)', () => {
     });
   });
 
-  describe('blacklist filtering', () => {
-    it('should exclude blacklisted tags from results', async () => {
+  describe('removed tag filtering', () => {
+    it('includes tags that were previously hidden from results', async () => {
       const prisma = getTestPrisma();
 
       await createPostWithTags(prisma, [
         'normal tag',
-        'site:pixiv', // Blacklisted
-        'hydl-import-time:2024', // Blacklisted by wildcard
+        'site:pixiv',
+        'hydl-import-time:2024',
       ]);
 
       const request = new NextRequest('http://localhost/api/tags/tree');
@@ -200,8 +198,8 @@ describe('GET /api/tags/tree (Integration)', () => {
 
       const tagNames = data.tags.map((t: { name: string }) => t.name);
       expect(tagNames).toContain('normal tag');
-      expect(tagNames).not.toContain('site:pixiv');
-      expect(tagNames).not.toContain('hydl-import-time:2024');
+      expect(tagNames).toContain('site:pixiv');
+      expect(tagNames).toContain('hydl-import-time:2024');
     });
   });
 

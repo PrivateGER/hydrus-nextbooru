@@ -16,7 +16,6 @@ import {
   getRandomPosts,
   getRecentImportCount,
 } from "@/lib/stats";
-import { withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { POSTS_PER_PAGE } from "@/lib/pagination";
 
 type SortOption = "newest" | "oldest" | "random";
@@ -43,7 +42,6 @@ function HomePageSkeleton() {
 
 async function getPosts(page: number, sort: SortOption, seed: string) {
   const skip = (page - 1) * POSTS_PER_PAGE;
-  const postHidingCondition = getPostHidingSqlCondition();
 
   // For random sorting, use raw query with MD5
   if (sort === "random") {
@@ -59,13 +57,12 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
     >`
       SELECT id, hash, width, height, blurhash, "mimeType"
       FROM "Post"
-      WHERE ${postHidingCondition}
       ORDER BY MD5(hash || ${seed})
       LIMIT ${POSTS_PER_PAGE}
       OFFSET ${skip}
     `;
 
-    const totalCount = await prisma.post.count({ where: withPostHidingFilter() });
+    const totalCount = await prisma.post.count();
 
     return {
       posts,
@@ -78,11 +75,8 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
   const orderBy: Prisma.PostOrderByWithRelationInput =
     sort === "oldest" ? { importedAt: "asc" } : { importedAt: "desc" };
 
-  const whereClause = withPostHidingFilter();
-
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
-      where: whereClause,
       orderBy,
       skip,
       take: POSTS_PER_PAGE,
@@ -95,7 +89,7 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
         mimeType: true,
       },
     }),
-    prisma.post.count({ where: whereClause }),
+    prisma.post.count(),
   ]);
 
   return {

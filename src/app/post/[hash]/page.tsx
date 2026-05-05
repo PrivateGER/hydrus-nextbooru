@@ -11,7 +11,6 @@ import { getCanonicalSourceUrl, getDisplaySources } from "@/lib/hydrus/url-parse
 import { SourceLink } from "@/components/source-link";
 import { SourceBadge } from "@/components/source-badge";
 import { TagCategory } from "@/generated/prisma/enums";
-import { filterBlacklistedTags, withPostHidingFilter } from "@/lib/tag-blacklist";
 import { isValidCreatorName } from "@/lib/groups";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
@@ -84,9 +83,8 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
 
 
 async function getPost(hash: string) {
-  // Use withPostHidingFilter to ensure hidden posts return null
   const post = await prisma.post.findFirst({
-    where: withPostHidingFilter({ hash }),
+    where: { hash },
     include: {
       tags: {
         include: {
@@ -159,7 +157,7 @@ export default async function PostPage({ params }: PostPageProps) {
     notFound();
   }
 
-  const tags = filterBlacklistedTags(post.tags.map((pt) => pt.tag));
+  const tags = post.tags.map((pt) => pt.tag);
 
   // Get group info for related images
   const groups = post.groups.map((pg) => ({

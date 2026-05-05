@@ -5,7 +5,6 @@ import { createMockHydrusServer, createMockHydrusState, addFilesToState, type Mo
 import { createMockFileWithNotes } from '@/test/mocks/fixtures/hydrus-metadata';
 import { createOpenRouterHandlers, createMockOpenRouterState, setTranslationResponse, setEmptyTranslation, type MockOpenRouterState } from '@/test/mocks/openrouter-server';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 import { SETTINGS_KEYS } from '@/lib/openrouter/types';
 import { batchTranslateNotes } from '@/lib/notes-translation';
 import type { SetupServer } from 'msw/node';
@@ -32,7 +31,6 @@ describe('Notes Integration', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
 
     hydrusState = createMockHydrusState(0);
     server = createMockHydrusServer(hydrusState);

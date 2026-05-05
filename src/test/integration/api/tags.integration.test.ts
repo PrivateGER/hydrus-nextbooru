@@ -3,7 +3,6 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 import { createPostWithTags, createPostsWithTag } from '../factories';
 import { TagCategory } from '@/generated/prisma/client';
 
@@ -25,7 +24,6 @@ describe('GET /api/tags (Integration)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
   });
 
   describe('basic listing', () => {

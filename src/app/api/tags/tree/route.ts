@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache";
 
 /**
@@ -15,7 +14,7 @@ import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache"
  *
  * The handler returns tags that either match the search/category filters (when no `selected` tags are provided)
  * or co-occur on posts that contain at least one tag from each provided selected name (when `selected` is provided).
- * Results are filtered against an internal blacklist and cached for efficiency.
+ * Results are cached for efficiency.
  *
  * @param request - Incoming NextRequest containing URL search parameters described above.
  * @returns An object with:
@@ -70,7 +69,7 @@ export async function GET(request: NextRequest) {
 
       const [tags, totalPosts] = await Promise.all([
         prisma.tag.findMany({
-          where: withBlacklistFilter(baseWhere),
+          where: baseWhere,
           select: {
             id: true,
             name: true,
@@ -112,31 +111,31 @@ export async function GET(request: NextRequest) {
 
     const [artistTags, copyrightTags, characterTags, generalTags, metaTags, totalPosts] = await Promise.all([
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "ARTIST" }),
+        where: { category: "ARTIST" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.ARTIST,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "COPYRIGHT" }),
+        where: { category: "COPYRIGHT" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.COPYRIGHT,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "CHARACTER" }),
+        where: { category: "CHARACTER" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.CHARACTER,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "GENERAL" }),
+        where: { category: "GENERAL" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.GENERAL,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "META" }),
+        where: { category: "META" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.META,
@@ -281,7 +280,7 @@ export async function GET(request: NextRequest) {
 
   // Use _count aggregation - database does the counting, not JS
   const tags = await prisma.tag.findMany({
-    where: withBlacklistFilter(baseWhere),
+    where: baseWhere,
     select: {
       id: true,
       name: true,
@@ -299,7 +298,7 @@ export async function GET(request: NextRequest) {
     orderBy: {
       posts: { _count: "desc" },
     },
-    take: limit * 2, // Over-fetch to account for blacklist filtering
+    take: limit,
   });
 
   // Map and filter results
@@ -310,7 +309,7 @@ export async function GET(request: NextRequest) {
     count: tag._count.posts,
   }));
 
-  const sortedTags = filterBlacklistedTags(mappedTags)
+  const sortedTags = mappedTags
     .filter((tag) => tag.count > 0)
     .slice(0, limit);
 

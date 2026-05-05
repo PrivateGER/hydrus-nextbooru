@@ -16,7 +16,6 @@ import {
   resolveWildcardPattern,
   ResolvedWildcard,
 } from "@/lib/wildcard";
-import { isTagBlacklisted, withPostHidingFilter, getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { separateMetaTags, getMetaTagDefinition } from "@/lib/meta-tags";
 import { OpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { EMBEDDING_INPUT_TYPES } from "@/lib/openrouter/types";
@@ -210,8 +209,6 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
 
   const skip = (page - 1) * DEFAULT_LIMIT;
   const startTime = performance.now();
-  const postHidingCondition = getPostHidingSqlCondition('p.id');
-  const groupPostHidingCondition = getPostHidingSqlCondition('first_post.id');
 
   try {
     // CTE to compute tsquery with prefix matching
@@ -240,8 +237,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             n.content,
             n."contentHash",
             ts_rank_cd(n."contentTsv", q.q) AS rank,
-            ts_headline('simple', n.content, q.q,
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            n.content AS headline_source,
             p.id AS post_id,
             p.hash AS post_hash,
             p.width AS post_width,
@@ -253,7 +249,6 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           CROSS JOIN query q
           JOIN "Post" p ON n."postId" = p.id
           WHERE n."contentTsv" @@ q.q
-            AND ${postHidingCondition}
 
           UNION
 
@@ -266,8 +261,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             n.content,
             n."contentHash",
             ts_rank_cd(nt."translatedTsv", q.q) AS rank,
-            ts_headline('simple', nt."translatedContent", q.q,
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            nt."translatedContent" AS headline_source,
             p.id AS post_id,
             p.hash AS post_hash,
             p.width AS post_width,
@@ -280,7 +274,6 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           JOIN "Post" p ON n."postId" = p.id
           JOIN "ContentTranslation" nt ON n."contentHash" = nt."contentHash"
           WHERE nt."translatedTsv" @@ q.q
-            AND ${postHidingCondition}
 
           UNION
 
@@ -293,8 +286,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             g.title AS content,
             g."titleHash" AS "contentHash",
             ts_rank_cd(g."titleTsv", q.q) AS rank,
-            ts_headline('simple', g.title, q.q,
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            g.title AS headline_source,
             first_post.id AS post_id,
             first_post.hash AS post_hash,
             first_post.width AS post_width,
@@ -307,7 +299,6 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           JOIN "PostGroup" pg ON g.id = pg."groupId"
           JOIN "Post" first_post ON pg."postId" = first_post.id AND pg.position = 0
           WHERE g."titleTsv" @@ q.q
-            AND ${groupPostHidingCondition}
 
           UNION
 
@@ -320,8 +311,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
             g.title AS content,
             g."titleHash" AS "contentHash",
             ts_rank_cd(ct."translatedTsv", q.q) AS rank,
-            ts_headline('simple', ct."translatedContent", q.q,
-              'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
+            ct."translatedContent" AS headline_source,
             first_post.id AS post_id,
             first_post.hash AS post_hash,
             first_post.width AS post_width,
@@ -335,12 +325,11 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
           JOIN "PostGroup" pg ON g.id = pg."groupId"
           JOIN "Post" first_post ON pg."postId" = first_post.id AND pg.position = 0
           WHERE ct."translatedTsv" @@ q.q
-            AND ${groupPostHidingCondition}
         ),
         deduplicated AS (
           -- Deduplicate matches, keeping highest rank (per result_type + id combination)
           SELECT DISTINCT ON (result_type, id)
-            id, result_type, "postId", name, content, "contentHash", headline,
+            id, result_type, "postId", name, content, "contentHash", headline_source,
             post_id, post_hash, post_width, post_height, post_blurhash, post_mime,
             rank, imported_at
           FROM matches
@@ -359,13 +348,15 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
         name,
         content,
         "contentHash",
-        headline,
+        ts_headline('simple', headline_source, q.q,
+          'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20, MaxFragments=2') AS headline,
         jsonb_build_object(
           'id', post_id, 'hash', post_hash, 'width', post_width, 'height', post_height,
           'blurhash', post_blurhash, 'mimeType', post_mime
         ) AS post,
         total_count
       FROM counted
+      CROSS JOIN query q
     `;
 
     const totalCount = results.length > 0 ? Number(results[0].total_count) : 0;
@@ -429,10 +420,8 @@ export async function searchPosts(
   // Separate meta tags from regular tags (also handles negation parsing)
   const { metaTags, regularTags } = separateMetaTags(tags);
 
-  // Filter out blacklisted tags from input - users should not be able to search using blacklisted tags
-  // For wildcards, we check if the pattern itself is blacklisted (e.g., "hydl-import-time:*")
-  const includeTags = regularTags.include.filter(tag => !isTagBlacklisted(tag));
-  const excludeTags = regularTags.exclude.filter(tag => !isTagBlacklisted(tag));
+  const includeTags = regularTags.include;
+  const excludeTags = regularTags.exclude;
 
   // Check if we have any search criteria (tags, meta tags, or notes)
   const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
@@ -550,8 +539,7 @@ export async function searchPosts(
     });
   }
 
-  const baseWhere = conditions.length > 0 ? { AND: conditions } : {};
-  const where = withPostHidingFilter(baseWhere);
+  const where = conditions.length > 0 ? { AND: conditions } : {};
 
   const startTime = performance.now();
 

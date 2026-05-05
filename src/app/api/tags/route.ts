@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
-import { withBlacklistFilter } from "@/lib/tag-blacklist";
 
 const VALID_CATEGORIES = Object.values(TagCategory);
 const VALID_SORT_OPTIONS = ["count", "name", "-count", "-name"] as const;
@@ -32,8 +31,7 @@ export async function GET(request: NextRequest) {
     baseWhere.category = category;
   }
 
-  // Apply blacklist filter
-  const where = withBlacklistFilter(baseWhere);
+  const where = baseWhere;
 
   // Build order clause using indexed postCount field
   let orderBy: Prisma.TagOrderByWithRelationInput;
