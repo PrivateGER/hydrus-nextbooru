@@ -13,6 +13,7 @@ import type {
   ImageEmbeddingsRequest,
   EmbeddingMultimodalInput,
 } from "./types";
+import { EMBEDDING_INPUT_TYPES } from "./types";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
 
@@ -412,6 +413,7 @@ TRANSLATION:
     return this.createEmbeddings({
       model: request.model,
       dimensions: request.dimensions,
+      input_type: EMBEDDING_INPUT_TYPES.SEARCH_DOCUMENT,
       input: request.imageUrls.map<EmbeddingMultimodalInput>((imageUrl) => ({
         content: [
           {
