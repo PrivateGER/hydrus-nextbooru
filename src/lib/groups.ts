@@ -1,7 +1,8 @@
 import { prisma as defaultPrisma } from "@/lib/db";
-import { SourceType, Prisma, PrismaClient, TagCategory } from "@/generated/prisma/client";
+import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
 
 export type OrderOption = "random" | "newest" | "oldest" | "largest";
+const GROUP_PREVIEW_POST_LIMIT = 10;
 
 export interface GroupsSearchParams {
   typeFilter?: SourceType;
@@ -64,10 +65,15 @@ export interface GroupsSearchResult {
  */
 export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): Promise<TypeCount[]> {
   const typeCountsRaw = await prisma.$queryRaw<{ sourceType: string; count: bigint }[]>`
-    SELECT g."sourceType", COUNT(*)::bigint as count
-    FROM "Group" g
-    WHERE (SELECT COUNT(*) FROM "PostGroup" pg WHERE pg."groupId" = g.id) >= 2
-    GROUP BY g."sourceType"
+    SELECT "sourceType", COUNT(*)::bigint as count
+    FROM (
+      SELECT g.id, g."sourceType"
+      FROM "Group" g
+      JOIN "PostGroup" pg ON pg."groupId" = g.id
+      GROUP BY g.id
+      HAVING COUNT(pg."postId") >= 2
+    ) eligible_groups
+    GROUP BY "sourceType"
     ORDER BY count DESC
   `;
 
@@ -115,6 +121,7 @@ export async function searchGroups(
     titles: (string | null)[];
     translatedTitles: (string | null)[];
     postCount: bigint;
+    filteredCount: bigint;
   }[]>`
     WITH group_content AS (
       SELECT
@@ -141,29 +148,62 @@ export async function searchGroups(
       ARRAY_AGG(translated_title ORDER BY group_id) as "translatedTitles",
       MAX(post_count) as "postCount",
       MIN(group_id) as min_group_id,
-      MAX(post_count) as max_post_count
+      MAX(post_count) as max_post_count,
+      COUNT(*) OVER() as "filteredCount"
     FROM group_content
     GROUP BY content_hash
     ${orderClause}
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 
-  // Fetch posts for all groups
-  const allGroupIds = mergedGroupsRaw.flatMap(g => g.groupIds);
-  const groupPosts = allGroupIds.length > 0 ? await prisma.postGroup.findMany({
-    where: { groupId: { in: allGroupIds } },
-    include: {
-      post: {
-        select: {
-          id: true,
-          hash: true,
-          width: true,
-          height: true,
-        },
-      },
+  const representativeGroupIds = mergedGroupsRaw.map((group) => group.groupIds[0]);
+  const groupPostsRaw = representativeGroupIds.length > 0 ? await prisma.$queryRaw<{
+    postId: number;
+    groupId: number;
+    position: number;
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+  }[]>`
+    WITH ranked_group_posts AS (
+      SELECT
+        pg."postId",
+        pg."groupId",
+        pg.position,
+        p.id,
+        p.hash,
+        p.width,
+        p.height,
+        ROW_NUMBER() OVER (PARTITION BY pg."groupId" ORDER BY pg.position ASC, pg."postId" ASC) AS row_number
+      FROM "PostGroup" pg
+      JOIN "Post" p ON p.id = pg."postId"
+      WHERE pg."groupId" = ANY(${representativeGroupIds}::int[])
+    )
+    SELECT
+      "postId",
+      "groupId",
+      position,
+      id,
+      hash,
+      width,
+      height
+    FROM ranked_group_posts
+    WHERE row_number <= ${GROUP_PREVIEW_POST_LIMIT}
+    ORDER BY "groupId" ASC, position ASC, "postId" ASC
+  ` : [];
+
+  const groupPosts: MergedGroup["posts"] = groupPostsRaw.map((row) => ({
+    postId: row.postId,
+    groupId: row.groupId,
+    position: row.position,
+    post: {
+      id: row.id,
+      hash: row.hash,
+      width: row.width,
+      height: row.height,
     },
-    orderBy: { position: "asc" },
-  }) : [];
+  }));
 
   // Group posts by groupId
   const postsByGroup = new Map<number, typeof groupPosts>();
@@ -225,26 +265,29 @@ export async function searchGroups(
     };
   });
 
-  // Count total merged groups
-  const [{ count: filteredCount }] = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
-      SELECT
-        MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
-      FROM "Group" g
-      JOIN "PostGroup" pg ON pg."groupId" = g.id
-      ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
-      GROUP BY g.id
-      HAVING COUNT(pg."postId") >= 2
-    ) sub
-  `;
+  let filteredCount = Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
+  if (filteredCount === 0 && offset > 0) {
+    const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
+        SELECT
+          MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
+        FROM "Group" g
+        JOIN "PostGroup" pg ON pg."groupId" = g.id
+        ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
+        GROUP BY g.id
+        HAVING COUNT(pg."postId") >= 2
+      ) sub
+    `;
+    filteredCount = Number(count);
+  }
 
-  const totalPages = Math.ceil(Number(filteredCount) / pageSize);
+  const totalPages = Math.ceil(filteredCount / pageSize);
 
   return {
     groups,
     typeCounts,
     totalGroups,
-    filteredCount: Number(filteredCount),
+    filteredCount,
     totalPages,
     page,
   };
