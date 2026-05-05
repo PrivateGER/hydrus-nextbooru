@@ -109,7 +109,7 @@ export function useEmbeddings(
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey,
+          apiKey: apiKey.trim() || undefined,
           baseUrl,
           model: effectiveModel,
           dimensions,

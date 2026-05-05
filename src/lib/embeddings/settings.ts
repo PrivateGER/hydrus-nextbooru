@@ -134,7 +134,10 @@ export async function updateEmbeddingSettings(input: {
   const settings: Partial<Record<string, string>> = {};
 
   if (input.apiKey !== undefined) {
-    settings[SETTINGS_KEYS.API_KEY] = input.apiKey.trim();
+    const apiKey = input.apiKey.trim();
+    if (apiKey) {
+      settings[SETTINGS_KEYS.API_KEY] = apiKey;
+    }
   }
 
   if (input.baseUrl !== undefined) {

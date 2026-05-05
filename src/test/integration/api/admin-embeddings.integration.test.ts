@@ -124,7 +124,7 @@ describe("/api/admin/embeddings", () => {
     expect(values.get("openrouter.embedding.imageMaxResolution")).toBe("1536");
   });
 
-  it("clears a stored embedding API key when an empty key is submitted", async () => {
+  it("preserves a stored embedding API key when an empty key is submitted", async () => {
     const prisma = getTestPrisma();
     await prisma.settings.create({ data: { key: "openrouter.apiKey", value: "sk-or-v1-old" } });
 
@@ -138,7 +138,7 @@ describe("/api/admin/embeddings", () => {
     expect(response.status).toBe(200);
 
     const row = await prisma.settings.findUniqueOrThrow({ where: { key: "openrouter.apiKey" } });
-    expect(row.value).toBe("");
+    expect(row.value).toBe("sk-or-v1-old");
   });
 
   it("redacts raw API keys from the current stats helper", async () => {
