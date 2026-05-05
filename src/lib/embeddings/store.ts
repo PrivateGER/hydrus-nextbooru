@@ -53,6 +53,7 @@ export interface EmbeddedRelatedPost {
 }
 
 export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
+const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
 
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
@@ -418,19 +419,26 @@ export async function findRelatedPostsByEmbedding(options: {
       related.height,
       related.blurhash,
       related."mimeType",
-      (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+      nearest.distance
     FROM source
-    JOIN "PostEmbedding" pe
-      ON pe."baseUrl" = ${config.baseUrl}
-      AND pe.model = ${config.model}
-      AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
-      AND pe.embedding IS NOT NULL
-      AND pe."postId" <> source.post_id
-    JOIN "Post" related ON related.id = pe."postId"
+    CROSS JOIN LATERAL (
+      SELECT
+        pe."postId",
+        (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+      FROM "PostEmbedding" pe
+      WHERE pe."baseUrl" = ${config.baseUrl}
+        AND pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+        AND pe."postId" <> source.post_id
+      ORDER BY pe.embedding::${vectorType} <=> source.embedding
+      LIMIT ${RELATED_EMBEDDING_CANDIDATE_LIMIT}
+    ) nearest
+    JOIN "Post" related ON related.id = nearest."postId"
     WHERE ${postHidingCondition}
-      AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance})
+      AND (${maxDistance}::float8 IS NULL OR nearest.distance <= ${maxDistance})
       AND NOT EXISTS (
         SELECT 1
         FROM "PostGroup" source_group
@@ -438,7 +446,7 @@ export async function findRelatedPostsByEmbedding(options: {
         WHERE source_group."postId" = source.post_id
           AND related_group."postId" = related.id
       )
-    ORDER BY pe.embedding::${vectorType} <=> source.embedding
+    ORDER BY nearest.distance
     LIMIT ${limit}
   `;
 
