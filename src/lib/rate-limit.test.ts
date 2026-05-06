@@ -94,9 +94,12 @@ describe("getClientIPFromHeaders", () => {
 });
 
 describe("checkApiRateLimit", () => {
+  let keyId = 0;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    keyId++;
   });
 
   afterEach(() => {
@@ -110,7 +113,7 @@ describe("checkApiRateLimit", () => {
       },
     });
     const config = {
-      prefix: "unit-api-rate-limit",
+      prefix: `unit-api-rate-limit-${keyId}`,
       limit: 1,
       windowMs: 2_500,
     };
