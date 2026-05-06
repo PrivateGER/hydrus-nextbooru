@@ -431,6 +431,28 @@ describe('Groups Module (Integration)', () => {
       expect(result.groups[0].creators).toHaveLength(3);
     });
 
+    it('should derive creators from posts beyond the preview limit', async () => {
+      const prisma = getTestPrisma();
+
+      const lateArtist = await createTag(prisma, 'late_artist', TagCategory.ARTIST);
+      const group = await createGroup(prisma, SourceType.PIXIV, 'large-creator-group');
+      let lateArtistPostId = 0;
+
+      for (let position = 0; position < 11; position++) {
+        const post = await createPostInGroup(prisma, group, position);
+        if (position === 10) {
+          lateArtistPostId = post.id;
+          await prisma.postTag.create({ data: { postId: post.id, tagId: lateArtist.id } });
+        }
+      }
+
+      const result = await searchGroups({}, prisma);
+
+      expect(result.groups[0].posts).toHaveLength(10);
+      expect(result.groups[0].posts.map((post) => post.postId)).not.toContain(lateArtistPostId);
+      expect(result.groups[0].creators).toContain('late_artist');
+    });
+
     it('should not include non-artist tags as creators', async () => {
       const prisma = getTestPrisma();
 

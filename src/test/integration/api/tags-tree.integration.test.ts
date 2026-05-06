@@ -65,6 +65,19 @@ describe('GET /api/tags/tree (Integration)', () => {
       expect(data.tags.every((t: { category: string }) => t.category === 'ARTIST')).toBe(true);
     });
 
+    it('should reject invalid category filters', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['filter', 'result']);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=filter&category=INVALID');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.error).toBe('Invalid tag category');
+    });
+
     it('should filter by search query', async () => {
       const prisma = getTestPrisma();
 

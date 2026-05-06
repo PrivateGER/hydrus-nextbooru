@@ -381,6 +381,9 @@ export async function findRelatedPostsByEmbedding(options: {
   const vectorType = Prisma.raw(`vector(${config.dimensions})`);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
+  const maxDistanceFilter = maxDistance === null
+    ? Prisma.empty
+    : Prisma.sql`AND (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance}`;
 
   type ResultRow = {
     id: number;
@@ -427,18 +430,18 @@ export async function findRelatedPostsByEmbedding(options: {
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
         AND pe."postId" <> source.post_id
+        ${maxDistanceFilter}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "PostGroup" source_group
+          JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
+          WHERE source_group."postId" = source.post_id
+            AND related_group."postId" = pe."postId"
+        )
       ORDER BY pe.embedding::${vectorType} <=> source.embedding
       LIMIT ${RELATED_EMBEDDING_CANDIDATE_LIMIT}
     ) nearest
     JOIN "Post" related ON related.id = nearest."postId"
-    WHERE (${maxDistance}::float8 IS NULL OR nearest.distance <= ${maxDistance})
-      AND NOT EXISTS (
-        SELECT 1
-        FROM "PostGroup" source_group
-        JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
-        WHERE source_group."postId" = source.post_id
-          AND related_group."postId" = related.id
-      )
     ORDER BY nearest.distance
     LIMIT ${limit}
   `;

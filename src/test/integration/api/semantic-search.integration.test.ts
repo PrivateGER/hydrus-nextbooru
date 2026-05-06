@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from "../setup";
 import { setTestPrisma } from "@/lib/db";
 import { SourceType } from "@/generated/prisma/client";
-import { createGroup, createPost } from "../factories";
+import { createGroup, createPost, createPostsBulk } from "../factories";
 import {
   findRelatedPostsByEmbedding,
   searchPostsByEmbedding,
@@ -334,6 +334,67 @@ describe("semantic image embedding search", () => {
 
     expect(related.map((post) => post.id)).toEqual([ungroupedPost.id, unrelatedGroupPost.id]);
     expect(related.map((post) => post.id)).not.toContain(sharedGroupPost.id);
+  });
+
+  it("applies group exclusion before the related candidate cap", async () => {
+    const prisma = getTestPrisma();
+    const sourcePost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const validPost = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const sharedGroup = await createGroup(prisma, SourceType.PIXIV, "candidate-cap-shared-group");
+    const groupedCandidateIds = await createPostsBulk(prisma, 201, {
+      mimeType: "image/png",
+      extension: ".png",
+    });
+
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: sourcePost.id, groupId: sharedGroup.id, position: 0 },
+        ...groupedCandidateIds.map((postId, index) => ({
+          postId,
+          groupId: sharedGroup.id,
+          position: index + 1,
+        })),
+      ],
+    });
+
+    await upsertCompleteEmbedding({
+      postId: sourcePost.id,
+      config,
+      embedding: embedding(1, 0),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+    await upsertCompleteEmbedding({
+      postId: validPost.id,
+      config,
+      embedding: embedding(0, 1),
+      sourceWidth: 100,
+      sourceHeight: 100,
+      processedWidth: 100,
+      processedHeight: 100,
+    });
+
+    for (const [index, postId] of groupedCandidateIds.entries()) {
+      await upsertCompleteEmbedding({
+        postId,
+        config,
+        embedding: embedding(1, (index + 1) / 1000000),
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+    }
+
+    const related = await findRelatedPostsByEmbedding({
+      hash: sourcePost.hash,
+      config,
+      limit: 10,
+    });
+
+    expect(related.map((post) => post.id)).toEqual([validPost.id]);
   });
 
   it("returns no embedding-related posts when the source post has no active embedding", async () => {

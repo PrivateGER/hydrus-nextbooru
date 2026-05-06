@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
+import { Prisma, TagCategory } from "@/generated/prisma/client";
 import { tagIdsByNameCache, treeResponseCache } from "@/lib/cache";
 
 /**
@@ -25,9 +25,14 @@ import { tagIdsByNameCache, treeResponseCache } from "@/lib/cache";
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const selectedParam = searchParams.get("selected") || "";
-  const category = searchParams.get("category") || "";
+  const rawCategory = searchParams.get("category") || "";
+  const category = rawCategory.toUpperCase();
   const query = searchParams.get("q") || "";
   const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100);
+
+  if (category && !Object.values(TagCategory).includes(category as TagCategory)) {
+    return NextResponse.json({ error: "Invalid tag category" }, { status: 400 });
+  }
 
   // Parse selected tags (comma-separated), deduplicate to avoid query issues
   const selectedTags = [...new Set(

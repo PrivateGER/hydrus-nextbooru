@@ -28,7 +28,7 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
     return { title: "Not Found - Booru" };
   }
 
-  const post = await prisma.post.findFirst({
+  const post = await prisma.post.findUnique({
     where: { hash: hash.toLowerCase() },
     select: {
       hash: true,
@@ -83,7 +83,7 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
 
 
 async function getPost(hash: string) {
-  const post = await prisma.post.findFirst({
+  const post = await prisma.post.findUnique({
     where: { hash },
     include: {
       tags: {

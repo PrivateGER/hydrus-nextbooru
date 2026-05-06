@@ -213,40 +213,40 @@ export async function searchGroups(
     postsByGroup.set(pg.groupId, existing);
   }
 
-  // Fetch artist tags for all posts across all groups
-  const allPostIds = [...new Set(groupPosts.map(pg => pg.post.id))];
-  const artistTagsRaw = allPostIds.length > 0 ? await prisma.$queryRaw<{
-    postId: number;
+  // Fetch creator candidates across the full representative group membership.
+  // Preview posts stay capped, but creator metadata should not depend on that cap.
+  const artistTagsRaw = representativeGroupIds.length > 0 ? await prisma.$queryRaw<{
+    groupId: number;
     name: string;
+    postCount: number;
   }[]>`
-    SELECT pt."postId", t.name
-    FROM "PostTag" pt
+    SELECT pg."groupId", t.name, MAX(t."postCount")::int AS "postCount"
+    FROM "PostGroup" pg
+    JOIN "PostTag" pt ON pt."postId" = pg."postId"
     JOIN "Tag" t ON t.id = pt."tagId"
-    WHERE pt."postId" = ANY(${allPostIds}::int[])
+    WHERE pg."groupId" = ANY(${representativeGroupIds}::int[])
       AND t.category = 'ARTIST'::"TagCategory"
-    ORDER BY t."postCount" DESC
+    GROUP BY pg."groupId", t.name
+    ORDER BY pg."groupId" ASC, "postCount" DESC, t.name ASC
   ` : [];
 
-  // Group artist tags by postId
-  const artistsByPost = new Map<number, string[]>();
+  // Group artist tags by representative groupId
+  const artistsByGroup = new Map<number, string[]>();
   for (const row of artistTagsRaw) {
-    const existing = artistsByPost.get(row.postId) || [];
+    const existing = artistsByGroup.get(row.groupId) || [];
     existing.push(row.name);
-    artistsByPost.set(row.postId, existing);
+    artistsByGroup.set(row.groupId, existing);
   }
 
   // Combine data
   const groups: MergedGroup[] = mergedGroupsRaw.map(g => {
     const posts = (postsByGroup.get(g.groupIds[0]) || []).slice(0, 10);
 
-    // Collect unique creators from all posts in this group
+    // Collect unique creators from all posts in this representative group
     const creatorSet = new Set<string>();
-    for (const pg of posts) {
-      const artists = artistsByPost.get(pg.post.id) || [];
-      for (const artist of artists) {
-        if (isValidCreatorName(artist)) {
-          creatorSet.add(artist);
-        }
+    for (const artist of artistsByGroup.get(g.groupIds[0]) || []) {
+      if (isValidCreatorName(artist)) {
+        creatorSet.add(artist);
       }
     }
 

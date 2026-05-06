@@ -1,8 +1,8 @@
 -- DropIndex
-DROP INDEX "PostTag_tagId_idx";
+DROP INDEX IF EXISTS "PostTag_tagId_idx";
 
 -- DropIndex
-DROP INDEX "PostTag_postId_idx";
+DROP INDEX IF EXISTS "PostTag_postId_idx";
 
 -- CreateIndex
-CREATE INDEX "PostTag_tagId_postId_idx" ON "PostTag"("tagId", "postId");
+CREATE INDEX IF NOT EXISTS "PostTag_tagId_postId_idx" ON "PostTag"("tagId", "postId");
