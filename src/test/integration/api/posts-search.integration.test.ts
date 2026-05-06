@@ -4,7 +4,6 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase }
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags, createPost } from '../factories';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 
 let GET: typeof import('@/app/api/posts/search/route').GET;
 
@@ -24,7 +23,6 @@ describe('GET /api/posts/search (Integration)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
   });
 
   describe('empty/invalid queries', () => {
@@ -396,215 +394,67 @@ describe('GET /api/posts/search (Integration)', () => {
     });
   });
 
-  describe('blacklist filtering', () => {
-    it('should filter out blacklisted tags from search (exact match)', async () => {
+  describe('removed tag filtering', () => {
+    it('searches tags that were previously hidden by exact match', async () => {
       const prisma = getTestPrisma();
-      // site:pixiv is in the default blacklist
       await createPostWithTags(prisma, ['site:pixiv', 'other_tag']);
 
-      // Searching for a blacklisted tag should return empty results
       const request = new NextRequest('http://localhost/api/posts/search?tags=site:pixiv');
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.posts).toEqual([]);
-      expect(data.totalCount).toBe(0);
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
     });
 
-    it('should filter out blacklisted tags from search (wildcard pattern)', async () => {
+    it('searches tags that were previously hidden by wildcard pattern', async () => {
       const prisma = getTestPrisma();
-      // hydl-import-time:* is in the default blacklist
       await createPostWithTags(prisma, ['hydl-import-time:2024-01-01', 'other_tag']);
 
-      // Searching for a blacklisted tag should return empty results
       const request = new NextRequest('http://localhost/api/posts/search?tags=hydl-import-time:2024-01-01');
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.posts).toEqual([]);
-      expect(data.totalCount).toBe(0);
+      expect(data.posts).toHaveLength(1);
+      expect(data.totalCount).toBe(1);
     });
 
-    it('should filter out blacklisted tags from negated search', async () => {
+    it('applies negated tags that were previously stripped', async () => {
       const prisma = getTestPrisma();
       await createPostWithTags(prisma, ['site:pixiv', 'normal_tag']);
-      await createPostWithTags(prisma, ['normal_tag', 'other']);
+      const visiblePost = await createPostWithTags(prisma, ['normal_tag', 'other']);
 
-      // Trying to exclude a blacklisted tag should be ignored (tag is stripped)
-      // This means both posts match just 'normal_tag'
       const request = new NextRequest('http://localhost/api/posts/search?tags=normal_tag,-site:pixiv');
       const response = await GET(request);
       const data = await response.json();
 
-      // Both posts should be returned since -site:pixiv is stripped
-      expect(data.posts).toHaveLength(2);
+      expect(data.posts).toHaveLength(1);
+      expect(data.posts[0].hash).toBe(visiblePost.hash);
     });
 
-    it('should allow searching with non-blacklisted tags when blacklisted tags are also provided', async () => {
+    it('requires all provided tags, including tags that were previously stripped', async () => {
       const prisma = getTestPrisma();
-      await createPostWithTags(prisma, ['normal_tag', 'another_tag']);
+      const matchingPost = await createPostWithTags(prisma, ['normal_tag', 'site:pixiv']);
       await createPostWithTags(prisma, ['normal_tag']);
 
-      // Mix of blacklisted and normal tags - blacklisted are stripped
       const request = new NextRequest('http://localhost/api/posts/search?tags=normal_tag,site:pixiv');
       const response = await GET(request);
       const data = await response.json();
 
-      // Should find posts with normal_tag (site:pixiv is stripped)
-      expect(data.posts).toHaveLength(2);
+      expect(data.posts).toHaveLength(1);
+      expect(data.posts[0].hash).toBe(matchingPost.hash);
     });
 
-    it('should return empty when all provided tags are blacklisted', async () => {
+    it('searches when all provided tags were previously hidden', async () => {
       const prisma = getTestPrisma();
       await createPostWithTags(prisma, ['site:pixiv', 'hydl-import-time:2024']);
 
-      // All blacklisted tags - should return empty
       const request = new NextRequest('http://localhost/api/posts/search?tags=site:pixiv,hydl-import-time:2024');
       const response = await GET(request);
       const data = await response.json();
 
-      expect(data.posts).toEqual([]);
-      expect(data.totalCount).toBe(0);
-    });
-  });
-
-  describe('post hiding (HIDE_POSTS_WITH_TAGS)', () => {
-    const originalEnv = process.env.HIDE_POSTS_WITH_TAGS;
-
-    afterEach(() => {
-      // Restore original env var
-      if (originalEnv === undefined) {
-        delete process.env.HIDE_POSTS_WITH_TAGS;
-      } else {
-        process.env.HIDE_POSTS_WITH_TAGS = originalEnv;
-      }
-      clearPatternCache();
-    });
-
-    it('should hide posts containing tags from HIDE_POSTS_WITH_TAGS (exact match)', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['nsfw', 'some_tag']);
-      await createPostWithTags(prisma, ['some_tag', 'safe']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=some_tag');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // Only the safe post should be returned
       expect(data.posts).toHaveLength(1);
       expect(data.totalCount).toBe(1);
-    });
-
-    it('should hide posts containing tags from HIDE_POSTS_WITH_TAGS (wildcard pattern)', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'rating:*';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['rating:explicit', 'character:saber']);
-      await createPostWithTags(prisma, ['rating:safe', 'character:saber']);
-      await createPostWithTags(prisma, ['character:saber', 'no_rating']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=character:saber');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // Only the post without any rating:* tag should be returned
-      expect(data.posts).toHaveLength(1);
-      expect(data.totalCount).toBe(1);
-    });
-
-    it('should hide posts with multiple hiding patterns', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw,explicit,rating:explicit';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['nsfw', 'tag1']);
-      await createPostWithTags(prisma, ['explicit', 'tag1']);
-      await createPostWithTags(prisma, ['rating:explicit', 'tag1']);
-      await createPostWithTags(prisma, ['tag1', 'safe']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // Only the safe post should be returned
-      expect(data.posts).toHaveLength(1);
-      expect(data.totalCount).toBe(1);
-    });
-
-    it('should be case insensitive for post hiding', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'nsfw';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['NSFW', 'tag1']);
-      await createPostWithTags(prisma, ['Nsfw', 'tag1']);
-      await createPostWithTags(prisma, ['tag1', 'safe']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // Only the safe post should be returned (case insensitive match)
-      expect(data.posts).toHaveLength(1);
-      expect(data.totalCount).toBe(1);
-    });
-
-    it('should return all posts when HIDE_POSTS_WITH_TAGS is empty', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = '';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['nsfw', 'tag1']);
-      await createPostWithTags(prisma, ['tag1', 'safe']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=tag1');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // Both posts should be returned when hiding is disabled
-      expect(data.posts).toHaveLength(2);
-      expect(data.totalCount).toBe(2);
-    });
-
-    it('should hide posts even when searching for the hidden tag directly', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'private_content';
-      clearPatternCache();
-
-      await createPostWithTags(prisma, ['private_content', 'art']);
-
-      // Even if user searches for the tag, posts with it should be hidden
-      const request = new NextRequest('http://localhost/api/posts/search?tags=private_content');
-      const response = await GET(request);
-      const data = await response.json();
-
-      expect(data.posts).toEqual([]);
-      expect(data.totalCount).toBe(0);
-    });
-
-    it('should work with both post hiding and tag blacklisting', async () => {
-      const prisma = getTestPrisma();
-      process.env.HIDE_POSTS_WITH_TAGS = 'hidden_tag';
-      clearPatternCache();
-
-      // Post with hidden tag (should be hidden)
-      await createPostWithTags(prisma, ['hidden_tag', 'normal']);
-      // Post with blacklisted tag (tag can't be searched, but post is visible)
-      await createPostWithTags(prisma, ['site:pixiv', 'normal']);
-      // Normal post
-      await createPostWithTags(prisma, ['normal', 'safe']);
-
-      const request = new NextRequest('http://localhost/api/posts/search?tags=normal');
-      const response = await GET(request);
-      const data = await response.json();
-
-      // hidden_tag post is excluded, site:pixiv post is included
-      expect(data.posts).toHaveLength(2);
-      expect(data.totalCount).toBe(2);
     });
   });
 

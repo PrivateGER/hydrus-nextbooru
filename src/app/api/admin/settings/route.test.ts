@@ -201,6 +201,39 @@ describe("Admin settings route", () => {
     expect(data.local.apiKey).toMatch(/^\*+/);
   });
 
+  it("omits blank API key updates while saving other settings", async () => {
+    mockGetTranslationSettings.mockResolvedValueOnce(createSettings());
+
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          openrouter: {
+            apiKey: "   ",
+            model: "google/gemini-3-flash-preview",
+            baseUrl: "https://openrouter.ai/api/v1",
+          },
+          local: {
+            apiKey: "",
+            model: "qwen2.5",
+            baseUrl: "http://localhost:11434/v1",
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      [settingsKeys.PROVIDER]: "local",
+      [settingsKeys.MODEL]: "google/gemini-3-flash-preview",
+      [settingsKeys.BASE_URL]: "https://openrouter.ai/api/v1",
+      [settingsKeys.LOCAL_MODEL]: "qwen2.5",
+      [settingsKeys.LOCAL_BASE_URL]: "http://localhost:11434/v1",
+    });
+  });
+
   it("returns 500 when PUT body parsing fails", async () => {
     const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(

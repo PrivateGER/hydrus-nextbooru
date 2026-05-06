@@ -24,6 +24,15 @@ interface SettingsUpdateBody {
   };
 }
 
+function normalizeApiKeyUpdate(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 /**
  * Return current translation settings and UI options with stored API keys masked.
  *
@@ -95,8 +104,9 @@ export async function PUT(request: NextRequest) {
     }
 
     if (body.openrouter) {
-      if (body.openrouter.apiKey !== undefined) {
-        updates[SETTINGS_KEYS.API_KEY] = body.openrouter.apiKey;
+      const apiKey = normalizeApiKeyUpdate(body.openrouter.apiKey);
+      if (apiKey !== undefined) {
+        updates[SETTINGS_KEYS.API_KEY] = apiKey;
       }
       if (body.openrouter.model !== undefined) {
         updates[SETTINGS_KEYS.MODEL] = body.openrouter.model;
@@ -107,8 +117,9 @@ export async function PUT(request: NextRequest) {
     }
 
     if (body.local) {
-      if (body.local.apiKey !== undefined) {
-        updates[SETTINGS_KEYS.LOCAL_API_KEY] = body.local.apiKey;
+      const apiKey = normalizeApiKeyUpdate(body.local.apiKey);
+      if (apiKey !== undefined) {
+        updates[SETTINGS_KEYS.LOCAL_API_KEY] = apiKey;
       }
       if (body.local.model !== undefined) {
         updates[SETTINGS_KEYS.LOCAL_MODEL] = body.local.model;

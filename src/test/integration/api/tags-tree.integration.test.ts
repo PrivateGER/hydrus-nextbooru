@@ -5,7 +5,6 @@ import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
 import { TagCategory } from '@/generated/prisma/client';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 
 let GET: typeof import('@/app/api/tags/tree/route').GET;
 
@@ -25,7 +24,6 @@ describe('GET /api/tags/tree (Integration)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
   });
 
   describe('no selected tags', () => {
@@ -65,6 +63,19 @@ describe('GET /api/tags/tree (Integration)', () => {
       const data = await response.json();
 
       expect(data.tags.every((t: { category: string }) => t.category === 'ARTIST')).toBe(true);
+    });
+
+    it('should reject invalid category filters', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['filter', 'result']);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=filter&category=INVALID');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.error).toBe('Invalid tag category');
     });
 
     it('should filter by search query', async () => {
@@ -182,16 +193,91 @@ describe('GET /api/tags/tree (Integration)', () => {
       expect(commonTag?.count).toBe(2); // 2 posts with filter+common
       expect(rareTag?.count).toBe(1); // 1 post with filter+rare
     });
+
+    it('should apply category filter to co-occurring tags only', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, [
+        'filter',
+        { name: 'artist result', category: TagCategory.ARTIST },
+        { name: 'general result', category: TagCategory.GENERAL },
+      ]);
+      await createPostWithTags(prisma, [
+        'filter',
+        { name: 'second artist', category: TagCategory.ARTIST },
+      ]);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=filter&category=ARTIST');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.postCount).toBe(2);
+      expect(data.tags).toHaveLength(2);
+      expect(data.tags.every((t: { category: string }) => t.category === 'ARTIST')).toBe(true);
+      expect(data.tags.map((t: { name: string }) => t.name)).toEqual(
+        expect.arrayContaining(['artist result', 'second artist'])
+      );
+    });
+
+    it('should apply text query filter to co-occurring tags only', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['filter', 'blue hair', 'red eyes']);
+      await createPostWithTags(prisma, ['filter', 'blue dress']);
+      await createPostWithTags(prisma, ['other', 'blue unrelated']);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=filter&q=blue');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.postCount).toBe(2);
+      const tagNames = data.tags.map((t: { name: string }) => t.name);
+      expect(tagNames).toContain('blue hair');
+      expect(tagNames).toContain('blue dress');
+      expect(tagNames).not.toContain('red eyes');
+      expect(tagNames).not.toContain('blue unrelated');
+    });
+
+    it('should order co-occurring tags by selected-post count and respect limit', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['filter', 'common', 'medium', 'rare']);
+      await createPostWithTags(prisma, ['filter', 'common', 'medium']);
+      await createPostWithTags(prisma, ['filter', 'common']);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=filter&limit=2');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.postCount).toBe(3);
+      expect(data.tags).toEqual([
+        expect.objectContaining({ name: 'common', count: 3 }),
+        expect.objectContaining({ name: 'medium', count: 2 }),
+      ]);
+    });
+
+    it('should match selected tags case-insensitively', async () => {
+      const prisma = getTestPrisma();
+
+      await createPostWithTags(prisma, ['Blue Eyes', 'co-occurring']);
+
+      const request = new NextRequest('http://localhost/api/tags/tree?selected=blue eyes');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.postCount).toBe(1);
+      expect(data.tags.map((t: { name: string }) => t.name)).toContain('co-occurring');
+    });
   });
 
-  describe('blacklist filtering', () => {
-    it('should exclude blacklisted tags from results', async () => {
+  describe('removed tag filtering', () => {
+    it('includes tags that were previously hidden from results', async () => {
       const prisma = getTestPrisma();
 
       await createPostWithTags(prisma, [
         'normal tag',
-        'site:pixiv', // Blacklisted
-        'hydl-import-time:2024', // Blacklisted by wildcard
+        'site:pixiv',
+        'hydl-import-time:2024',
       ]);
 
       const request = new NextRequest('http://localhost/api/tags/tree');
@@ -200,8 +286,8 @@ describe('GET /api/tags/tree (Integration)', () => {
 
       const tagNames = data.tags.map((t: { name: string }) => t.name);
       expect(tagNames).toContain('normal tag');
-      expect(tagNames).not.toContain('site:pixiv');
-      expect(tagNames).not.toContain('hydl-import-time:2024');
+      expect(tagNames).toContain('site:pixiv');
+      expect(tagNames).toContain('hydl-import-time:2024');
     });
   });
 
@@ -271,6 +357,7 @@ describe('GET /api/tags/tree (Integration)', () => {
       const tagNames = data.tags.map((t: { name: string }) => t.name);
       expect(tagNames).toContain('cooccurring tag');
       expect(tagNames).toContain('artist only tag');
+      expect(tagNames).not.toContain('maid');
     });
 
     it('should deduplicate selected tags', async () => {

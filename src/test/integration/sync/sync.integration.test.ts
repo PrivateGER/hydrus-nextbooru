@@ -4,7 +4,6 @@ import { setTestPrisma } from '@/lib/db';
 import { createMockHydrusServer, createMockHydrusState, addFilesToState, removeFilesFromState, type MockHydrusState } from '@/test/mocks/hydrus-server';
 import { createMockFileMetadata, createMockFileWithTags, createMockFileWithUrls } from '@/test/mocks/fixtures/hydrus-metadata';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 import type { SetupServer } from 'msw/node';
 
 let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
@@ -32,7 +31,6 @@ describe('syncFromHydrus (Integration)', () => {
   beforeEach(async () => {
     await cleanDatabase();
     invalidateAllCaches();
-    clearPatternCache();
 
     // Create fresh mock state and server for each test
     hydrusState = createMockHydrusState(0);

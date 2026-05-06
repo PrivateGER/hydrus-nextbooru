@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
-import { withBlacklistFilter, filterBlacklistedTags } from "@/lib/tag-blacklist";
-import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache";
+import { prisma, escapeSqlLike } from "@/lib/db";
+import { Prisma, TagCategory } from "@/generated/prisma/client";
+import { tagIdsByNameCache, treeResponseCache } from "@/lib/cache";
 
 /**
  * Provide tag suggestions and the count of matching posts based on query parameters and selected tags.
@@ -15,7 +14,7 @@ import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache"
  *
  * The handler returns tags that either match the search/category filters (when no `selected` tags are provided)
  * or co-occur on posts that contain at least one tag from each provided selected name (when `selected` is provided).
- * Results are filtered against an internal blacklist and cached for efficiency.
+ * Results are cached for efficiency.
  *
  * @param request - Incoming NextRequest containing URL search parameters described above.
  * @returns An object with:
@@ -26,9 +25,14 @@ import { tagIdsByNameCache, postIdsCache, treeResponseCache } from "@/lib/cache"
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const selectedParam = searchParams.get("selected") || "";
-  const category = searchParams.get("category") || "";
+  const rawCategory = searchParams.get("category") || "";
+  const category = rawCategory.toUpperCase();
   const query = searchParams.get("q") || "";
   const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100);
+
+  if (category && !Object.values(TagCategory).includes(category as TagCategory)) {
+    return NextResponse.json({ error: "Invalid tag category" }, { status: 400 });
+  }
 
   // Parse selected tags (comma-separated), deduplicate to avoid query issues
   const selectedTags = [...new Set(
@@ -70,7 +74,7 @@ export async function GET(request: NextRequest) {
 
       const [tags, totalPosts] = await Promise.all([
         prisma.tag.findMany({
-          where: withBlacklistFilter(baseWhere),
+          where: baseWhere,
           select: {
             id: true,
             name: true,
@@ -112,31 +116,31 @@ export async function GET(request: NextRequest) {
 
     const [artistTags, copyrightTags, characterTags, generalTags, metaTags, totalPosts] = await Promise.all([
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "ARTIST" }),
+        where: { category: "ARTIST" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.ARTIST,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "COPYRIGHT" }),
+        where: { category: "COPYRIGHT" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.COPYRIGHT,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "CHARACTER" }),
+        where: { category: "CHARACTER" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.CHARACTER,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "GENERAL" }),
+        where: { category: "GENERAL" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.GENERAL,
       }),
       prisma.tag.findMany({
-        where: withBlacklistFilter({ category: "META" }),
+        where: { category: "META" },
         select: { id: true, name: true, category: true, postCount: true },
         orderBy: [{ postCount: "desc" }],
         take: categoryLimits.META,
@@ -213,110 +217,81 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Step 2: Find posts that have at least one tag from EACH selected name
-  // Use INTERSECT for efficient multi-name queries
+  // Step 2: Find posts that have at least one tag from EACH selected name.
+  // Keep this in SQL so popular selected tags do not materialize large post ID
+  // arrays in the application process.
   const tagGroups = [...tagIdsByName.values()];
   const allTagIds = tagGroups.flat();
 
-  // Cache key based on sorted tag names (not IDs, since we search all IDs per name)
-  const postIdsCacheKey = sortedSelectedTags.join("\0");
+  const filteredPostsSubquery =
+    tagGroups.length === 1
+      ? Prisma.sql`SELECT DISTINCT "postId" FROM "PostTag" WHERE "tagId" = ANY(${tagGroups[0]}::int[])`
+      : Prisma.join(
+          tagGroups.map(
+            (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
+          ),
+          " INTERSECT "
+        );
 
-  let postIds = postIdsCache.get(postIdsCacheKey);
+  const categoryFilter = category
+    ? Prisma.sql`AND t.category = ${category}::"TagCategory"`
+    : Prisma.sql``;
+  const queryFilter = query
+    ? Prisma.sql`AND t.name ILIKE ${`%${escapeSqlLike(query)}%`}`
+    : Prisma.sql``;
 
-  if (!postIds) {
-    if (tagGroups.length === 1) {
-      // Single tag name: find posts with ANY of the matching tag IDs
-      const posts = await prisma.postTag.findMany({
-        where: { tagId: { in: tagGroups[0] } },
-        select: { postId: true },
-        distinct: ["postId"],
-      });
-      postIds = posts.map((p) => p.postId);
-    } else {
-      // Multiple tag names: use INTERSECT to find posts with at least one from each group
-      // This is much faster than nested subqueries for large datasets
-      const intersectParts = tagGroups.map(
-        (group) => Prisma.sql`SELECT "postId" FROM "PostTag" WHERE "tagId" = ANY(${group}::int[])`
-      );
-      const intersectQuery = Prisma.join(intersectParts, " INTERSECT ");
-
-      const result = await prisma.$queryRaw<{ postId: number }[]>`${intersectQuery}`;
-      postIds = result.map((r) => r.postId);
-    }
-    postIdsCache.set(postIdsCacheKey, postIds);
-  }
-
-  const postCount = postIds.length;
-
-  if (postCount === 0) {
-    return NextResponse.json({
-      tags: [],
-      postCount: 0,
-      selectedTags,
-    });
-  }
-
-  // Step 3: Find tags that appear on these posts (excluding already selected)
-  const baseWhere: Prisma.TagWhereInput = {
-    // Exclude all tag IDs matching selected names (across all categories)
-    id: { notIn: allTagIds },
-    // Only tags on posts with all selected tags
-    posts: {
-      some: {
-        postId: { in: postIds },
-      },
-    },
+  type SelectedTagsResult = {
+    postCount: number;
+    tags: Array<{ id: number; name: string; category: string; count: number }>;
   };
 
-  if (category) {
-    baseWhere.category = category as Prisma.EnumTagCategoryFilter;
-  }
+  const [selectedResult] = await prisma.$queryRaw<SelectedTagsResult[]>`
+    WITH filtered_posts AS (
+      ${filteredPostsSubquery}
+    ),
+    filtered_total AS (
+      SELECT COUNT(*)::int AS total FROM filtered_posts
+    ),
+    suggested_tags AS (
+      SELECT
+        t.id,
+        t.name,
+        t.category,
+        COUNT(pt."postId")::int AS count
+      FROM filtered_posts fp
+      JOIN "PostTag" pt ON pt."postId" = fp."postId"
+      JOIN "Tag" t ON t.id = pt."tagId"
+      WHERE t.id != ALL(${allTagIds}::int[])
+        ${categoryFilter}
+        ${queryFilter}
+      GROUP BY t.id, t.name, t.category
+      ORDER BY count DESC, t.id ASC
+      LIMIT ${limit}
+    )
+    SELECT
+      ft.total AS "postCount",
+      COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'id', st.id,
+            'name', st.name,
+            'category', st.category,
+            'count', st.count
+          )
+          ORDER BY st.count DESC, st.id ASC
+        ) FILTER (WHERE st.id IS NOT NULL),
+        '[]'::jsonb
+      ) AS tags
+    FROM filtered_total ft
+    LEFT JOIN suggested_tags st ON TRUE
+    GROUP BY ft.total
+  `;
 
-  if (query) {
-    baseWhere.name = {
-      contains: query,
-      mode: "insensitive",
-    };
-  }
-
-  // Use _count aggregation - database does the counting, not JS
-  const tags = await prisma.tag.findMany({
-    where: withBlacklistFilter(baseWhere),
-    select: {
-      id: true,
-      name: true,
-      category: true,
-      _count: {
-        select: {
-          posts: {
-            where: {
-              postId: { in: postIds },
-            },
-          },
-        },
-      },
-    },
-    orderBy: {
-      posts: { _count: "desc" },
-    },
-    take: limit * 2, // Over-fetch to account for blacklist filtering
-  });
-
-  // Map and filter results
-  const mappedTags = tags.map((tag) => ({
-    id: tag.id,
-    name: tag.name,
-    category: tag.category,
-    count: tag._count.posts,
-  }));
-
-  const sortedTags = filterBlacklistedTags(mappedTags)
-    .filter((tag) => tag.count > 0)
-    .slice(0, limit);
+  const sortedTags = selectedResult?.tags ?? [];
 
   const result = {
     tags: sortedTags,
-    postCount,
+    postCount: selectedResult?.postCount ?? 0,
   };
 
   // Cache the response

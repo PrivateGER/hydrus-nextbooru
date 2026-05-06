@@ -68,7 +68,6 @@ export function HelpSection() {
           {[
             { name: "LOG_QUERIES", desc: "Log SQL queries with timing (true/false)" },
             { name: "LOG_LEVEL", desc: "Logging verbosity (debug, info, warn, error)" },
-            { name: "TAG_BLACKLIST", desc: "Comma-separated tags to hide from display" },
           ].map(({ name, desc }) => (
             <div key={name} className="flex items-start gap-3 rounded-lg bg-zinc-300/30 dark:bg-zinc-700/30 p-2.5">
               <code className="shrink-0 text-xs font-medium text-zinc-600 dark:text-zinc-400">{name}</code>

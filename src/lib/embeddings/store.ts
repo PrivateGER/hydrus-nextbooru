@@ -1,6 +1,5 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
-import { getPostHidingSqlCondition } from "@/lib/tag-blacklist";
 import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
 import {
   type EmbeddingConfig,
@@ -53,6 +52,7 @@ export interface EmbeddedRelatedPost {
 }
 
 export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
+const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
 
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
@@ -269,7 +269,6 @@ export async function searchPostsByEmbedding(options: {
   const embedding = validateEmbeddingVector(options.embedding, config.dimensions);
   const vector = toVectorLiteral(embedding);
   const vectorType = Prisma.raw(`vector(${config.dimensions})`);
-  const postHidingCondition = getPostHidingSqlCondition("p.id");
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
   const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
@@ -304,7 +303,6 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND ${postHidingCondition}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
       LIMIT ${resultCap}
@@ -338,7 +336,6 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND ${postHidingCondition}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
       LIMIT ${limit} OFFSET ${skip}
@@ -353,7 +350,6 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND ${postHidingCondition}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
     `,
   ]);
@@ -383,9 +379,11 @@ export async function findRelatedPostsByEmbedding(options: {
   }
 
   const vectorType = Prisma.raw(`vector(${config.dimensions})`);
-  const postHidingCondition = getPostHidingSqlCondition("related.id");
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
+  const maxDistanceFilter = maxDistance === null
+    ? Prisma.empty
+    : Prisma.sql`AND (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance}`;
 
   type ResultRow = {
     id: number;
@@ -418,27 +416,33 @@ export async function findRelatedPostsByEmbedding(options: {
       related.height,
       related.blurhash,
       related."mimeType",
-      (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+      nearest.distance
     FROM source
-    JOIN "PostEmbedding" pe
-      ON pe."baseUrl" = ${config.baseUrl}
-      AND pe.model = ${config.model}
-      AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
-      AND pe.embedding IS NOT NULL
-      AND pe."postId" <> source.post_id
-    JOIN "Post" related ON related.id = pe."postId"
-    WHERE ${postHidingCondition}
-      AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance})
-      AND NOT EXISTS (
-        SELECT 1
-        FROM "PostGroup" source_group
-        JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
-        WHERE source_group."postId" = source.post_id
-          AND related_group."postId" = related.id
-      )
-    ORDER BY pe.embedding::${vectorType} <=> source.embedding
+    CROSS JOIN LATERAL (
+      SELECT
+        pe."postId",
+        (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+      FROM "PostEmbedding" pe
+      WHERE pe."baseUrl" = ${config.baseUrl}
+        AND pe.model = ${config.model}
+        AND pe.dimensions = ${config.dimensions}
+        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+        AND pe.embedding IS NOT NULL
+        AND pe."postId" <> source.post_id
+        ${maxDistanceFilter}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "PostGroup" source_group
+          JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
+          WHERE source_group."postId" = source.post_id
+            AND related_group."postId" = pe."postId"
+        )
+      ORDER BY pe.embedding::${vectorType} <=> source.embedding
+      LIMIT ${RELATED_EMBEDDING_CANDIDATE_LIMIT}
+    ) nearest
+    JOIN "Post" related ON related.id = nearest."postId"
+    ORDER BY nearest.distance
     LIMIT ${limit}
   `;
 

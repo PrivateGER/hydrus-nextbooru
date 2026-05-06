@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
-import { withBlacklistFilter, filterBlacklistedTags, isTagBlacklisted } from "@/lib/tag-blacklist";
 import { tagIdsByNameCache } from "@/lib/cache";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 import {
@@ -53,16 +52,15 @@ export async function GET(request: NextRequest) {
   // Parse selected tags with negation support
   const { includeTags: rawSelectedTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(selectedParam);
 
-  // Filter out blacklisted tags from selected tags - users should not be able to filter using blacklisted tags
-  const selectedTags = rawSelectedTags.filter(tag => !isTagBlacklisted(tag));
-  const excludeTags = rawExcludeTags.filter(tag => !isTagBlacklisted(tag));
+  const selectedTags = rawSelectedTags;
+  const excludeTags = rawExcludeTags;
 
   // Return popular tags if no query AND no selected tags (for initial suggestions)
   if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
     const totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
-      where: withBlacklistFilter({}),
+      where: {},
       select: {
         id: true,
         name: true,
@@ -110,12 +108,12 @@ export async function GET(request: NextRequest) {
     const totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
-      where: withBlacklistFilter({
+      where: {
         name: {
           contains: query,
           mode: "insensitive",
         },
-      }),
+      },
       select: {
         id: true,
         name: true,
@@ -386,10 +384,9 @@ export async function GET(request: NextRequest) {
     GROUP BY t.id, t.name, t.category
     ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${limit * 4}  -- Fetch 4x limit to account for blacklist filtering and count > 0 filtering done in-memory
+    LIMIT ${limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
   `;
 
-  // Apply blacklist filter in memory (simpler than dynamic SQL for complex patterns)
   const mappedTags = coOccurringTags.map((tag) => ({
     id: tag.id,
     name: tag.name,
@@ -398,7 +395,7 @@ export async function GET(request: NextRequest) {
     remainingCount: Math.max(0, Number(tag.remaining_count)),
   }));
 
-  const filteredTags = filterBlacklistedTags(mappedTags)
+  const filteredTags = mappedTags
     .filter((tag) => tag.count > 0)
     .slice(0, limit);
 

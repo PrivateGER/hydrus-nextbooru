@@ -3,7 +3,6 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
-import { clearPatternCache } from '@/lib/tag-blacklist';
 import { seedDataset, getRandomTagNames } from './seeders';
 import { benchmarkWithStats, assertPerformance, stats, formatStats } from './helpers';
 
@@ -32,7 +31,6 @@ describe('Performance: Tag Search API', () => {
     it('should complete simple search under 50ms p95', async () => {
       // Warm up caches
       invalidateAllCaches();
-      clearPatternCache();
 
       const s = await benchmarkWithStats(
         'Simple tag search (q=general)',
@@ -80,7 +78,6 @@ describe('Performance: Tag Search API', () => {
     it('should complete 1-tag co-occurrence under 100ms p95', async () => {
       const prisma = getTestPrisma();
       invalidateAllCaches();
-      clearPatternCache();
 
       // Get a popular tag to use as selected
       const [selectedTag] = await getRandomTagNames(prisma, 1, 50);
@@ -102,7 +99,6 @@ describe('Performance: Tag Search API', () => {
     it('should complete 2-tag co-occurrence under 150ms p95', async () => {
       const prisma = getTestPrisma();
       invalidateAllCaches();
-      clearPatternCache();
 
       const selectedTags = await getRandomTagNames(prisma, 2, 30);
       const selectedParam = selectedTags.map(t => encodeURIComponent(t)).join(',');
@@ -124,7 +120,6 @@ describe('Performance: Tag Search API', () => {
     it('should complete 3-tag co-occurrence under 200ms p95', async () => {
       const prisma = getTestPrisma();
       invalidateAllCaches();
-      clearPatternCache();
 
       const selectedTags = await getRandomTagNames(prisma, 3, 20);
       const selectedParam = selectedTags.map(t => encodeURIComponent(t)).join(',');
@@ -146,7 +141,6 @@ describe('Performance: Tag Search API', () => {
     it('should scale sub-linearly with selected tag count', async () => {
       const prisma = getTestPrisma();
       invalidateAllCaches();
-      clearPatternCache();
 
       const results: Record<string, ReturnType<typeof stats>> = {};
 
@@ -187,7 +181,6 @@ describe('Performance: Tag Search API', () => {
 
       // Clear caches
       invalidateAllCaches();
-      clearPatternCache();
 
       const [selectedTag] = await getRandomTagNames(prisma, 1, 50);
       const url = `http://localhost/api/tags/search?q=general&selected=${encodeURIComponent(selectedTag)}`;
@@ -196,7 +189,6 @@ describe('Performance: Tag Search API', () => {
       const coldTimes: number[] = [];
       for (let i = 0; i < 20; i++) {
         invalidateAllCaches();
-        clearPatternCache();
         const start = performance.now();
         const request = new NextRequest(url);
         await GET(request);
@@ -205,7 +197,6 @@ describe('Performance: Tag Search API', () => {
 
       // Warm run (with cache)
       invalidateAllCaches();
-      clearPatternCache();
       // Prime the cache
       await GET(new NextRequest(url));
 
