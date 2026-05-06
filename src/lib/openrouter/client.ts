@@ -13,11 +13,11 @@ import type {
   ImageEmbeddingsRequest,
   EmbeddingMultimodalInput,
 } from "./types";
-import { EMBEDDING_INPUT_TYPES } from "./types";
+import { DEFAULT_CHAT_MODEL, EMBEDDING_INPUT_TYPES } from "./types";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
 
-const DEFAULT_MODEL = "google/gemini-3-flash-preview";
+const DEFAULT_MODEL = DEFAULT_CHAT_MODEL;
 const DEFAULT_TARGET_LANG = "en";
 
 const LANGUAGE_NAMES: Record<string, string> = {

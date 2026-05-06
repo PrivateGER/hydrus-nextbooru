@@ -182,17 +182,22 @@ export interface ModelDefinition {
   dimensions?: number[];
 }
 
+export const DEFAULT_CHAT_MODEL = "google/gemini-3-flash-preview";
+
 // Popular models available for selection
 export const POPULAR_MODELS: ModelDefinition[] = [
   // Vision models (can translate text in images)
-  { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview", vision: true },
-  { id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro Preview", vision: true, expensive: true },
-  { id: "openai/gpt-5.2", name: "GPT-5.2", vision: true, expensive: true },
-  { id: "x-ai/grok-4.1-fast", name: "Grok 4.1 Fast", vision: true },
-  { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", vision: true, expensive: true },
+  { id: DEFAULT_CHAT_MODEL, name: "Gemini 3 Flash Preview", vision: true },
+  { id: "~google/gemini-pro-latest", name: "Gemini Pro Latest", vision: true, expensive: true },
+  { id: "~openai/gpt-mini-latest", name: "GPT Mini Latest", vision: true },
+  { id: "~openai/gpt-latest", name: "GPT Latest", vision: true, expensive: true },
+  { id: "~anthropic/claude-haiku-latest", name: "Claude Haiku Latest", vision: true },
+  { id: "~anthropic/claude-sonnet-latest", name: "Claude Sonnet Latest", vision: true, expensive: true },
+  { id: "qwen/qwen3.6-flash", name: "Qwen3.6 Flash", vision: true },
+  { id: "mistralai/mistral-medium-3-5", name: "Mistral Medium 3.5", vision: true, expensive: true },
   // Text-only models (notes only)
-  { id: "deepseek/deepseek-v3.2", name: "DeepSeek V3.2" },
-  { id: "mistralai/mistral-small-creative", name: "Mistral Small Creative" },
+  { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+  { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
 ];
 
 export const DEFAULT_EMBEDDING_MODEL = "google/gemini-embedding-2-preview";
@@ -208,11 +213,6 @@ export const POPULAR_EMBEDDING_MODELS: ModelDefinition[] = [
     name: "Gemini Embedding 2 Preview",
     vision: true,
     dimensions: [...EMBEDDING_DIMENSION_OPTIONS],
-  },
-  {
-    id: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
-    name: "Llama Nemotron Embed VL 1B V2 (free)",
-    vision: true,
   },
 ];
 
