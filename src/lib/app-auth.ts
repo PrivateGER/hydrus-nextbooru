@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 const READ_API_KEY_ENV = "NEXTBOORU_READ_API_KEY";
@@ -12,16 +14,14 @@ export function isReadApiAuthConfigured(): boolean {
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
-  const maxLen = Math.max(a.length, b.length);
-  let result = a.length ^ b.length;
+  const bufferA = Buffer.from(a, "utf8");
+  const bufferB = Buffer.from(b, "utf8");
 
-  for (let i = 0; i < maxLen; i++) {
-    const charA = i < a.length ? a.charCodeAt(i) : 0;
-    const charB = i < b.length ? b.charCodeAt(i) : 0;
-    result |= charA ^ charB;
+  if (bufferA.length !== bufferB.length) {
+    return false;
   }
 
-  return result === 0;
+  return nodeTimingSafeEqual(bufferA, bufferB);
 }
 
 function extractReadApiToken(request: NextRequest): string | null {
