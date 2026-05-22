@@ -1,21 +1,13 @@
-import { NextRequest, NextResponse, connection } from "next/server";
-import { isReadApiAuthConfigured, verifyReadApiAccess } from "@/lib/app-auth";
+import { NextResponse, connection } from "next/server";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   if (process.env.NODE_ENV !== "test") {
     await connection();
   }
-  const auth = verifyReadApiAccess(request);
-  if (!auth.authorized) return auth.response;
 
   return NextResponse.json({
     name: "hydrus-nextbooru",
     version: process.env.npm_package_version ?? null,
-    readAuthRequired: isReadApiAuthConfigured(),
-    auth: {
-      bearer: true,
-      header: "X-Nextbooru-Api-Key",
-    },
     endpoints: {
       capabilities: "/api/app/capabilities",
       postSearch: "/api/posts/search",

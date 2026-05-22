@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { verifyReadApiAccess } from "@/lib/app-auth";
 
 interface RouteParams {
   params: Promise<{ hash: string }>;
@@ -8,10 +7,7 @@ interface RouteParams {
 
 const HASH_PATTERN = /^[a-fA-F0-9]{64}$/;
 
-export async function GET(request: NextRequest, { params }: RouteParams) {
-  const auth = verifyReadApiAccess(request);
-  if (!auth.authorized) return auth.response;
-
+export async function GET(_request: NextRequest, { params }: RouteParams) {
   const { hash: rawHash } = await params;
   if (!HASH_PATTERN.test(rawHash)) {
     return NextResponse.json({ error: "Invalid hash format" }, { status: 400 });

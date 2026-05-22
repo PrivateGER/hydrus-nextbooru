@@ -79,8 +79,6 @@ Use the docker compose stack for actual deployment!
    HYDRUS_API_URL=http://localhost:45869
    HYDRUS_API_KEY=your_api_key_here
    HYDRUS_FILES_PATH=/path/to/hydrus/db/client_files
-   # Optional: require this token for companion app API endpoints
-   NEXTBOORU_READ_API_KEY=long-random-read-token
    ```
 
 4. Set up the database:

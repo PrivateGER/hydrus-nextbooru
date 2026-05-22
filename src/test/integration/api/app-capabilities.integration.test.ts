@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
 
 let GET: typeof import('@/app/api/app/capabilities/route').GET;
@@ -12,11 +12,7 @@ async function loadRoute() {
 }
 
 describe('GET /api/app/capabilities', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it('describes companion API capabilities without requiring auth by default', async () => {
+  it('describes public companion API capabilities', async () => {
     const handler = await loadRoute();
     const response = await handler(new NextRequest('http://localhost/api/app/capabilities'));
     const data = await response.json();
@@ -24,7 +20,6 @@ describe('GET /api/app/capabilities', () => {
     expect(response.status).toBe(200);
     expect(data).toMatchObject({
       name: 'hydrus-nextbooru',
-      readAuthRequired: false,
       endpoints: expect.objectContaining({
         postDetail: '/api/posts/{hash}',
         postSearch: '/api/posts/search',
@@ -42,37 +37,7 @@ describe('GET /api/app/capabilities', () => {
         translations: true,
       }),
     });
-  });
-
-  it('requires a matching bearer token when NEXTBOORU_READ_API_KEY is configured', async () => {
-    vi.stubEnv('NEXTBOORU_READ_API_KEY', 'secret-token');
-    const handler = await loadRoute();
-
-    const unauthenticated = await handler(new NextRequest('http://localhost/api/app/capabilities'));
-    expect(unauthenticated.status).toBe(401);
-
-    const wrongToken = await handler(new NextRequest('http://localhost/api/app/capabilities', {
-      headers: { authorization: 'Bearer wrong-token' },
-    }));
-    expect(wrongToken.status).toBe(401);
-
-    const authenticated = await handler(new NextRequest('http://localhost/api/app/capabilities', {
-      headers: { authorization: 'Bearer secret-token' },
-    }));
-    const data = await authenticated.json();
-
-    expect(authenticated.status).toBe(200);
-    expect(data.readAuthRequired).toBe(true);
-  });
-
-  it('accepts the X-Nextbooru-Api-Key header for clients that cannot set Authorization', async () => {
-    vi.stubEnv('NEXTBOORU_READ_API_KEY', 'secret-token');
-    const handler = await loadRoute();
-
-    const response = await handler(new NextRequest('http://localhost/api/app/capabilities', {
-      headers: { 'x-nextbooru-api-key': 'secret-token' },
-    }));
-
-    expect(response.status).toBe(200);
+    expect(data).not.toHaveProperty('readAuthRequired');
+    expect(data).not.toHaveProperty('auth');
   });
 });
