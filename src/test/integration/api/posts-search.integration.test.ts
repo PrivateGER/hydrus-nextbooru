@@ -167,6 +167,8 @@ describe('GET /api/posts/search (Integration)', () => {
         width: 1920,
         height: 1080,
         mimeType: 'image/png',
+        extension: '.png',
+        rating: 'UNRATED',
         blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH',
       });
     });

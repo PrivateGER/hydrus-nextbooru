@@ -58,6 +58,8 @@ export interface PostResult {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  extension?: string;
+  rating?: string;
   distance?: number;
   score?: number;
 }
@@ -551,7 +553,16 @@ export async function searchPosts(
       orderBy: { importedAt: "desc" },
       skip,
       take: limit,
-      select: { id: true, hash: true, width: true, height: true, blurhash: true, mimeType: true },
+      select: {
+        id: true,
+        hash: true,
+        width: true,
+        height: true,
+        blurhash: true,
+        mimeType: true,
+        extension: true,
+        rating: true,
+      },
     }),
     prisma.post.count({ where }),
   ]);

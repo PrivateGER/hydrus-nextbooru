@@ -21,7 +21,7 @@ const RATE_LIMIT_CONFIG = {
  * - `limit`: results per page (default 48, max 100)
  *
  * @returns An object containing:
- *   - `posts`: array of matching posts (selected fields: `id`, `hash`, `width`, `height`, `blurhash`, `mimeType`)
+ *   - `posts`: array of matching posts (selected fields: `id`, `hash`, `width`, `height`, `blurhash`, `mimeType`, `extension`, `rating`)
  *   - `totalCount`: total number of matching posts
  *   - `totalPages`: number of pages based on the requested `limit`
  *   - `resolvedWildcards` (optional): array of resolved wildcard patterns with matched `tagIds`, `tagNames`, `tagCategories`, and `truncated` flag
