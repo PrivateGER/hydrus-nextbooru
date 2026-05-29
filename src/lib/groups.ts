@@ -1,4 +1,4 @@
-import { prisma as defaultPrisma } from "@/lib/db";
+import { escapeSqlLike, prisma as defaultPrisma } from "@/lib/db";
 import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
 
 export type OrderOption = "random" | "newest" | "oldest" | "largest";
@@ -6,6 +6,8 @@ const GROUP_PREVIEW_POST_LIMIT = 10;
 
 export interface GroupsSearchParams {
   typeFilter?: SourceType;
+  query?: string;
+  creatorFilter?: string;
   order?: OrderOption;
   page?: number;
   pageSize?: number;
@@ -83,6 +85,68 @@ export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): 
   }));
 }
 
+function normalizeTextFilter(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function containsPattern(value: string): string {
+  return `%${escapeSqlLike(value)}%`;
+}
+
+function buildGroupsWhereClause({
+  typeFilter,
+  query,
+  creatorFilter,
+}: Pick<GroupsSearchParams, "typeFilter" | "query" | "creatorFilter">): Prisma.Sql {
+  const conditions: Prisma.Sql[] = [];
+  const normalizedQuery = normalizeTextFilter(query);
+  const normalizedCreatorFilter = normalizeTextFilter(creatorFilter);
+
+  if (typeFilter) {
+    conditions.push(Prisma.sql`g."sourceType" = ${typeFilter}::"SourceType"`);
+  }
+
+  if (normalizedQuery) {
+    const pattern = containsPattern(normalizedQuery);
+    conditions.push(Prisma.sql`(
+      g."sourceId" ILIKE ${pattern}
+      OR g.title ILIKE ${pattern}
+      OR ct."translatedContent" ILIKE ${pattern}
+      OR EXISTS (
+        SELECT 1
+        FROM "PostGroup" artist_pg
+        JOIN "PostTag" artist_pt ON artist_pt."postId" = artist_pg."postId"
+        JOIN "Tag" artist_t ON artist_t.id = artist_pt."tagId"
+        WHERE artist_pg."groupId" = g.id
+          AND artist_t.category = 'ARTIST'::"TagCategory"
+          AND artist_t.name !~ '^[0-9]+$'
+          AND artist_t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+          AND artist_t.name ILIKE ${pattern}
+      )
+    )`);
+  }
+
+  if (normalizedCreatorFilter) {
+    const pattern = containsPattern(normalizedCreatorFilter);
+    conditions.push(Prisma.sql`EXISTS (
+      SELECT 1
+      FROM "PostGroup" creator_pg
+      JOIN "PostTag" creator_pt ON creator_pt."postId" = creator_pg."postId"
+      JOIN "Tag" creator_t ON creator_t.id = creator_pt."tagId"
+      WHERE creator_pg."groupId" = g.id
+        AND creator_t.category = 'ARTIST'::"TagCategory"
+        AND creator_t.name !~ '^[0-9]+$'
+        AND creator_t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+        AND creator_t.name ILIKE ${pattern}
+    )`);
+  }
+
+  return conditions.length > 0
+    ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
+    : Prisma.empty;
+}
+
 /**
  * Search for merged groups with pagination and ordering
  */
@@ -92,6 +156,8 @@ export async function searchGroups(
 ): Promise<GroupsSearchResult> {
   const {
     typeFilter,
+    query,
+    creatorFilter,
     order = "random",
     page = 1,
     pageSize = 50,
@@ -111,6 +177,7 @@ export async function searchGroups(
     oldest: Prisma.sql`ORDER BY min_group_id ASC`,
     largest: Prisma.sql`ORDER BY max_post_count DESC, min_group_id DESC`,
   }[order];
+  const whereClause = buildGroupsWhereClause({ typeFilter, query, creatorFilter });
 
   // Get merged groups - groups with identical posts are combined
   const mergedGroupsRaw = await prisma.$queryRaw<{
@@ -135,7 +202,7 @@ export async function searchGroups(
       FROM "Group" g
       JOIN "PostGroup" pg ON pg."groupId" = g.id
       LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
-      ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
+      ${whereClause}
       GROUP BY g.id, ct."translatedContent"
       HAVING COUNT(pg."postId") >= 2
     )
@@ -273,7 +340,8 @@ export async function searchGroups(
           MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
         FROM "Group" g
         JOIN "PostGroup" pg ON pg."groupId" = g.id
-        ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
+        LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+        ${whereClause}
         GROUP BY g.id
         HAVING COUNT(pg."postId") >= 2
       ) sub
