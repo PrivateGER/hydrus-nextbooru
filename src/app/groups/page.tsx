@@ -8,6 +8,7 @@ import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { Pagination } from "@/components/pagination";
 import { SourceBadge } from "@/components/source-badge";
 import { PageHeaderSkeleton, FiltersSkeleton, GroupCardSkeleton } from "@/components/skeletons";
+import { GroupsSearchControls } from "@/components/groups-search-controls";
 import { searchGroups, OrderOption } from "@/lib/groups";
 import { parseGroupsPageParams, type GroupsPageRawParams } from "@/lib/groups-page-params";
 
@@ -135,51 +136,10 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
         <span className="text-sm text-zinc-500 dark:text-zinc-400">{countLabel}</span>
       </div>
 
-      <form action="/groups" className="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700/50 dark:bg-zinc-800/80">
-        {typeFilter && <input type="hidden" name="type" value={typeFilter} />}
-        <input type="hidden" name="order" value={order} />
-        {order === "random" && seed && <input type="hidden" name="seed" value={seed} />}
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto]">
-          <div>
-            <label htmlFor="groups-search" className="sr-only">Search groups</label>
-            <input
-              id="groups-search"
-              name="q"
-              type="search"
-              defaultValue={query}
-              placeholder="Search groups"
-              className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="groups-creator" className="sr-only">Filter by creator</label>
-            <input
-              id="groups-creator"
-              name="creator"
-              type="search"
-              defaultValue={creatorFilter}
-              placeholder="Filter by creator"
-              className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="submit"
-              className="h-10 rounded-md bg-blue-600 px-4 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-            >
-              Apply
-            </button>
-            {hasTextFilters && (
-              <Link
-                href={buildUrl({ query: null, creator: null, page: 1 })}
-                className="h-10 rounded-md px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
-              >
-                Clear
-              </Link>
-            )}
-          </div>
-        </div>
-      </form>
+      <GroupsSearchControls
+        initialQuery={query}
+        initialCreator={creatorFilter}
+      />
 
       {/* Filters row */}
       <div className="flex flex-wrap items-center gap-4">

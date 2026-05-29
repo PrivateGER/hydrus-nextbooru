@@ -1,5 +1,8 @@
 import { escapeSqlLike, prisma as defaultPrisma } from "@/lib/db";
 import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
+import { isValidCreatorName } from "@/lib/creator-names";
+
+export { PIXIV_USER_PATTERN, isValidCreatorName } from "@/lib/creator-names";
 
 export type OrderOption = "random" | "newest" | "oldest" | "largest";
 const GROUP_PREVIEW_POST_LIMIT = 10;
@@ -36,16 +39,6 @@ export interface MergedGroup {
       height: number | null;
     };
   }>;
-}
-
-/** Matches Pixiv placeholder usernames like "user abcd1234" or "user_abcd1234" */
-export const PIXIV_USER_PATTERN = /^user[\s_]*[a-z]{4}\d{4}$/i;
-
-/** Checks if a creator name is valid (not numeric-only or Pixiv placeholder) */
-export function isValidCreatorName(name: string): boolean {
-  if (/^\d+$/.test(name)) return false;
-  if (PIXIV_USER_PATTERN.test(name)) return false;
-  return true;
 }
 
 export interface TypeCount {

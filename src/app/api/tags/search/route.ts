@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
+import { Prisma, TagCategory } from "@/generated/prisma/client";
 import { tagIdsByNameCache } from "@/lib/cache";
 import { checkApiRateLimit } from "@/lib/rate-limit";
+import { isValidCreatorName } from "@/lib/creator-names";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -22,6 +23,108 @@ const RATE_LIMIT_CONFIG = {
   limit: 120,
   windowMs: 60 * 1000,
 };
+
+interface RegularTagSuggestion {
+  id: number;
+  name: string;
+  category: string;
+  count: number;
+  remainingCount: number;
+}
+
+function validCreatorSqlFilter(enabled: boolean): Prisma.Sql {
+  return enabled
+    ? Prisma.sql`
+      AND t.name !~ '^[0-9]+$'
+      AND t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+    `
+    : Prisma.empty;
+}
+
+function eligibleGroupPostsSubquery(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT DISTINCT pg."postId"
+    FROM "PostGroup" pg
+    JOIN (
+      SELECT "groupId"
+      FROM "PostGroup"
+      GROUP BY "groupId"
+      HAVING COUNT("postId") >= 2
+    ) eligible_groups ON eligible_groups."groupId" = pg."groupId"
+  `;
+}
+
+async function searchGroupedTagSuggestions({
+  query,
+  categoryFilter,
+  validCreatorsOnly,
+  limit,
+}: {
+  query: string;
+  categoryFilter: TagCategory | undefined;
+  validCreatorsOnly: boolean;
+  limit: number;
+}): Promise<RegularTagSuggestion[]> {
+  const hasSearchQuery = query.length > 0;
+  const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
+  const nameSqlFilter = hasSearchQuery
+    ? Prisma.sql`AND t.name ILIKE ${searchPattern}`
+    : Prisma.empty;
+  const categorySqlFilter = categoryFilter
+    ? Prisma.sql`AND t.category = ${categoryFilter}::"TagCategory"`
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<Array<{
+    id: number;
+    name: string;
+    category: string;
+    count: bigint;
+    remaining_count: bigint;
+  }>>`
+    WITH eligible_group_posts AS (
+      ${eligibleGroupPostsSubquery()}
+    ),
+    eligible_total AS (
+      SELECT COUNT(*)::bigint AS total FROM eligible_group_posts
+    ),
+    grouped_tags AS (
+      SELECT
+        t.id,
+        t.name,
+        t.category,
+        COUNT(DISTINCT pt."postId")::bigint AS tag_count
+      FROM "Tag" t
+      JOIN "PostTag" pt ON pt."tagId" = t.id
+      JOIN eligible_group_posts egp ON egp."postId" = pt."postId"
+      WHERE TRUE
+        ${categorySqlFilter}
+        ${nameSqlFilter}
+        ${validCreatorSqlFilter(validCreatorsOnly)}
+      GROUP BY t.id, t.name, t.category
+    )
+    SELECT
+      grouped_tags.id,
+      grouped_tags.name,
+      grouped_tags.category,
+      grouped_tags.tag_count AS count,
+      GREATEST(0, eligible_total.total - grouped_tags.tag_count) AS remaining_count
+    FROM grouped_tags
+    CROSS JOIN eligible_total
+    ORDER BY grouped_tags.tag_count DESC, grouped_tags.name ASC
+    LIMIT ${validCreatorsOnly ? limit * 5 : limit}
+  `;
+
+  return rows
+    .map((tag) => ({
+      id: tag.id,
+      name: tag.name,
+      category: tag.category,
+      count: Number(tag.count),
+      remainingCount: Number(tag.remaining_count),
+    }))
+    .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
+    .slice(0, limit);
+}
 
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
@@ -48,6 +151,13 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get("q") || "";
   const limit = Math.min(parseInt(searchParams.get("limit") || "20", 10), 50);
   const selectedParam = searchParams.get("selected") || "";
+  const categoryParam = searchParams.get("category");
+  const categoryFilter = categoryParam && Object.values(TagCategory).includes(categoryParam as TagCategory)
+    ? categoryParam as TagCategory
+    : undefined;
+  const validCreatorsOnly = categoryFilter === TagCategory.ARTIST && searchParams.get("validCreators") === "true";
+  const withGroupsOnly = searchParams.get("withGroups") === "true";
+  const tagTake = validCreatorsOnly ? limit * 5 : limit;
 
   // Parse selected tags with negation support
   const { includeTags: rawSelectedTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(selectedParam);
@@ -57,10 +167,21 @@ export async function GET(request: NextRequest) {
 
   // Return popular tags if no query AND no selected tags (for initial suggestions)
   if (query.length < 1 && selectedTags.length === 0 && excludeTags.length === 0) {
+    if (withGroupsOnly) {
+      const tags = await searchGroupedTagSuggestions({
+        query,
+        categoryFilter,
+        validCreatorsOnly,
+        limit,
+      });
+
+      return NextResponse.json({ tags });
+    }
+
     const totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
-      where: {},
+      where: categoryFilter ? { category: categoryFilter } : {},
       select: {
         id: true,
         name: true,
@@ -68,11 +189,11 @@ export async function GET(request: NextRequest) {
         postCount: true,
       },
       orderBy: { postCount: "desc" },
-      take: limit,
+      take: tagTake,
     });
 
     // Add all meta tags to initial suggestions with counts (single batched query)
-    const allMetaTags = getAllMetaTags();
+    const allMetaTags = categoryFilter ? [] : getAllMetaTags();
     const { counts: metaTagCounts } = await getMetaTagCountsBatched(
       allMetaTags.map((def) => def.name),
       prisma
@@ -90,13 +211,16 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       tags: [
-        ...tags.map((tag) => ({
-          id: tag.id,
-          name: tag.name,
-          category: tag.category,
-          count: tag.postCount,
-          remainingCount: Math.max(0, totalPosts - tag.postCount),
-        })),
+        ...tags
+          .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
+          .slice(0, limit)
+          .map((tag) => ({
+            id: tag.id,
+            name: tag.name,
+            category: tag.category,
+            count: tag.postCount,
+            remainingCount: Math.max(0, totalPosts - tag.postCount),
+          })),
         ...metaTags,
       ],
     });
@@ -104,11 +228,23 @@ export async function GET(request: NextRequest) {
 
   // If no tags are selected (include or exclude), use simple search with pre-computed postCount
   if (selectedTags.length === 0 && excludeTags.length === 0) {
+    if (withGroupsOnly) {
+      const tags = await searchGroupedTagSuggestions({
+        query,
+        categoryFilter,
+        validCreatorsOnly,
+        limit,
+      });
+
+      return NextResponse.json({ tags });
+    }
+
     // Get precomputed total from Settings for remainingCount calculation
     const totalPosts = await getTotalPostCount();
 
     const tags = await prisma.tag.findMany({
       where: {
+        ...(categoryFilter ? { category: categoryFilter } : {}),
         name: {
           contains: query,
           mode: "insensitive",
@@ -121,11 +257,11 @@ export async function GET(request: NextRequest) {
         postCount: true,
       },
       orderBy: { postCount: "desc" },
-      take: limit,
+      take: tagTake,
     });
 
     // Search for matching meta tags with counts (single batched query)
-    const matchingMetas = searchMetaTags(query);
+    const matchingMetas = categoryFilter ? [] : searchMetaTags(query);
     const { counts: metaTagCounts } = matchingMetas.length > 0
       ? await getMetaTagCountsBatched(matchingMetas.map((def) => def.name), prisma)
       : { counts: new Map<string, number>() };
@@ -142,13 +278,16 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       tags: [
-        ...tags.map((tag) => ({
-          id: tag.id,
-          name: tag.name,
-          category: tag.category,
-          count: tag.postCount,
-          remainingCount: Math.max(0, totalPosts - tag.postCount),
-        })),
+        ...tags
+          .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
+          .slice(0, limit)
+          .map((tag) => ({
+            id: tag.id,
+            name: tag.name,
+            category: tag.category,
+            count: tag.postCount,
+            remainingCount: Math.max(0, totalPosts - tag.postCount),
+          })),
         ...matchingMetaTags,
       ],
     });
@@ -347,6 +486,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tags: [] });
   }
 
+  if (withGroupsOnly) {
+    postSubquery = Prisma.sql`(${postSubquery}) INTERSECT (${eligibleGroupPostsSubquery()})`;
+  }
+
   // Also exclude the excluded tag IDs and wildcard matched IDs from suggestions
   const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds, ...allWildcardTagIds];
 
@@ -355,6 +498,9 @@ export async function GET(request: NextRequest) {
   const nameFilter = hasSearchQuery
     ? Prisma.sql`t.name ILIKE ${searchPattern} AND`
     : Prisma.sql``;
+  const categorySqlFilter = categoryFilter
+    ? Prisma.sql`AND t.category = ${categoryFilter}::"TagCategory"`
+    : Prisma.empty;
 
   // When browsing (no query), filter out omnipresent tags (remainingCount = 0)
   const excludeOmnipresent = hasSearchQuery
@@ -380,11 +526,12 @@ export async function GET(request: NextRequest) {
     FROM "Tag" t
     JOIN "PostTag" pt ON t.id = pt."tagId"
     WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
+      ${categorySqlFilter}
       AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
     GROUP BY t.id, t.name, t.category
     ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
+    LIMIT ${validCreatorsOnly ? limit * 5 : limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
   `;
 
   const mappedTags = coOccurringTags.map((tag) => ({
@@ -397,6 +544,7 @@ export async function GET(request: NextRequest) {
 
   const filteredTags = mappedTags
     .filter((tag) => tag.count > 0)
+    .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
     .slice(0, limit);
 
   // Add matching meta tags (excluding already selected ones) with co-occurrence counts
@@ -404,8 +552,10 @@ export async function GET(request: NextRequest) {
     ...selectedTags.map((t) => t.toLowerCase()),
     ...excludeTags.map((t) => t.toLowerCase()),
   ]);
-  const matchingMetas = searchMetaTags(query)
-    .filter((def) => !allSelectedLower.has(def.name.toLowerCase()));
+  const matchingMetas = categoryFilter
+    ? []
+    : searchMetaTags(query)
+        .filter((def) => !allSelectedLower.has(def.name.toLowerCase()));
 
   // Get meta tag counts within the filtered posts using optimized batched query
   // This uses a single SQL query with COUNT FILTER instead of N separate queries
