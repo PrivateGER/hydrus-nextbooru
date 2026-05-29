@@ -1,11 +1,20 @@
-import { prisma as defaultPrisma } from "@/lib/db";
+import { escapeSqlLike, prisma as defaultPrisma } from "@/lib/db";
 import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
+import {
+  isValidCreatorName,
+  NUMERIC_CREATOR_SQL_PATTERN,
+  PIXIV_USER_SQL_PATTERN,
+} from "@/lib/creator-names";
+
+export { PIXIV_USER_PATTERN, isValidCreatorName } from "@/lib/creator-names";
 
 export type OrderOption = "random" | "newest" | "oldest" | "largest";
 const GROUP_PREVIEW_POST_LIMIT = 10;
 
 export interface GroupsSearchParams {
   typeFilter?: SourceType;
+  query?: string;
+  creatorFilter?: string;
   order?: OrderOption;
   page?: number;
   pageSize?: number;
@@ -36,16 +45,6 @@ export interface MergedGroup {
   }>;
 }
 
-/** Matches Pixiv placeholder usernames like "user abcd1234" or "user_abcd1234" */
-export const PIXIV_USER_PATTERN = /^user[\s_]*[a-z]{4}\d{4}$/i;
-
-/** Checks if a creator name is valid (not numeric-only or Pixiv placeholder) */
-export function isValidCreatorName(name: string): boolean {
-  if (/^\d+$/.test(name)) return false;
-  if (PIXIV_USER_PATTERN.test(name)) return false;
-  return true;
-}
-
 export interface TypeCount {
   sourceType: SourceType;
   count: number;
@@ -55,6 +54,8 @@ export interface GroupsSearchResult {
   groups: MergedGroup[];
   typeCounts: TypeCount[];
   totalGroups: number;
+  /** Total merged (content-hash collapsed) groups ignoring filters - denominator for "X of Y" */
+  mergedTotal: number;
   filteredCount: number;
   totalPages: number;
   page: number;
@@ -84,6 +85,90 @@ export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): 
 }
 
 /**
+ * Count merged (content-hash collapsed) groups with 2+ members matching the given filter.
+ * Pass Prisma.empty to count the full population.
+ */
+async function countMergedGroups(prisma: PrismaClient, whereClause: Prisma.Sql): Promise<number> {
+  const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
+      SELECT
+        MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
+      FROM "Group" g
+      JOIN "PostGroup" pg ON pg."groupId" = g.id
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+      GROUP BY g.id
+      HAVING COUNT(pg."postId") >= 2
+    ) sub
+  `;
+  return Number(count);
+}
+
+function normalizeTextFilter(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function containsPattern(value: string): string {
+  return `%${escapeSqlLike(value)}%`;
+}
+
+function validCreatorSqlPredicate(nameExpression: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`${nameExpression} !~ ${NUMERIC_CREATOR_SQL_PATTERN} AND ${nameExpression} !~* ${PIXIV_USER_SQL_PATTERN}`;
+}
+
+function buildGroupsWhereClause({
+  typeFilter,
+  query,
+  creatorFilter,
+}: Pick<GroupsSearchParams, "typeFilter" | "query" | "creatorFilter">): Prisma.Sql {
+  const conditions: Prisma.Sql[] = [];
+  const normalizedQuery = normalizeTextFilter(query);
+  const normalizedCreatorFilter = normalizeTextFilter(creatorFilter);
+
+  if (typeFilter) {
+    conditions.push(Prisma.sql`g."sourceType" = ${typeFilter}::"SourceType"`);
+  }
+
+  if (normalizedQuery) {
+    const pattern = containsPattern(normalizedQuery);
+    conditions.push(Prisma.sql`(
+      g."sourceId" ILIKE ${pattern}
+      OR g.title ILIKE ${pattern}
+      OR ct."translatedContent" ILIKE ${pattern}
+      OR EXISTS (
+        SELECT 1
+        FROM "PostGroup" artist_pg
+        JOIN "PostTag" artist_pt ON artist_pt."postId" = artist_pg."postId"
+        JOIN "Tag" artist_t ON artist_t.id = artist_pt."tagId"
+        WHERE artist_pg."groupId" = g.id
+          AND artist_t.category = 'ARTIST'::"TagCategory"
+          AND ${validCreatorSqlPredicate(Prisma.sql`artist_t.name`)}
+          AND artist_t.name ILIKE ${pattern}
+      )
+    )`);
+  }
+
+  if (normalizedCreatorFilter) {
+    const pattern = containsPattern(normalizedCreatorFilter);
+    conditions.push(Prisma.sql`EXISTS (
+      SELECT 1
+      FROM "PostGroup" creator_pg
+      JOIN "PostTag" creator_pt ON creator_pt."postId" = creator_pg."postId"
+      JOIN "Tag" creator_t ON creator_t.id = creator_pt."tagId"
+      WHERE creator_pg."groupId" = g.id
+        AND creator_t.category = 'ARTIST'::"TagCategory"
+        AND ${validCreatorSqlPredicate(Prisma.sql`creator_t.name`)}
+        AND creator_t.name ILIKE ${pattern}
+    )`);
+  }
+
+  return conditions.length > 0
+    ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
+    : Prisma.empty;
+}
+
+/**
  * Search for merged groups with pagination and ordering
  */
 export async function searchGroups(
@@ -92,6 +177,8 @@ export async function searchGroups(
 ): Promise<GroupsSearchResult> {
   const {
     typeFilter,
+    query,
+    creatorFilter,
     order = "random",
     page = 1,
     pageSize = 50,
@@ -111,6 +198,7 @@ export async function searchGroups(
     oldest: Prisma.sql`ORDER BY min_group_id ASC`,
     largest: Prisma.sql`ORDER BY max_post_count DESC, min_group_id DESC`,
   }[order];
+  const whereClause = buildGroupsWhereClause({ typeFilter, query, creatorFilter });
 
   // Get merged groups - groups with identical posts are combined
   const mergedGroupsRaw = await prisma.$queryRaw<{
@@ -135,7 +223,7 @@ export async function searchGroups(
       FROM "Group" g
       JOIN "PostGroup" pg ON pg."groupId" = g.id
       LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
-      ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
+      ${whereClause}
       GROUP BY g.id, ct."translatedContent"
       HAVING COUNT(pg."postId") >= 2
     )
@@ -267,19 +355,21 @@ export async function searchGroups(
 
   let filteredCount = Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
   if (filteredCount === 0 && offset > 0) {
-    const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
-      SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
-        SELECT
-          MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
-        FROM "Group" g
-        JOIN "PostGroup" pg ON pg."groupId" = g.id
-        ${typeFilter ? Prisma.sql`WHERE g."sourceType" = ${typeFilter}::"SourceType"` : Prisma.empty}
-        GROUP BY g.id
-        HAVING COUNT(pg."postId") >= 2
-      ) sub
-    `;
-    filteredCount = Number(count);
+    // Window function returns no rows past the last page; recount directly.
+    filteredCount = await countMergedGroups(prisma, whereClause);
   }
+
+  // Denominator for "X of Y" must measure the same merged population as filteredCount.
+  // With no filters, filteredCount already is that total, so skip the extra query.
+  const isFiltered = Boolean(
+    typeFilter || normalizeTextFilter(query) || normalizeTextFilter(creatorFilter)
+  );
+  // filteredCount and the unfiltered total come from separate queries; a concurrent sync
+  // between them could otherwise yield mergedTotal < filteredCount ("47 of 45"). Clamp so the
+  // denominator is never smaller than the numerator.
+  const mergedTotal = isFiltered
+    ? Math.max(await countMergedGroups(prisma, Prisma.empty), filteredCount)
+    : filteredCount;
 
   const totalPages = Math.ceil(filteredCount / pageSize);
 
@@ -287,6 +377,7 @@ export async function searchGroups(
     groups,
     typeCounts,
     totalGroups,
+    mergedTotal,
     filteredCount,
     totalPages,
     page,

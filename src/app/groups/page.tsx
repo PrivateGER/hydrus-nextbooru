@@ -8,7 +8,9 @@ import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { Pagination } from "@/components/pagination";
 import { SourceBadge } from "@/components/source-badge";
 import { PageHeaderSkeleton, FiltersSkeleton, GroupCardSkeleton } from "@/components/skeletons";
+import { GroupsSearchControls } from "@/components/groups-search-controls";
 import { searchGroups, OrderOption } from "@/lib/groups";
+import { parseGroupsPageParams, type GroupsPageRawParams } from "@/lib/groups-page-params";
 
 export const metadata: Metadata = {
   title: "Groups - Booru",
@@ -16,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 interface GroupsPageProps {
-  searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }>;
+  searchParams: Promise<GroupsPageRawParams>;
 }
 
 function GroupsPageSkeleton() {
@@ -51,33 +53,43 @@ function createRandomSeed(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 }
 
-async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ type?: string; page?: string; order?: string; seed?: string }> }) {
+async function GroupsPageContent({ searchParams }: { searchParams: Promise<GroupsPageRawParams> }) {
   const params = await searchParams;
-  const typeFilter = params.type as SourceType | undefined;
-  const order = (params.order as OrderOption) || "random";
-  const page = Math.max(1, parseInt(params.page || "1", 10));
+  const {
+    typeFilter,
+    order,
+    page,
+    seed: parsedSeed,
+    query,
+    creatorFilter,
+  } = parseGroupsPageParams(params);
 
   // Redirect to include seed for stable random ordering across pagination
   if (order === "random" && !params.seed) {
     const newSeed = createRandomSeed();
     const redirectParams = new URLSearchParams();
     if (typeFilter) redirectParams.set("type", typeFilter);
+    if (query) redirectParams.set("q", query);
+    if (creatorFilter) redirectParams.set("creator", creatorFilter);
     redirectParams.set("order", "random");
     if (page > 1) redirectParams.set("page", page.toString());
     redirectParams.set("seed", newSeed);
     redirect(`/groups?${redirectParams.toString()}`);
   }
 
-  const seed = params.seed || "";
+  const seed = parsedSeed;
 
   // Fetch groups data using the extracted module
   const {
     groups: groupsWithPosts,
     typeCounts,
-    totalGroups,
+    mergedTotal,
+    filteredCount,
     totalPages,
   } = await searchGroups({
     typeFilter,
+    query,
+    creatorFilter,
     order,
     page,
     pageSize: PAGE_SIZE,
@@ -85,14 +97,25 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
   });
 
   // Build URL helper for maintaining state across navigation
-  const buildUrl = (overrides: { type?: string | null; order?: string; page?: number; newSeed?: boolean }) => {
+  const buildUrl = (overrides: {
+    type?: string | null;
+    order?: OrderOption;
+    page?: number;
+    newSeed?: boolean;
+    query?: string | null;
+    creator?: string | null;
+  }) => {
     const params = new URLSearchParams();
     const newType = overrides.type === null ? undefined : (overrides.type ?? typeFilter);
     const newOrder = overrides.order ?? order;
     const newPage = overrides.page ?? page;
     const newSeed = overrides.newSeed ? createRandomSeed() : seed;
+    const newQuery = overrides.query === null ? "" : (overrides.query ?? query);
+    const newCreator = overrides.creator === null ? "" : (overrides.creator ?? creatorFilter);
 
     if (newType) params.set("type", newType);
+    if (newQuery) params.set("q", newQuery);
+    if (newCreator) params.set("creator", newCreator);
     params.set("order", newOrder);
     if (newPage > 1) params.set("page", newPage.toString());
     if (newOrder === "random") params.set("seed", newSeed);
@@ -101,13 +124,24 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<{ typ
     return `/groups${queryString ? `?${queryString}` : ""}`;
   };
 
+  const hasTextFilters = query !== "" || creatorFilter !== "";
+  const isFiltered = Boolean(typeFilter) || hasTextFilters;
+  const countLabel = isFiltered
+    ? `${filteredCount} matching of ${mergedTotal} total groups`
+    : `${mergedTotal} total groups`;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Groups</h1>
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">{totalGroups} total groups</span>
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">{countLabel}</span>
       </div>
+
+      <GroupsSearchControls
+        key={JSON.stringify([query, creatorFilter])}
+        initialQuery={query}
+        initialCreator={creatorFilter}
+      />
 
       {/* Filters row */}
       <div className="flex flex-wrap items-center gap-4">

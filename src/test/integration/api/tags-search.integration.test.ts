@@ -3,8 +3,8 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
-import { createPostWithTags, createPostsWithTag } from '../factories';
-import { TagCategory } from '@/generated/prisma/client';
+import { createGroup, createPostInGroup, createPostWithTags, createPostsWithTag } from '../factories';
+import { SourceType, TagCategory } from '@/generated/prisma/client';
 
 /**
  * Filter out meta tags from response to test regular tag behavior.
@@ -57,6 +57,26 @@ describe('GET /api/tags/search (Integration)', () => {
 
       // No regular tags without posts, but meta tags are always included
       expect(filterRegularTags(data.tags)).toEqual([]);
+    });
+
+    it('should return popular tags only from the requested category', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, [
+        { name: 'artist one', category: TagCategory.ARTIST },
+        { name: 'blue eyes', category: TagCategory.GENERAL },
+      ]);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=&category=ARTIST');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags).toEqual([
+        expect.objectContaining({
+          name: 'artist one',
+          category: 'ARTIST',
+        }),
+      ]);
     });
   });
 
@@ -125,6 +145,116 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(data.tags).toHaveLength(2);
       const categories = data.tags.map((t: { category: string }) => t.category).sort();
       expect(categories).toEqual(['ARTIST', 'CHARACTER']);
+    });
+
+    it('should filter simple search suggestions by category', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, [
+        { name: 'john artist', category: TagCategory.ARTIST },
+        { name: 'john character', category: TagCategory.CHARACTER },
+        { name: 'john general', category: TagCategory.GENERAL },
+      ]);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=john&category=ARTIST');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags).toEqual([
+        expect.objectContaining({
+          name: 'john artist',
+          category: 'ARTIST',
+        }),
+      ]);
+    });
+
+    it('should filter invalid creator suggestions when requested', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, [
+        { name: 'studio artist', category: TagCategory.ARTIST },
+        { name: '12345678', category: TagCategory.ARTIST },
+        { name: 'user abcd1234', category: TagCategory.ARTIST },
+      ]);
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=&category=ARTIST&validCreators=true');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags).toEqual([
+        expect.objectContaining({
+          name: 'studio artist',
+          category: 'ARTIST',
+        }),
+      ]);
+    });
+
+    it('should not let invalid high-count creators starve valid creator suggestions', async () => {
+      const prisma = getTestPrisma();
+      await prisma.tag.createMany({
+        data: [
+          ...Array.from({ length: 101 }, (_, index) => ({
+            name: `${100_000 + index}`,
+            category: TagCategory.ARTIST,
+            postCount: 200 - index,
+          })),
+          {
+            name: 'valid artist',
+            category: TagCategory.ARTIST,
+            postCount: 1,
+          },
+        ],
+      });
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=&category=ARTIST&validCreators=true&limit=20');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags.map((tag: { name: string }) => tag.name)).toContain('valid artist');
+    });
+
+    it('should filter creator suggestions to creators with associated groups when requested', async () => {
+      const prisma = getTestPrisma();
+
+      const galleryGroup = await createGroup(prisma, SourceType.PIXIV, 'gallery-with-creator');
+      const galleryPost = await createPostWithTags(prisma, [
+        { name: 'gallery artist', category: TagCategory.ARTIST },
+      ]);
+      await prisma.postGroup.create({
+        data: { postId: galleryPost.id, groupId: galleryGroup.id, position: 0 },
+      });
+      await createPostInGroup(prisma, galleryGroup, 1);
+
+      await createPostWithTags(prisma, [
+        { name: 'standalone artist', category: TagCategory.ARTIST },
+      ]);
+
+      const onePostGroup = await createGroup(prisma, SourceType.PIXIV, 'one-post-group');
+      const onePostGalleryPost = await createPostWithTags(prisma, [
+        { name: 'one post artist', category: TagCategory.ARTIST },
+      ]);
+      await prisma.postGroup.create({
+        data: { postId: onePostGalleryPost.id, groupId: onePostGroup.id, position: 0 },
+      });
+
+      const request = new NextRequest(
+        'http://localhost/api/tags/search?q=artist&category=ARTIST&validCreators=true&withGroups=true'
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags.map((tag: { name: string }) => tag.name)).toEqual(['gallery artist']);
+
+      const initialRequest = new NextRequest(
+        'http://localhost/api/tags/search?q=&category=ARTIST&validCreators=true&withGroups=true'
+      );
+      const initialResponse = await GET(initialRequest);
+      const initialData = await initialResponse.json();
+
+      expect(initialResponse.status).toBe(200);
+      expect(initialData.tags.map((tag: { name: string }) => tag.name)).toEqual(['gallery artist']);
     });
 
     it('should order by post count descending', async () => {

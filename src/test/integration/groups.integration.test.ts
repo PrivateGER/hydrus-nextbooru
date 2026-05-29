@@ -3,6 +3,7 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase }
 import { setTestPrisma } from '@/lib/db';
 import { createPost, createGroup, createPostInGroup, createTag } from './factories';
 import { SourceType, TagCategory } from '@/generated/prisma/client';
+import { createHash } from 'crypto';
 
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
@@ -33,6 +34,7 @@ describe('Groups Module (Integration)', () => {
       expect(result.groups).toEqual([]);
       expect(result.totalGroups).toBe(0);
       expect(result.filteredCount).toBe(0);
+      expect(result.mergedTotal).toBe(0);
     });
 
     it('should only return groups with 2+ posts', async () => {
@@ -124,6 +126,145 @@ describe('Groups Module (Integration)', () => {
 
         expect(result.groups).toHaveLength(1);
         expect(result.groups[0].groups[0].sourceType).toBe(SourceType.PIXIV);
+      });
+    });
+
+    describe('search filtering', () => {
+      it('should search source IDs case-insensitively', async () => {
+        const prisma = getTestPrisma();
+
+        const matchingGroup = await createGroup(prisma, SourceType.PIXIV, 'Pixiv-Target-777');
+        await createPostInGroup(prisma, matchingGroup, 0);
+        await createPostInGroup(prisma, matchingGroup, 1);
+
+        const otherGroup = await createGroup(prisma, SourceType.PIXIV, 'unrelated-888');
+        await createPostInGroup(prisma, otherGroup, 0);
+        await createPostInGroup(prisma, otherGroup, 1);
+
+        const result = await searchGroups({ query: 'target-777' }, prisma);
+
+        expect(result.groups).toHaveLength(1);
+        expect(result.groups[0].groups[0].sourceId).toBe('Pixiv-Target-777');
+        expect(result.filteredCount).toBe(1);
+      });
+
+      it('should search original and translated group titles', async () => {
+        const prisma = getTestPrisma();
+
+        const originalTitleGroup = await createGroup(prisma, SourceType.TITLE, 'title-hash-1', 'Original Collection');
+        await createPostInGroup(prisma, originalTitleGroup, 0);
+        await createPostInGroup(prisma, originalTitleGroup, 1);
+
+        const translatedTitle = 'Translated Anthology';
+        const translatedTitleGroup = await createGroup(prisma, SourceType.TITLE, 'title-hash-2', '日本語タイトル');
+        await prisma.contentTranslation.create({
+          data: {
+            contentHash: createHash('sha256').update('日本語タイトル', 'utf8').digest('hex'),
+            translatedContent: translatedTitle,
+          },
+        });
+        await createPostInGroup(prisma, translatedTitleGroup, 0);
+        await createPostInGroup(prisma, translatedTitleGroup, 1);
+
+        const originalResult = await searchGroups({ query: 'original collection' }, prisma);
+        const translatedResult = await searchGroups({ query: 'anthology' }, prisma);
+
+        expect(originalResult.groups).toHaveLength(1);
+        expect(originalResult.groups[0].groups[0].sourceId).toBe('title-hash-1');
+        expect(translatedResult.groups).toHaveLength(1);
+        expect(translatedResult.groups[0].groups[0].translatedTitle).toBe(translatedTitle);
+      });
+
+      it('should search valid creators and ignore invalid creator names', async () => {
+        const prisma = getTestPrisma();
+
+        const validArtist = await createTag(prisma, 'studio_artist', TagCategory.ARTIST);
+        const invalidArtist = await createTag(prisma, 'user abcd1234', TagCategory.ARTIST);
+
+        const validGroup = await createGroup(prisma, SourceType.PIXIV, 'valid-creator-group');
+        const validPost = await createPostInGroup(prisma, validGroup, 0);
+        await createPostInGroup(prisma, validGroup, 1);
+        await prisma.postTag.create({ data: { postId: validPost.id, tagId: validArtist.id } });
+
+        const invalidGroup = await createGroup(prisma, SourceType.PIXIV, 'invalid-creator-group');
+        const invalidPost = await createPostInGroup(prisma, invalidGroup, 0);
+        await createPostInGroup(prisma, invalidGroup, 1);
+        await prisma.postTag.create({ data: { postId: invalidPost.id, tagId: invalidArtist.id } });
+
+        const validResult = await searchGroups({ query: 'studio' }, prisma);
+        const invalidResult = await searchGroups({ query: 'abcd1234' }, prisma);
+
+        expect(validResult.groups).toHaveLength(1);
+        expect(validResult.groups[0].groups[0].sourceId).toBe('valid-creator-group');
+        expect(invalidResult.groups).toHaveLength(0);
+        expect(invalidResult.filteredCount).toBe(0);
+      });
+    });
+
+    describe('creator filtering', () => {
+      it('should filter by creators from posts beyond the preview limit', async () => {
+        const prisma = getTestPrisma();
+
+        const lateArtist = await createTag(prisma, 'late_filter_artist', TagCategory.ARTIST);
+        const matchingGroup = await createGroup(prisma, SourceType.PIXIV, 'large-filter-group');
+        let lateArtistPostId = 0;
+
+        for (let position = 0; position < 11; position++) {
+          const post = await createPostInGroup(prisma, matchingGroup, position);
+          if (position === 10) {
+            lateArtistPostId = post.id;
+            await prisma.postTag.create({ data: { postId: post.id, tagId: lateArtist.id } });
+          }
+        }
+
+        const otherGroup = await createGroup(prisma, SourceType.PIXIV, 'other-filter-group');
+        await createPostInGroup(prisma, otherGroup, 0);
+        await createPostInGroup(prisma, otherGroup, 1);
+
+        const result = await searchGroups({ creatorFilter: 'late_filter' }, prisma);
+
+        expect(result.groups).toHaveLength(1);
+        expect(result.groups[0].groups[0].sourceId).toBe('large-filter-group');
+        expect(result.groups[0].posts.map((post) => post.postId)).not.toContain(lateArtistPostId);
+        expect(result.groups[0].creators).toContain('late_filter_artist');
+      });
+
+      it('should combine creator filtering with source-type filtering and pagination counts', async () => {
+        const prisma = getTestPrisma();
+
+        const artist = await createTag(prisma, 'shared_filter_artist', TagCategory.ARTIST);
+
+        for (let index = 0; index < 3; index++) {
+          const group = await createGroup(prisma, SourceType.PIXIV, `pixiv-match-${index}`);
+          const post = await createPostInGroup(prisma, group, 0);
+          await createPostInGroup(prisma, group, 1);
+          await prisma.postTag.create({ data: { postId: post.id, tagId: artist.id } });
+        }
+
+        const twitterGroup = await createGroup(prisma, SourceType.TWITTER, 'twitter-match');
+        const twitterPost = await createPostInGroup(prisma, twitterGroup, 0);
+        await createPostInGroup(prisma, twitterGroup, 1);
+        await prisma.postTag.create({ data: { postId: twitterPost.id, tagId: artist.id } });
+
+        const nonMatchingPixivGroup = await createGroup(prisma, SourceType.PIXIV, 'pixiv-without-artist');
+        await createPostInGroup(prisma, nonMatchingPixivGroup, 0);
+        await createPostInGroup(prisma, nonMatchingPixivGroup, 1);
+
+        const result = await searchGroups({
+          typeFilter: SourceType.PIXIV,
+          creatorFilter: 'shared_filter',
+          pageSize: 2,
+          page: 1,
+          order: 'oldest',
+        }, prisma);
+
+        expect(result.groups).toHaveLength(2);
+        expect(result.groups.every((group) => group.groups[0].sourceType === SourceType.PIXIV)).toBe(true);
+        expect(result.filteredCount).toBe(3);
+        // mergedTotal is the unfiltered population (3 pixiv-match + 1 twitter + 1 pixiv-without-artist),
+        // so it must NOT shrink with the active type/creator filters.
+        expect(result.mergedTotal).toBe(5);
+        expect(result.totalPages).toBe(2);
       });
     });
 
