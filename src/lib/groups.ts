@@ -1,6 +1,10 @@
 import { escapeSqlLike, prisma as defaultPrisma } from "@/lib/db";
 import { SourceType, Prisma, PrismaClient } from "@/generated/prisma/client";
-import { isValidCreatorName } from "@/lib/creator-names";
+import {
+  isValidCreatorName,
+  NUMERIC_CREATOR_SQL_PATTERN,
+  PIXIV_USER_SQL_PATTERN,
+} from "@/lib/creator-names";
 
 export { PIXIV_USER_PATTERN, isValidCreatorName } from "@/lib/creator-names";
 
@@ -87,6 +91,10 @@ function containsPattern(value: string): string {
   return `%${escapeSqlLike(value)}%`;
 }
 
+function validCreatorSqlPredicate(nameExpression: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`${nameExpression} !~ ${NUMERIC_CREATOR_SQL_PATTERN} AND ${nameExpression} !~* ${PIXIV_USER_SQL_PATTERN}`;
+}
+
 function buildGroupsWhereClause({
   typeFilter,
   query,
@@ -113,8 +121,7 @@ function buildGroupsWhereClause({
         JOIN "Tag" artist_t ON artist_t.id = artist_pt."tagId"
         WHERE artist_pg."groupId" = g.id
           AND artist_t.category = 'ARTIST'::"TagCategory"
-          AND artist_t.name !~ '^[0-9]+$'
-          AND artist_t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+          AND ${validCreatorSqlPredicate(Prisma.sql`artist_t.name`)}
           AND artist_t.name ILIKE ${pattern}
       )
     )`);
@@ -129,8 +136,7 @@ function buildGroupsWhereClause({
       JOIN "Tag" creator_t ON creator_t.id = creator_pt."tagId"
       WHERE creator_pg."groupId" = g.id
         AND creator_t.category = 'ARTIST'::"TagCategory"
-        AND creator_t.name !~ '^[0-9]+$'
-        AND creator_t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+        AND ${validCreatorSqlPredicate(Prisma.sql`creator_t.name`)}
         AND creator_t.name ILIKE ${pattern}
     )`);
   }

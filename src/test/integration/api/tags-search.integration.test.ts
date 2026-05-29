@@ -189,6 +189,31 @@ describe('GET /api/tags/search (Integration)', () => {
       ]);
     });
 
+    it('should not let invalid high-count creators starve valid creator suggestions', async () => {
+      const prisma = getTestPrisma();
+      await prisma.tag.createMany({
+        data: [
+          ...Array.from({ length: 101 }, (_, index) => ({
+            name: `${100_000 + index}`,
+            category: TagCategory.ARTIST,
+            postCount: 200 - index,
+          })),
+          {
+            name: 'valid artist',
+            category: TagCategory.ARTIST,
+            postCount: 1,
+          },
+        ],
+      });
+
+      const request = new NextRequest('http://localhost/api/tags/search?q=&category=ARTIST&validCreators=true&limit=20');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.tags.map((tag: { name: string }) => tag.name)).toContain('valid artist');
+    });
+
     it('should filter creator suggestions to creators with associated groups when requested', async () => {
       const prisma = getTestPrisma();
 

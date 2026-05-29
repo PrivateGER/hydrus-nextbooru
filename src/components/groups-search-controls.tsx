@@ -39,11 +39,6 @@ export function GroupsSearchControls({
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setQuery(initialQuery);
-    setCreator(initialCreator);
-  }, [initialQuery, initialCreator]);
-
-  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
         suggestionsRef.current &&

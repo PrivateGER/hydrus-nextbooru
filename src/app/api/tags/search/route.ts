@@ -3,7 +3,11 @@ import { prisma, escapeSqlLike, getTotalPostCount } from "@/lib/db";
 import { Prisma, TagCategory } from "@/generated/prisma/client";
 import { tagIdsByNameCache } from "@/lib/cache";
 import { checkApiRateLimit } from "@/lib/rate-limit";
-import { isValidCreatorName } from "@/lib/creator-names";
+import {
+  isValidCreatorName,
+  NUMERIC_CREATOR_SQL_PATTERN,
+  PIXIV_USER_SQL_PATTERN,
+} from "@/lib/creator-names";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -35,8 +39,8 @@ interface RegularTagSuggestion {
 function validCreatorSqlFilter(enabled: boolean): Prisma.Sql {
   return enabled
     ? Prisma.sql`
-      AND t.name !~ '^[0-9]+$'
-      AND t.name !~* '^user[[:space:]_]*[a-z]{4}[0-9]{4}$'
+      AND t.name !~ ${NUMERIC_CREATOR_SQL_PATTERN}
+      AND t.name !~* ${PIXIV_USER_SQL_PATTERN}
     `
     : Prisma.empty;
 }
@@ -126,6 +130,57 @@ async function searchGroupedTagSuggestions({
     .slice(0, limit);
 }
 
+async function searchRegularTagSuggestions({
+  query,
+  categoryFilter,
+  validCreatorsOnly,
+  limit,
+  totalPosts,
+}: {
+  query: string;
+  categoryFilter: TagCategory | undefined;
+  validCreatorsOnly: boolean;
+  limit: number;
+  totalPosts: number;
+}): Promise<RegularTagSuggestion[]> {
+  const hasSearchQuery = query.length > 0;
+  const searchPattern = hasSearchQuery ? `%${escapeSqlLike(query)}%` : "";
+  const nameSqlFilter = hasSearchQuery
+    ? Prisma.sql`AND t.name ILIKE ${searchPattern}`
+    : Prisma.empty;
+  const categorySqlFilter = categoryFilter
+    ? Prisma.sql`AND t.category = ${categoryFilter}::"TagCategory"`
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<Array<{
+    id: number;
+    name: string;
+    category: string;
+    post_count: number;
+  }>>`
+    SELECT
+      t.id,
+      t.name,
+      t.category,
+      t."postCount" AS post_count
+    FROM "Tag" t
+    WHERE TRUE
+      ${categorySqlFilter}
+      ${nameSqlFilter}
+      ${validCreatorSqlFilter(validCreatorsOnly)}
+    ORDER BY t."postCount" DESC, t.name ASC
+    LIMIT ${limit}
+  `;
+
+  return rows.map((tag) => ({
+    id: tag.id,
+    name: tag.name,
+    category: tag.category,
+    count: tag.post_count,
+    remainingCount: Math.max(0, totalPosts - tag.post_count),
+  }));
+}
+
 /**
  * Suggest tags that match a text query, optionally constrained to tags that co-occur with specified tag names and supporting negation.
  *
@@ -157,7 +212,6 @@ export async function GET(request: NextRequest) {
     : undefined;
   const validCreatorsOnly = categoryFilter === TagCategory.ARTIST && searchParams.get("validCreators") === "true";
   const withGroupsOnly = searchParams.get("withGroups") === "true";
-  const tagTake = validCreatorsOnly ? limit * 5 : limit;
 
   // Parse selected tags with negation support
   const { includeTags: rawSelectedTags, excludeTags: rawExcludeTags } = parseTagsParamWithNegation(selectedParam);
@@ -180,16 +234,12 @@ export async function GET(request: NextRequest) {
 
     const totalPosts = await getTotalPostCount();
 
-    const tags = await prisma.tag.findMany({
-      where: categoryFilter ? { category: categoryFilter } : {},
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        postCount: true,
-      },
-      orderBy: { postCount: "desc" },
-      take: tagTake,
+    const tags = await searchRegularTagSuggestions({
+      query,
+      categoryFilter,
+      validCreatorsOnly,
+      limit,
+      totalPosts,
     });
 
     // Add all meta tags to initial suggestions with counts (single batched query)
@@ -211,16 +261,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       tags: [
-        ...tags
-          .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
-          .slice(0, limit)
-          .map((tag) => ({
-            id: tag.id,
-            name: tag.name,
-            category: tag.category,
-            count: tag.postCount,
-            remainingCount: Math.max(0, totalPosts - tag.postCount),
-          })),
+        ...tags,
         ...metaTags,
       ],
     });
@@ -242,22 +283,12 @@ export async function GET(request: NextRequest) {
     // Get precomputed total from Settings for remainingCount calculation
     const totalPosts = await getTotalPostCount();
 
-    const tags = await prisma.tag.findMany({
-      where: {
-        ...(categoryFilter ? { category: categoryFilter } : {}),
-        name: {
-          contains: query,
-          mode: "insensitive",
-        },
-      },
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        postCount: true,
-      },
-      orderBy: { postCount: "desc" },
-      take: tagTake,
+    const tags = await searchRegularTagSuggestions({
+      query,
+      categoryFilter,
+      validCreatorsOnly,
+      limit,
+      totalPosts,
     });
 
     // Search for matching meta tags with counts (single batched query)
@@ -278,16 +309,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       tags: [
-        ...tags
-          .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
-          .slice(0, limit)
-          .map((tag) => ({
-            id: tag.id,
-            name: tag.name,
-            category: tag.category,
-            count: tag.postCount,
-            remainingCount: Math.max(0, totalPosts - tag.postCount),
-          })),
+        ...tags,
         ...matchingMetaTags,
       ],
     });
@@ -527,11 +549,12 @@ export async function GET(request: NextRequest) {
     JOIN "PostTag" pt ON t.id = pt."tagId"
     WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
       ${categorySqlFilter}
+      ${validCreatorSqlFilter(validCreatorsOnly)}
       AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
     GROUP BY t.id, t.name, t.category
     ${excludeOmnipresent}
     ORDER BY count DESC
-    LIMIT ${validCreatorsOnly ? limit * 5 : limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
+    LIMIT ${limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
   `;
 
   const mappedTags = coOccurringTags.map((tag) => ({

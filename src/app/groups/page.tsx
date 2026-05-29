@@ -137,6 +137,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
       </div>
 
       <GroupsSearchControls
+        key={JSON.stringify([query, creatorFilter])}
         initialQuery={query}
         initialCreator={creatorFilter}
       />
