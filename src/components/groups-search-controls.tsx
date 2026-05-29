@@ -181,15 +181,18 @@ export function GroupsSearchControls({
               onKeyDown={handleCreatorKeyDown}
               placeholder="Creator"
               role="combobox"
-              aria-expanded={showCreatorSuggestions}
+              aria-expanded={showCreatorSuggestions && creatorSuggestions.length > 0}
               aria-controls="groups-creator-suggestions"
               aria-autocomplete="list"
               className="min-w-0 flex-1 bg-transparent text-sm text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100 dark:placeholder:text-zinc-500"
             />
           </label>
-          {isLoading && (
-            <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-zinc-500 border-t-blue-500" />
-          )}
+          {/* Fixed-width slot keeps the input from shifting when the spinner mounts */}
+          <div className="h-4 w-4 shrink-0" aria-hidden="true">
+            {isLoading && (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-500 border-t-blue-500" />
+            )}
+          </div>
           {showCreatorSuggestions && creatorSuggestions.length > 0 && (
             <div id="groups-creator-suggestions">
               <SuggestionsDropdown

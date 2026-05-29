@@ -34,6 +34,7 @@ describe('Groups Module (Integration)', () => {
       expect(result.groups).toEqual([]);
       expect(result.totalGroups).toBe(0);
       expect(result.filteredCount).toBe(0);
+      expect(result.mergedTotal).toBe(0);
     });
 
     it('should only return groups with 2+ posts', async () => {
@@ -260,6 +261,9 @@ describe('Groups Module (Integration)', () => {
         expect(result.groups).toHaveLength(2);
         expect(result.groups.every((group) => group.groups[0].sourceType === SourceType.PIXIV)).toBe(true);
         expect(result.filteredCount).toBe(3);
+        // mergedTotal is the unfiltered population (3 pixiv-match + 1 twitter + 1 pixiv-without-artist),
+        // so it must NOT shrink with the active type/creator filters.
+        expect(result.mergedTotal).toBe(5);
         expect(result.totalPages).toBe(2);
       });
     });

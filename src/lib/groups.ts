@@ -54,6 +54,8 @@ export interface GroupsSearchResult {
   groups: MergedGroup[];
   typeCounts: TypeCount[];
   totalGroups: number;
+  /** Total merged (content-hash collapsed) groups ignoring filters - denominator for "X of Y" */
+  mergedTotal: number;
   filteredCount: number;
   totalPages: number;
   page: number;
@@ -80,6 +82,26 @@ export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): 
     sourceType: r.sourceType as SourceType,
     count: Number(r.count),
   }));
+}
+
+/**
+ * Count merged (content-hash collapsed) groups with 2+ members matching the given filter.
+ * Pass Prisma.empty to count the full population.
+ */
+async function countMergedGroups(prisma: PrismaClient, whereClause: Prisma.Sql): Promise<number> {
+  const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
+      SELECT
+        MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
+      FROM "Group" g
+      JOIN "PostGroup" pg ON pg."groupId" = g.id
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+      GROUP BY g.id
+      HAVING COUNT(pg."postId") >= 2
+    ) sub
+  `;
+  return Number(count);
 }
 
 function normalizeTextFilter(value: string | undefined): string | undefined {
@@ -333,20 +355,21 @@ export async function searchGroups(
 
   let filteredCount = Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
   if (filteredCount === 0 && offset > 0) {
-    const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
-      SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
-        SELECT
-          MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
-        FROM "Group" g
-        JOIN "PostGroup" pg ON pg."groupId" = g.id
-        LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
-        ${whereClause}
-        GROUP BY g.id
-        HAVING COUNT(pg."postId") >= 2
-      ) sub
-    `;
-    filteredCount = Number(count);
+    // Window function returns no rows past the last page; recount directly.
+    filteredCount = await countMergedGroups(prisma, whereClause);
   }
+
+  // Denominator for "X of Y" must measure the same merged population as filteredCount.
+  // With no filters, filteredCount already is that total, so skip the extra query.
+  const isFiltered = Boolean(
+    typeFilter || normalizeTextFilter(query) || normalizeTextFilter(creatorFilter)
+  );
+  // filteredCount and the unfiltered total come from separate queries; a concurrent sync
+  // between them could otherwise yield mergedTotal < filteredCount ("47 of 45"). Clamp so the
+  // denominator is never smaller than the numerator.
+  const mergedTotal = isFiltered
+    ? Math.max(await countMergedGroups(prisma, Prisma.empty), filteredCount)
+    : filteredCount;
 
   const totalPages = Math.ceil(filteredCount / pageSize);
 
@@ -354,6 +377,7 @@ export async function searchGroups(
     groups,
     typeCounts,
     totalGroups,
+    mergedTotal,
     filteredCount,
     totalPages,
     page,

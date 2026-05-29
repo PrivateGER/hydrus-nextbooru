@@ -83,7 +83,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
   const {
     groups: groupsWithPosts,
     typeCounts,
-    totalGroups,
+    mergedTotal,
     filteredCount,
     totalPages,
   } = await searchGroups({
@@ -125,9 +125,10 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
   };
 
   const hasTextFilters = query !== "" || creatorFilter !== "";
-  const countLabel = filteredCount === totalGroups && !typeFilter && !hasTextFilters
-    ? `${totalGroups} total groups`
-    : `${filteredCount} matching of ${totalGroups} total groups`;
+  const isFiltered = Boolean(typeFilter) || hasTextFilters;
+  const countLabel = isFiltered
+    ? `${filteredCount} matching of ${mergedTotal} total groups`
+    : `${mergedTotal} total groups`;
 
   return (
     <div className="space-y-6">
