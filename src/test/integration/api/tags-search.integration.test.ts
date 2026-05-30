@@ -17,6 +17,60 @@ function filterRegularTags<T extends { isMeta?: boolean }>(tags: T[]): T[] {
 // Dynamic import to ensure prisma injection works
 let GET: typeof import('@/app/api/tags/search/route').GET;
 
+function sqlFragmentText(value: unknown): string {
+  if (value && typeof value === 'object') {
+    const maybeSql = value as { strings?: unknown[]; values?: unknown[]; sql?: string; text?: string };
+    if (Array.isArray(maybeSql.strings)) {
+      return maybeSql.strings.reduce((text, part, index) => {
+        const nextValue = maybeSql.values?.[index];
+        return text + String(part) + (nextValue === undefined ? '' : sqlFragmentText(nextValue));
+      }, '');
+    }
+    if (typeof maybeSql.sql === 'string') return maybeSql.sql;
+    if (typeof maybeSql.text === 'string') return maybeSql.text;
+  }
+
+  return '?';
+}
+
+function sqlTextFromRawArgs(args: unknown[]): string {
+  const [strings, ...values] = args;
+  if (Array.isArray(strings)) {
+    return strings.reduce((text, part, index) => {
+      const nextValue = values[index];
+      return text + String(part) + (nextValue === undefined ? '' : sqlFragmentText(nextValue));
+    }, '');
+  }
+
+  return sqlFragmentText(strings);
+}
+
+function withRawQueryCapture(prisma: ReturnType<typeof getTestPrisma>): {
+  prisma: ReturnType<typeof getTestPrisma>;
+  getRawQueries: () => string[];
+} {
+  const rawQueries: string[] = [];
+
+  const proxy = new Proxy(prisma, {
+    get(target, prop, receiver) {
+      if (prop === '$queryRaw') {
+        const queryRaw = target.$queryRaw.bind(target) as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          rawQueries.push(sqlTextFromRawArgs(args));
+          return queryRaw(...args);
+        };
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as ReturnType<typeof getTestPrisma>;
+
+  return {
+    prisma: proxy,
+    getRawQueries: () => rawQueries,
+  };
+}
+
 describe('GET /api/tags/search (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
@@ -255,6 +309,41 @@ describe('GET /api/tags/search (Integration)', () => {
 
       expect(initialResponse.status).toBe(200);
       expect(initialData.tags.map((tag: { name: string }) => tag.name)).toEqual(['gallery artist']);
+    });
+
+    it('should start from matching tags and use cached group eligibility for grouped creator suggestions', async () => {
+      const prisma = getTestPrisma();
+
+      const galleryGroup = await createGroup(prisma, SourceType.PIXIV, 'cached-eligibility-gallery');
+      const galleryPost = await createPostWithTags(prisma, [
+        { name: 'cached artist', category: TagCategory.ARTIST },
+      ]);
+      await prisma.postGroup.create({
+        data: { postId: galleryPost.id, groupId: galleryGroup.id, position: 0 },
+      });
+      await createPostInGroup(prisma, galleryGroup, 1);
+
+      const { prisma: capturedPrisma, getRawQueries } = withRawQueryCapture(prisma);
+      setTestPrisma(capturedPrisma);
+      try {
+        const request = new NextRequest(
+          'http://localhost/api/tags/search?q=cached&category=ARTIST&validCreators=true&withGroups=true'
+        );
+        const response = await GET(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data.tags.map((tag: { name: string }) => tag.name)).toEqual(['cached artist']);
+      } finally {
+        setTestPrisma(prisma);
+      }
+
+      const rawSql = getRawQueries().join('\n');
+      expect(rawSql).toContain('candidate_tags');
+      expect(rawSql).toContain('"Group"');
+      expect(rawSql).toContain('"memberCount" >= 2');
+      expect(rawSql).not.toContain('JOIN eligible_group_posts');
+      expect(rawSql).not.toMatch(/GROUP BY\s+"groupId"[\s\S]*HAVING\s+COUNT\("postId"\)\s*>=\s*2/);
     });
 
     it('should order by post count descending', async () => {
