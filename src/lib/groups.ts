@@ -5,6 +5,7 @@ import {
   NUMERIC_CREATOR_SQL_PATTERN,
   PIXIV_USER_SQL_PATTERN,
 } from "@/lib/creator-names";
+import { seedToHexCursor } from "@/lib/random-order";
 
 export { PIXIV_USER_PATTERN, isValidCreatorName } from "@/lib/creator-names";
 
@@ -144,6 +145,133 @@ async function countMergedGroups(prisma: PrismaClient, whereClause: Prisma.Sql):
   return Number(count);
 }
 
+async function getRandomContentHashes({
+  prisma,
+  whereClause,
+  seed,
+  offset,
+  pageSize,
+}: {
+  prisma: PrismaClient;
+  whereClause: Prisma.Sql;
+  seed: string;
+  offset: number;
+  pageSize: number;
+}): Promise<string[]> {
+  if (pageSize <= 0) {
+    return [];
+  }
+
+  const cursor = seedToHexCursor(seed, 32);
+  const firstRows = await prisma.$queryRaw<Array<{ contentHash: string }>>`
+    WITH filtered_hashes AS (
+      SELECT DISTINCT g."memberHash" AS content_hash
+      FROM "Group" g
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT content_hash AS "contentHash"
+    FROM filtered_hashes
+    WHERE content_hash >= ${cursor}
+    ORDER BY content_hash ASC
+    LIMIT ${pageSize} OFFSET ${offset}
+  `;
+
+  const pageHashes = firstRows.map((row) => row.contentHash);
+  if (pageHashes.length >= pageSize) {
+    return pageHashes;
+  }
+
+  let wrapOffset = 0;
+  if (pageHashes.length === 0 && offset > 0) {
+    const [{ count }] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      WITH filtered_hashes AS (
+        SELECT DISTINCT g."memberHash" AS content_hash
+        FROM "Group" g
+        LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+        ${whereClause}
+      )
+      SELECT COUNT(*)::bigint as count
+      FROM filtered_hashes
+      WHERE content_hash >= ${cursor}
+    `;
+    wrapOffset = Math.max(0, offset - Number(count));
+  }
+
+  const wrappedRows = await prisma.$queryRaw<Array<{ contentHash: string }>>`
+    WITH filtered_hashes AS (
+      SELECT DISTINCT g."memberHash" AS content_hash
+      FROM "Group" g
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT content_hash AS "contentHash"
+    FROM filtered_hashes
+    WHERE content_hash < ${cursor}
+    ORDER BY content_hash ASC
+    LIMIT ${pageSize - pageHashes.length} OFFSET ${wrapOffset}
+  `;
+
+  return [...pageHashes, ...wrappedRows.map((row) => row.contentHash)];
+}
+
+async function getGroupsByContentHashes({
+  prisma,
+  whereClause,
+  contentHashes,
+}: {
+  prisma: PrismaClient;
+  whereClause: Prisma.Sql;
+  contentHashes: string[];
+}): Promise<Array<{
+  contentHash: string;
+  groupIds: number[];
+  sourceTypes: string[];
+  sourceIds: string[];
+  titles: (string | null)[];
+  translatedTitles: (string | null)[];
+  postCount: bigint;
+  filteredCount: bigint;
+}>> {
+  if (contentHashes.length === 0) {
+    return [];
+  }
+
+  return prisma.$queryRaw`
+    WITH selected_hashes AS (
+      SELECT hash, ord
+      FROM unnest(${contentHashes}::text[]) WITH ORDINALITY AS selected(hash, ord)
+    ),
+    group_content AS (
+      SELECT
+        selected_hashes.ord,
+        g.id as group_id,
+        g."sourceType",
+        g."sourceId",
+        g."title",
+        ct."translatedContent" as translated_title,
+        g."memberHash" as content_hash,
+        g."memberCount"::bigint as post_count
+      FROM selected_hashes
+      JOIN "Group" g ON g."memberHash" = selected_hashes.hash::char(32)
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT
+      content_hash as "contentHash",
+      ARRAY_AGG(group_id ORDER BY group_id) as "groupIds",
+      ARRAY_AGG("sourceType"::text ORDER BY group_id) as "sourceTypes",
+      ARRAY_AGG("sourceId" ORDER BY group_id) as "sourceIds",
+      ARRAY_AGG("title" ORDER BY group_id) as "titles",
+      ARRAY_AGG(translated_title ORDER BY group_id) as "translatedTitles",
+      MAX(post_count) as "postCount",
+      0::bigint as "filteredCount"
+    FROM group_content
+    GROUP BY ord, content_hash
+    ORDER BY ord ASC
+  `;
+}
+
 function normalizeTextFilter(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -230,12 +358,11 @@ export async function searchGroups(
 
   const offset = (page - 1) * pageSize;
 
-  // Build order clause
   const orderClause = {
-    random: Prisma.sql`ORDER BY MD5(content_hash || ${seed}) ASC`,
     newest: Prisma.sql`ORDER BY min_group_id DESC`,
     oldest: Prisma.sql`ORDER BY min_group_id ASC`,
     largest: Prisma.sql`ORDER BY max_post_count DESC, min_group_id DESC`,
+    random: Prisma.sql`ORDER BY content_hash ASC`,
   }[order];
   const whereClause = buildGroupsWhereClause({ typeFilter, query, creatorFilter });
   const isFiltered = Boolean(
@@ -248,8 +375,12 @@ export async function searchGroups(
         mergedTotal: 0,
       }));
 
+  const filteredCountPromise = order === "random"
+    ? countMergedGroups(prisma, whereClause)
+    : Promise.resolve(0);
+
   // Get merged groups - groups with identical posts are combined
-  const mergedGroupsPromise = prisma.$queryRaw<{
+  const mergedGroupsPromise: Promise<Array<{
     contentHash: string;
     groupIds: number[];
     sourceTypes: string[];
@@ -258,7 +389,19 @@ export async function searchGroups(
     translatedTitles: (string | null)[];
     postCount: bigint;
     filteredCount: bigint;
-  }[]>`
+  }>> = order === "random"
+    ? getRandomContentHashes({
+        prisma,
+        whereClause,
+        seed,
+        offset,
+        pageSize,
+      }).then((contentHashes) => getGroupsByContentHashes({
+        prisma,
+        whereClause,
+        contentHashes,
+      }))
+    : prisma.$queryRaw`
     WITH group_content AS (
       SELECT
         g.id as group_id,
@@ -289,9 +432,10 @@ export async function searchGroups(
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 
-  const [listStats, mergedGroupsRaw] = await Promise.all([
+  const [listStats, mergedGroupsRaw, randomFilteredCount] = await Promise.all([
     listStatsPromise,
     mergedGroupsPromise,
+    filteredCountPromise,
   ]);
   const { typeCounts, mergedTotal: unfilteredMergedTotal } = listStats;
   const totalGroups = typeCounts.reduce((sum, t) => sum + t.count, 0);
@@ -420,7 +564,9 @@ export async function searchGroups(
     };
   });
 
-  let filteredCount = Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
+  let filteredCount = order === "random"
+    ? randomFilteredCount
+    : Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
   if (filteredCount === 0 && offset > 0) {
     // Window function returns no rows past the last page; recount directly.
     filteredCount = await countMergedGroups(prisma, whereClause);
