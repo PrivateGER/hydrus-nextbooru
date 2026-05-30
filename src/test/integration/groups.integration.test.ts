@@ -8,6 +8,38 @@ import { createHash } from 'crypto';
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
 
+function withRawQueryCounter(prisma: ReturnType<typeof getTestPrisma>): {
+  prisma: ReturnType<typeof getTestPrisma>;
+  getRawQueryCount: () => number;
+} {
+  let rawQueryCount = 0;
+
+  const proxy = new Proxy(prisma, {
+    get(target, prop, receiver) {
+      if (prop === '$queryRaw') {
+        const queryRaw = target.$queryRaw.bind(target) as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          rawQueryCount += 1;
+          return queryRaw(...args);
+        };
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as ReturnType<typeof getTestPrisma>;
+
+  return {
+    prisma: proxy,
+    getRawQueryCount: () => rawQueryCount,
+  };
+}
+
+function expectedMemberHash(postIds: number[]): string {
+  return createHash('md5')
+    .update([...postIds].sort((a, b) => a - b).join(','))
+    .digest('hex');
+}
+
 describe('Groups Module (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
@@ -266,6 +298,31 @@ describe('Groups Module (Integration)', () => {
         expect(result.mergedTotal).toBe(5);
         expect(result.totalPages).toBe(2);
       });
+
+      it('should avoid an extra merged-total query on filtered first pages', async () => {
+        const prisma = getTestPrisma();
+        const artist = await createTag(prisma, 'perf_filter_artist', TagCategory.ARTIST);
+
+        for (let index = 0; index < 3; index++) {
+          const group = await createGroup(prisma, SourceType.PIXIV, `perf-match-${index}`);
+          const post = await createPostInGroup(prisma, group, 0);
+          await createPostInGroup(prisma, group, 1);
+          await prisma.postTag.create({ data: { postId: post.id, tagId: artist.id } });
+        }
+
+        const { prisma: countedPrisma, getRawQueryCount } = withRawQueryCounter(prisma);
+
+        const result = await searchGroups({
+          creatorFilter: 'perf_filter',
+          order: 'oldest',
+          pageSize: 2,
+        }, countedPrisma);
+
+        expect(result.groups).toHaveLength(2);
+        expect(result.filteredCount).toBe(3);
+        expect(result.mergedTotal).toBe(3);
+        expect(getRawQueryCount()).toBeLessThanOrEqual(4);
+      });
     });
 
     describe('ordering', () => {
@@ -400,6 +457,53 @@ describe('Groups Module (Integration)', () => {
 
         expect(hashes1).not.toEqual(hashes2);
         expect([...hashes1, ...hashes2]).toHaveLength(4);
+      });
+    });
+
+    describe('cached member stats', () => {
+      it('should maintain cached member count and hash when group membership changes', async () => {
+        const prisma = getTestPrisma();
+        const group = await createGroup(prisma, SourceType.PIXIV, 'cached-stats-group');
+
+        const firstPost = await createPostInGroup(prisma, group, 0);
+        const secondPost = await createPostInGroup(prisma, group, 1);
+
+        const [initialStats] = await prisma.$queryRaw<Array<{
+          memberCount: number;
+          memberHash: string | null;
+        }>>`
+          SELECT "memberCount", "memberHash"
+          FROM "Group"
+          WHERE id = ${group.id}
+        `;
+
+        expect(initialStats).toEqual({
+          memberCount: 2,
+          memberHash: expectedMemberHash([firstPost.id, secondPost.id]),
+        });
+
+        await prisma.postGroup.delete({
+          where: {
+            postId_groupId: {
+              postId: secondPost.id,
+              groupId: group.id,
+            },
+          },
+        });
+
+        const [updatedStats] = await prisma.$queryRaw<Array<{
+          memberCount: number;
+          memberHash: string | null;
+        }>>`
+          SELECT "memberCount", "memberHash"
+          FROM "Group"
+          WHERE id = ${group.id}
+        `;
+
+        expect(updatedStats).toEqual({
+          memberCount: 1,
+          memberHash: expectedMemberHash([firstPost.id]),
+        });
       });
     });
   });
