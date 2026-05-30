@@ -4,6 +4,7 @@ import { setTestPrisma } from '@/lib/db';
 import { createPost, createGroup, createPostInGroup, createTag } from './factories';
 import { SourceType, TagCategory } from '@/generated/prisma/client';
 import { createHash } from 'crypto';
+import { Pool } from 'pg';
 
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
@@ -38,6 +39,31 @@ function expectedMemberHash(postIds: number[]): string {
   return createHash('md5')
     .update([...postIds].sort((a, b) => a - b).join(','))
     .digest('hex');
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBackendLockWait(prisma: ReturnType<typeof getTestPrisma>, pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const [activity] = await prisma.$queryRaw<Array<{
+      waitEventType: string | null;
+      waitEvent: string | null;
+    }>>`
+      SELECT wait_event_type AS "waitEventType", wait_event AS "waitEvent"
+      FROM pg_stat_activity
+      WHERE pid = ${pid}
+    `;
+
+    if (activity?.waitEventType === 'Lock') {
+      return;
+    }
+
+    await sleep(10);
+  }
+
+  throw new Error(`Backend ${pid} did not wait on a lock`);
 }
 
 describe('Groups Module (Integration)', () => {
@@ -504,6 +530,60 @@ describe('Groups Module (Integration)', () => {
           memberCount: 1,
           memberHash: expectedMemberHash([firstPost.id]),
         });
+      });
+
+      it('should serialize concurrent member stat refreshes for the same group', async () => {
+        const prisma = getTestPrisma();
+        const group = await createGroup(prisma, SourceType.PIXIV, 'concurrent-cached-stats-group');
+        const firstPost = await createPost(prisma);
+        const secondPost = await createPost(prisma);
+
+        const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+        const firstClient = await pool.connect();
+        const secondClient = await pool.connect();
+
+        try {
+          await firstClient.query('BEGIN');
+          await firstClient.query(
+            'INSERT INTO "PostGroup" ("postId", "groupId", position) VALUES ($1, $2, 0)',
+            [firstPost.id, group.id]
+          );
+
+          await secondClient.query('BEGIN');
+          const [{ pid: secondPid }] = (await secondClient.query<{ pid: number }>(
+            'SELECT pg_backend_pid() AS pid'
+          )).rows;
+
+          const secondInsert = secondClient.query(
+            'INSERT INTO "PostGroup" ("postId", "groupId", position) VALUES ($1, $2, 1)',
+            [secondPost.id, group.id]
+          );
+
+          await waitForBackendLockWait(prisma, secondPid);
+          await firstClient.query('COMMIT');
+          await secondInsert;
+          await secondClient.query('COMMIT');
+
+          const [stats] = await prisma.$queryRaw<Array<{
+            memberCount: number;
+            memberHash: string | null;
+          }>>`
+            SELECT "memberCount", "memberHash"
+            FROM "Group"
+            WHERE id = ${group.id}
+          `;
+
+          expect(stats).toEqual({
+            memberCount: 2,
+            memberHash: expectedMemberHash([firstPost.id, secondPost.id]),
+          });
+        } finally {
+          await firstClient.query('ROLLBACK').catch(() => undefined);
+          await secondClient.query('ROLLBACK').catch(() => undefined);
+          firstClient.release();
+          secondClient.release();
+          await pool.end();
+        }
       });
     });
   });
