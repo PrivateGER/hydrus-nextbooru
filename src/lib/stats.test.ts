@@ -16,6 +16,7 @@ const {
   mockTagGroupBy,
   mockTagFindMany,
   mockQueryRaw,
+  mockGetPostsByHashRotation,
 } = vi.hoisted(() => ({
   mockSettingsFindUnique: vi.fn(),
   mockSettingsUpsert: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockTagGroupBy: vi.fn(),
   mockTagFindMany: vi.fn(),
   mockQueryRaw: vi.fn(),
+  mockGetPostsByHashRotation: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -44,6 +46,10 @@ vi.mock("@/lib/db", () => ({
     },
     $queryRaw: mockQueryRaw,
   },
+}));
+
+vi.mock("@/lib/random-order", () => ({
+  getPostsByHashRotation: mockGetPostsByHashRotation,
 }));
 
 function popularTag(category: TagCategory, id: number) {
@@ -74,6 +80,7 @@ describe("stats", () => {
       Promise.resolve([popularTag(where.category, 1), popularTag(where.category, 2)])
     );
     mockQueryRaw.mockResolvedValue([]);
+    mockGetPostsByHashRotation.mockResolvedValue([]);
   });
 
   it("returns cached home stats without recomputing database counts", async () => {
@@ -201,7 +208,7 @@ describe("stats", () => {
     });
   });
 
-  it("returns random post rows from the raw homepage highlight query", async () => {
+  it("returns random post rows from hash-rotation ordering", async () => {
     const rows = [
       {
         id: 1,
@@ -212,9 +219,14 @@ describe("stats", () => {
         mimeType: "image/jpeg",
       },
     ];
-    mockQueryRaw.mockResolvedValueOnce(rows);
+    mockGetPostsByHashRotation.mockResolvedValueOnce(rows);
 
     await expect(getRandomPosts(6)).resolves.toBe(rows);
-    expect(mockQueryRaw).toHaveBeenCalledTimes(1);
+    expect(mockGetPostsByHashRotation).toHaveBeenCalledWith({
+      page: 1,
+      pageSize: 6,
+      seed: expect.stringMatching(/^[a-z0-9]{8}$/),
+    });
+    expect(mockQueryRaw).not.toHaveBeenCalled();
   });
 });

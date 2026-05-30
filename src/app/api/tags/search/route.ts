@@ -49,12 +49,9 @@ function eligibleGroupPostsSubquery(): Prisma.Sql {
   return Prisma.sql`
     SELECT DISTINCT pg."postId"
     FROM "PostGroup" pg
-    JOIN (
-      SELECT "groupId"
-      FROM "PostGroup"
-      GROUP BY "groupId"
-      HAVING COUNT("postId") >= 2
-    ) eligible_groups ON eligible_groups."groupId" = pg."groupId"
+    JOIN "Group" g ON g.id = pg."groupId"
+    WHERE g."memberCount" >= 2
+      AND g."memberHash" IS NOT NULL
   `;
 }
 
@@ -85,26 +82,37 @@ async function searchGroupedTagSuggestions({
     count: bigint;
     remaining_count: bigint;
   }>>`
-    WITH eligible_group_posts AS (
-      ${eligibleGroupPostsSubquery()}
-    ),
-    eligible_total AS (
-      SELECT COUNT(*)::bigint AS total FROM eligible_group_posts
-    ),
-    grouped_tags AS (
+    WITH candidate_tags AS (
       SELECT
         t.id,
         t.name,
-        t.category,
-        COUNT(DISTINCT pt."postId")::bigint AS tag_count
+        t.category
       FROM "Tag" t
-      JOIN "PostTag" pt ON pt."tagId" = t.id
-      JOIN eligible_group_posts egp ON egp."postId" = pt."postId"
       WHERE TRUE
         ${categorySqlFilter}
         ${nameSqlFilter}
         ${validCreatorSqlFilter(validCreatorsOnly)}
-      GROUP BY t.id, t.name, t.category
+    ),
+    eligible_total AS (
+      SELECT COUNT(DISTINCT pg."postId")::bigint AS total
+      FROM "PostGroup" pg
+      JOIN "Group" g ON g.id = pg."groupId"
+      WHERE g."memberCount" >= 2
+        AND g."memberHash" IS NOT NULL
+    ),
+    grouped_tags AS (
+      SELECT
+        candidate_tags.id,
+        candidate_tags.name,
+        candidate_tags.category,
+        COUNT(DISTINCT pt."postId")::bigint AS tag_count
+      FROM candidate_tags
+      JOIN "PostTag" pt ON pt."tagId" = candidate_tags.id
+      JOIN "PostGroup" pg ON pg."postId" = pt."postId"
+      JOIN "Group" g ON g.id = pg."groupId"
+      WHERE g."memberCount" >= 2
+        AND g."memberHash" IS NOT NULL
+      GROUP BY candidate_tags.id, candidate_tags.name, candidate_tags.category
     )
     SELECT
       grouped_tags.id,

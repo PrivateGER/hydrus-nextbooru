@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { TagCategory } from "@/generated/prisma/client";
+import { getPostsByHashRotation } from "@/lib/random-order";
 
 export interface HomeStats {
   totalPosts: number;
@@ -190,21 +191,11 @@ export async function getRandomPosts(limit = 12): Promise<
   // Generate a random seed for this request
   const seed = Math.random().toString(36).substring(2, 10);
 
-  return prisma.$queryRaw<
-    Array<{
-      id: number;
-      hash: string;
-      width: number | null;
-      height: number | null;
-      blurhash: string | null;
-      mimeType: string;
-    }>
-  >`
-    SELECT id, hash, width, height, blurhash, "mimeType"
-    FROM "Post"
-    ORDER BY MD5(hash || ${seed})
-    LIMIT ${limit}
-  `;
+  return getPostsByHashRotation({
+    page: 1,
+    pageSize: limit,
+    seed,
+  });
 }
 
 /**

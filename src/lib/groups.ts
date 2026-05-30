@@ -5,6 +5,7 @@ import {
   NUMERIC_CREATOR_SQL_PATTERN,
   PIXIV_USER_SQL_PATTERN,
 } from "@/lib/creator-names";
+import { seedToHexCursor } from "@/lib/random-order";
 
 export { PIXIV_USER_PATTERN, isValidCreatorName } from "@/lib/creator-names";
 
@@ -50,6 +51,11 @@ export interface TypeCount {
   count: number;
 }
 
+interface GroupListStats {
+  typeCounts: TypeCount[];
+  mergedTotal: number;
+}
+
 export interface GroupsSearchResult {
   groups: MergedGroup[];
   typeCounts: TypeCount[];
@@ -67,13 +73,9 @@ export interface GroupsSearchResult {
 export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): Promise<TypeCount[]> {
   const typeCountsRaw = await prisma.$queryRaw<{ sourceType: string; count: bigint }[]>`
     SELECT "sourceType", COUNT(*)::bigint as count
-    FROM (
-      SELECT g.id, g."sourceType"
-      FROM "Group" g
-      JOIN "PostGroup" pg ON pg."groupId" = g.id
-      GROUP BY g.id
-      HAVING COUNT(pg."postId") >= 2
-    ) eligible_groups
+    FROM "Group"
+    WHERE "memberCount" >= 2
+      AND "memberHash" IS NOT NULL
     GROUP BY "sourceType"
     ORDER BY count DESC
   `;
@@ -84,24 +86,190 @@ export async function getGroupTypeCounts(prisma: PrismaClient = defaultPrisma): 
   }));
 }
 
+async function getGroupListStats(prisma: PrismaClient): Promise<GroupListStats> {
+  const rows = await prisma.$queryRaw<Array<{
+    sourceType: string | null;
+    count: bigint | null;
+    mergedTotal: bigint | null;
+  }>>`
+    WITH eligible_group_content AS (
+      SELECT
+        g.id,
+        g."sourceType",
+        g."memberHash" as content_hash
+      FROM "Group" g
+      WHERE g."memberCount" >= 2
+        AND g."memberHash" IS NOT NULL
+    ),
+    type_counts AS (
+      SELECT "sourceType", COUNT(*)::bigint as count
+      FROM eligible_group_content
+      GROUP BY "sourceType"
+    )
+    SELECT "sourceType"::text as "sourceType", count, NULL::bigint as "mergedTotal"
+    FROM type_counts
+    UNION ALL
+    SELECT NULL::text as "sourceType", NULL::bigint as count, COUNT(DISTINCT content_hash)::bigint as "mergedTotal"
+    FROM eligible_group_content
+    ORDER BY count DESC NULLS LAST
+  `;
+
+  let mergedTotal = 0;
+  const typeCounts: TypeCount[] = [];
+
+  for (const row of rows) {
+    if (row.sourceType) {
+      typeCounts.push({
+        sourceType: row.sourceType as SourceType,
+        count: Number(row.count ?? 0n),
+      });
+    } else {
+      mergedTotal = Number(row.mergedTotal ?? 0n);
+    }
+  }
+
+  return { typeCounts, mergedTotal };
+}
+
 /**
  * Count merged (content-hash collapsed) groups with 2+ members matching the given filter.
- * Pass Prisma.empty to count the full population.
+ * The where clause is expected to include the cached member eligibility predicate.
  */
 async function countMergedGroups(prisma: PrismaClient, whereClause: Prisma.Sql): Promise<number> {
   const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(DISTINCT content_hash)::bigint as count FROM (
-      SELECT
-        MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash
-      FROM "Group" g
-      JOIN "PostGroup" pg ON pg."groupId" = g.id
-      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
-      ${whereClause}
-      GROUP BY g.id
-      HAVING COUNT(pg."postId") >= 2
-    ) sub
+    SELECT COUNT(DISTINCT g."memberHash")::bigint as count
+    FROM "Group" g
+    LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+    ${whereClause}
   `;
   return Number(count);
+}
+
+async function getRandomContentHashes({
+  prisma,
+  whereClause,
+  seed,
+  offset,
+  pageSize,
+}: {
+  prisma: PrismaClient;
+  whereClause: Prisma.Sql;
+  seed: string;
+  offset: number;
+  pageSize: number;
+}): Promise<string[]> {
+  if (pageSize <= 0) {
+    return [];
+  }
+
+  const cursor = seedToHexCursor(seed, 32);
+  const firstRows = await prisma.$queryRaw<Array<{ contentHash: string }>>`
+    WITH filtered_hashes AS (
+      SELECT DISTINCT g."memberHash" AS content_hash
+      FROM "Group" g
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT content_hash AS "contentHash"
+    FROM filtered_hashes
+    WHERE content_hash >= ${cursor}
+    ORDER BY content_hash ASC
+    LIMIT ${pageSize} OFFSET ${offset}
+  `;
+
+  const pageHashes = firstRows.map((row) => row.contentHash);
+  if (pageHashes.length >= pageSize) {
+    return pageHashes;
+  }
+
+  let wrapOffset = 0;
+  if (pageHashes.length === 0 && offset > 0) {
+    const [{ count }] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      WITH filtered_hashes AS (
+        SELECT DISTINCT g."memberHash" AS content_hash
+        FROM "Group" g
+        LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+        ${whereClause}
+      )
+      SELECT COUNT(*)::bigint as count
+      FROM filtered_hashes
+      WHERE content_hash >= ${cursor}
+    `;
+    wrapOffset = Math.max(0, offset - Number(count));
+  }
+
+  const wrappedRows = await prisma.$queryRaw<Array<{ contentHash: string }>>`
+    WITH filtered_hashes AS (
+      SELECT DISTINCT g."memberHash" AS content_hash
+      FROM "Group" g
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT content_hash AS "contentHash"
+    FROM filtered_hashes
+    WHERE content_hash < ${cursor}
+    ORDER BY content_hash ASC
+    LIMIT ${pageSize - pageHashes.length} OFFSET ${wrapOffset}
+  `;
+
+  return [...pageHashes, ...wrappedRows.map((row) => row.contentHash)];
+}
+
+async function getGroupsByContentHashes({
+  prisma,
+  whereClause,
+  contentHashes,
+}: {
+  prisma: PrismaClient;
+  whereClause: Prisma.Sql;
+  contentHashes: string[];
+}): Promise<Array<{
+  contentHash: string;
+  groupIds: number[];
+  sourceTypes: string[];
+  sourceIds: string[];
+  titles: (string | null)[];
+  translatedTitles: (string | null)[];
+  postCount: bigint;
+  filteredCount: bigint;
+}>> {
+  if (contentHashes.length === 0) {
+    return [];
+  }
+
+  return prisma.$queryRaw`
+    WITH selected_hashes AS (
+      SELECT hash, ord
+      FROM unnest(${contentHashes}::text[]) WITH ORDINALITY AS selected(hash, ord)
+    ),
+    group_content AS (
+      SELECT
+        selected_hashes.ord,
+        g.id as group_id,
+        g."sourceType",
+        g."sourceId",
+        g."title",
+        ct."translatedContent" as translated_title,
+        g."memberHash" as content_hash,
+        g."memberCount"::bigint as post_count
+      FROM selected_hashes
+      JOIN "Group" g ON g."memberHash" = selected_hashes.hash::char(32)
+      LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
+      ${whereClause}
+    )
+    SELECT
+      content_hash as "contentHash",
+      ARRAY_AGG(group_id ORDER BY group_id) as "groupIds",
+      ARRAY_AGG("sourceType"::text ORDER BY group_id) as "sourceTypes",
+      ARRAY_AGG("sourceId" ORDER BY group_id) as "sourceIds",
+      ARRAY_AGG("title" ORDER BY group_id) as "titles",
+      ARRAY_AGG(translated_title ORDER BY group_id) as "translatedTitles",
+      MAX(post_count) as "postCount",
+      0::bigint as "filteredCount"
+    FROM group_content
+    GROUP BY ord, content_hash
+    ORDER BY ord ASC
+  `;
 }
 
 function normalizeTextFilter(value: string | undefined): string | undefined {
@@ -122,7 +290,10 @@ function buildGroupsWhereClause({
   query,
   creatorFilter,
 }: Pick<GroupsSearchParams, "typeFilter" | "query" | "creatorFilter">): Prisma.Sql {
-  const conditions: Prisma.Sql[] = [];
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`g."memberCount" >= 2`,
+    Prisma.sql`g."memberHash" IS NOT NULL`,
+  ];
   const normalizedQuery = normalizeTextFilter(query);
   const normalizedCreatorFilter = normalizeTextFilter(creatorFilter);
 
@@ -187,21 +358,29 @@ export async function searchGroups(
 
   const offset = (page - 1) * pageSize;
 
-  // Get type counts
-  const typeCounts = await getGroupTypeCounts(prisma);
-  const totalGroups = typeCounts.reduce((sum, t) => sum + t.count, 0);
-
-  // Build order clause
   const orderClause = {
-    random: Prisma.sql`ORDER BY MD5(content_hash || ${seed}) ASC`,
     newest: Prisma.sql`ORDER BY min_group_id DESC`,
     oldest: Prisma.sql`ORDER BY min_group_id ASC`,
     largest: Prisma.sql`ORDER BY max_post_count DESC, min_group_id DESC`,
+    random: Prisma.sql`ORDER BY content_hash ASC`,
   }[order];
   const whereClause = buildGroupsWhereClause({ typeFilter, query, creatorFilter });
+  const isFiltered = Boolean(
+    typeFilter || normalizeTextFilter(query) || normalizeTextFilter(creatorFilter)
+  );
+  const listStatsPromise: Promise<GroupListStats> = isFiltered
+    ? getGroupListStats(prisma)
+    : getGroupTypeCounts(prisma).then((typeCounts) => ({
+        typeCounts,
+        mergedTotal: 0,
+      }));
+
+  const filteredCountPromise = order === "random"
+    ? countMergedGroups(prisma, whereClause)
+    : Promise.resolve(0);
 
   // Get merged groups - groups with identical posts are combined
-  const mergedGroupsRaw = await prisma.$queryRaw<{
+  const mergedGroupsPromise: Promise<Array<{
     contentHash: string;
     groupIds: number[];
     sourceTypes: string[];
@@ -210,7 +389,19 @@ export async function searchGroups(
     translatedTitles: (string | null)[];
     postCount: bigint;
     filteredCount: bigint;
-  }[]>`
+  }>> = order === "random"
+    ? getRandomContentHashes({
+        prisma,
+        whereClause,
+        seed,
+        offset,
+        pageSize,
+      }).then((contentHashes) => getGroupsByContentHashes({
+        prisma,
+        whereClause,
+        contentHashes,
+      }))
+    : prisma.$queryRaw`
     WITH group_content AS (
       SELECT
         g.id as group_id,
@@ -218,14 +409,11 @@ export async function searchGroups(
         g."sourceId",
         g."title",
         ct."translatedContent" as translated_title,
-        MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId")) as content_hash,
-        COUNT(pg."postId")::bigint as post_count
+        g."memberHash" as content_hash,
+        g."memberCount"::bigint as post_count
       FROM "Group" g
-      JOIN "PostGroup" pg ON pg."groupId" = g.id
       LEFT JOIN "ContentTranslation" ct ON g."titleHash" = ct."contentHash"
       ${whereClause}
-      GROUP BY g.id, ct."translatedContent"
-      HAVING COUNT(pg."postId") >= 2
     )
     SELECT
       content_hash as "contentHash",
@@ -244,8 +432,24 @@ export async function searchGroups(
     LIMIT ${pageSize} OFFSET ${offset}
   `;
 
+  const [listStats, mergedGroupsRaw, randomFilteredCount] = await Promise.all([
+    listStatsPromise,
+    mergedGroupsPromise,
+    filteredCountPromise,
+  ]);
+  const { typeCounts, mergedTotal: unfilteredMergedTotal } = listStats;
+  const totalGroups = typeCounts.reduce((sum, t) => sum + t.count, 0);
+
   const representativeGroupIds = mergedGroupsRaw.map((group) => group.groupIds[0]);
-  const groupPostsRaw = representativeGroupIds.length > 0 ? await prisma.$queryRaw<{
+  const groupPostsPromise: Promise<Array<{
+    postId: number;
+    groupId: number;
+    position: number;
+    id: number;
+    hash: string;
+    width: number | null;
+    height: number | null;
+  }>> = representativeGroupIds.length > 0 ? prisma.$queryRaw<{
     postId: number;
     groupId: number;
     position: number;
@@ -279,7 +483,31 @@ export async function searchGroups(
     FROM ranked_group_posts
     WHERE row_number <= ${GROUP_PREVIEW_POST_LIMIT}
     ORDER BY "groupId" ASC, position ASC, "postId" ASC
-  ` : [];
+  ` : Promise.resolve([]);
+
+  const artistTagsPromise: Promise<Array<{
+    groupId: number;
+    name: string;
+    postCount: number;
+  }>> = representativeGroupIds.length > 0 ? prisma.$queryRaw<{
+    groupId: number;
+    name: string;
+    postCount: number;
+  }[]>`
+    SELECT pg."groupId", t.name, MAX(t."postCount")::int AS "postCount"
+    FROM "PostGroup" pg
+    JOIN "PostTag" pt ON pt."postId" = pg."postId"
+    JOIN "Tag" t ON t.id = pt."tagId"
+    WHERE pg."groupId" = ANY(${representativeGroupIds}::int[])
+      AND t.category = 'ARTIST'::"TagCategory"
+    GROUP BY pg."groupId", t.name
+    ORDER BY pg."groupId" ASC, "postCount" DESC, t.name ASC
+  ` : Promise.resolve([]);
+
+  const [groupPostsRaw, artistTagsRaw] = await Promise.all([
+    groupPostsPromise,
+    artistTagsPromise,
+  ]);
 
   const groupPosts: MergedGroup["posts"] = groupPostsRaw.map((row) => ({
     postId: row.postId,
@@ -300,23 +528,6 @@ export async function searchGroups(
     existing.push(pg);
     postsByGroup.set(pg.groupId, existing);
   }
-
-  // Fetch creator candidates across the full representative group membership.
-  // Preview posts stay capped, but creator metadata should not depend on that cap.
-  const artistTagsRaw = representativeGroupIds.length > 0 ? await prisma.$queryRaw<{
-    groupId: number;
-    name: string;
-    postCount: number;
-  }[]>`
-    SELECT pg."groupId", t.name, MAX(t."postCount")::int AS "postCount"
-    FROM "PostGroup" pg
-    JOIN "PostTag" pt ON pt."postId" = pg."postId"
-    JOIN "Tag" t ON t.id = pt."tagId"
-    WHERE pg."groupId" = ANY(${representativeGroupIds}::int[])
-      AND t.category = 'ARTIST'::"TagCategory"
-    GROUP BY pg."groupId", t.name
-    ORDER BY pg."groupId" ASC, "postCount" DESC, t.name ASC
-  ` : [];
 
   // Group artist tags by representative groupId
   const artistsByGroup = new Map<number, string[]>();
@@ -353,22 +564,19 @@ export async function searchGroups(
     };
   });
 
-  let filteredCount = Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
+  let filteredCount = order === "random"
+    ? randomFilteredCount
+    : Number(mergedGroupsRaw[0]?.filteredCount ?? 0n);
   if (filteredCount === 0 && offset > 0) {
     // Window function returns no rows past the last page; recount directly.
     filteredCount = await countMergedGroups(prisma, whereClause);
   }
 
-  // Denominator for "X of Y" must measure the same merged population as filteredCount.
-  // With no filters, filteredCount already is that total, so skip the extra query.
-  const isFiltered = Boolean(
-    typeFilter || normalizeTextFilter(query) || normalizeTextFilter(creatorFilter)
-  );
   // filteredCount and the unfiltered total come from separate queries; a concurrent sync
   // between them could otherwise yield mergedTotal < filteredCount ("47 of 45"). Clamp so the
   // denominator is never smaller than the numerator.
   const mergedTotal = isFiltered
-    ? Math.max(await countMergedGroups(prisma, Prisma.empty), filteredCount)
+    ? Math.max(unfilteredMergedTotal, filteredCount)
     : filteredCount;
 
   const totalPages = Math.ceil(filteredCount / pageSize);

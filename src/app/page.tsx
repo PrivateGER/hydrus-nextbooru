@@ -17,6 +17,7 @@ import {
   getRecentImportCount,
 } from "@/lib/stats";
 import { POSTS_PER_PAGE } from "@/lib/pagination";
+import { getPostsByHashRotation } from "@/lib/random-order";
 
 type SortOption = "newest" | "oldest" | "random";
 
@@ -43,26 +44,15 @@ function HomePageSkeleton() {
 async function getPosts(page: number, sort: SortOption, seed: string) {
   const skip = (page - 1) * POSTS_PER_PAGE;
 
-  // For random sorting, use raw query with MD5
   if (sort === "random") {
-    const posts = await prisma.$queryRaw<
-      Array<{
-        id: number;
-        hash: string;
-        width: number | null;
-        height: number | null;
-        blurhash: string | null;
-        mimeType: string;
-      }>
-    >`
-      SELECT id, hash, width, height, blurhash, "mimeType"
-      FROM "Post"
-      ORDER BY MD5(hash || ${seed})
-      LIMIT ${POSTS_PER_PAGE}
-      OFFSET ${skip}
-    `;
-
-    const totalCount = await prisma.post.count();
+    const [posts, totalCount] = await Promise.all([
+      getPostsByHashRotation({
+        page,
+        pageSize: POSTS_PER_PAGE,
+        seed,
+      }),
+      prisma.post.count(),
+    ]);
 
     return {
       posts,

@@ -5,9 +5,50 @@ import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { seedDataset, getRandomTagNames } from './seeders';
 import { benchmarkWithStats, assertPerformance, stats, formatStats } from './helpers';
+import type { PrismaClient } from '@/generated/prisma/client';
 
 // Dynamic import to ensure prisma injection works
 let GET: typeof import('@/app/api/tags/search/route').GET;
+let perfRequestCounter = 0;
+
+function tagSearchRequest(url: string): NextRequest {
+  perfRequestCounter += 1;
+  return new NextRequest(url, {
+    headers: {
+      'x-forwarded-for': `perf-tag-search-${perfRequestCounter}`,
+    },
+  });
+}
+
+async function seedGroupedPosts(prisma: PrismaClient): Promise<void> {
+  const postCount = await prisma.post.count();
+  const targetGroups = process.env.PERF_DATASET_SIZE === 'large' ? 10_000 : 1_000;
+  const groupCount = Math.min(targetGroups, Math.floor(postCount / 2));
+  if (groupCount === 0) return;
+
+  await prisma.$executeRaw`
+    WITH selected_posts AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+      FROM "Post"
+      ORDER BY id
+      LIMIT ${groupCount * 2}
+    ),
+    created_groups AS (
+      INSERT INTO "Group" ("sourceType", "sourceId")
+      SELECT 'PIXIV'::"SourceType", 'perf-group-' || i
+      FROM generate_series(1, ${groupCount}) AS i
+      RETURNING id
+    ),
+    numbered_groups AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+      FROM created_groups
+    )
+    INSERT INTO "PostGroup" ("postId", "groupId", position)
+    SELECT p.id, g.id, ((p.rn - 1) % 2)::int
+    FROM selected_posts p
+    JOIN numbered_groups g ON g.rn = CEIL(p.rn / 2.0)
+  `;
+}
 
 describe('Performance: Tag Search API', () => {
   beforeAll(async () => {
@@ -16,6 +57,7 @@ describe('Performance: Tag Search API', () => {
 
     // Seed dataset (size controlled by PERF_DATASET_SIZE env var)
     await seedDataset(prisma);
+    await seedGroupedPosts(prisma);
 
     // Dynamic import after Prisma is set up
     const routeModule = await import('@/app/api/tags/search/route');
@@ -35,7 +77,7 @@ describe('Performance: Tag Search API', () => {
       const s = await benchmarkWithStats(
         'Simple tag search (q=general)',
         async () => {
-          const request = new NextRequest('http://localhost/api/tags/search?q=general');
+          const request = tagSearchRequest('http://localhost/api/tags/search?q=general');
           await GET(request);
         },
         { iterations: 100, warmup: 10 }
@@ -53,7 +95,7 @@ describe('Performance: Tag Search API', () => {
         const times: number[] = [];
         for (let i = 0; i < 50; i++) {
           const start = performance.now();
-          const request = new NextRequest(`http://localhost/api/tags/search?q=${q}`);
+          const request = tagSearchRequest(`http://localhost/api/tags/search?q=${q}`);
           await GET(request);
           times.push(performance.now() - start);
         }
@@ -72,6 +114,27 @@ describe('Performance: Tag Search API', () => {
         expect(s.p95, `Query ${query} too slow`).toBeLessThan(100);
       }
     });
+
+    it('should complete grouped creator autocomplete under 100ms p95', async () => {
+      invalidateAllCaches();
+
+      const s = await benchmarkWithStats(
+        'Grouped creator autocomplete (q=artist)',
+        async () => {
+          const request = tagSearchRequest(
+            'http://localhost/api/tags/search?q=artist&category=ARTIST&validCreators=true&withGroups=true&limit=10'
+          );
+          const response = await GET(request);
+          const data = await response.json();
+          if (!Array.isArray(data.tags) || data.tags.length === 0) {
+            throw new Error('Grouped creator autocomplete benchmark returned no suggestions');
+          }
+        },
+        { iterations: 50, warmup: 5 }
+      );
+
+      assertPerformance(s, { p95: 100 });
+    });
   });
 
   describe('co-occurrence search (with selected tags)', () => {
@@ -85,7 +148,7 @@ describe('Performance: Tag Search API', () => {
       const s = await benchmarkWithStats(
         `Co-occurrence search (1 selected: ${selectedTag})`,
         async () => {
-          const request = new NextRequest(
+          const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${encodeURIComponent(selectedTag)}`
           );
           await GET(request);
@@ -106,7 +169,7 @@ describe('Performance: Tag Search API', () => {
       const s = await benchmarkWithStats(
         `Co-occurrence search (2 selected: ${selectedTags.join(', ')})`,
         async () => {
-          const request = new NextRequest(
+          const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${selectedParam}`
           );
           await GET(request);
@@ -127,7 +190,7 @@ describe('Performance: Tag Search API', () => {
       const s = await benchmarkWithStats(
         `Co-occurrence search (3 selected: ${selectedTags.join(', ')})`,
         async () => {
-          const request = new NextRequest(
+          const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${selectedParam}`
           );
           await GET(request);
@@ -151,7 +214,7 @@ describe('Performance: Tag Search API', () => {
         const times: number[] = [];
         for (let i = 0; i < 30; i++) {
           const start = performance.now();
-          const request = new NextRequest(
+          const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${selectedParam}`
           );
           await GET(request);
@@ -190,7 +253,7 @@ describe('Performance: Tag Search API', () => {
       for (let i = 0; i < 20; i++) {
         invalidateAllCaches();
         const start = performance.now();
-        const request = new NextRequest(url);
+        const request = tagSearchRequest(url);
         await GET(request);
         coldTimes.push(performance.now() - start);
       }
@@ -198,12 +261,12 @@ describe('Performance: Tag Search API', () => {
       // Warm run (with cache)
       invalidateAllCaches();
       // Prime the cache
-      await GET(new NextRequest(url));
+      await GET(tagSearchRequest(url));
 
       const warmTimes: number[] = [];
       for (let i = 0; i < 50; i++) {
         const start = performance.now();
-        const request = new NextRequest(url);
+        const request = tagSearchRequest(url);
         await GET(request);
         warmTimes.push(performance.now() - start);
       }

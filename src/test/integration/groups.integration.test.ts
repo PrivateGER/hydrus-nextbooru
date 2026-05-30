@@ -4,9 +4,121 @@ import { setTestPrisma } from '@/lib/db';
 import { createPost, createGroup, createPostInGroup, createTag } from './factories';
 import { SourceType, TagCategory } from '@/generated/prisma/client';
 import { createHash } from 'crypto';
+import { Pool } from 'pg';
 
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 let getGroupTypeCounts: typeof import('@/lib/groups').getGroupTypeCounts;
+
+function withRawQueryCounter(prisma: ReturnType<typeof getTestPrisma>): {
+  prisma: ReturnType<typeof getTestPrisma>;
+  getRawQueryCount: () => number;
+} {
+  let rawQueryCount = 0;
+
+  const proxy = new Proxy(prisma, {
+    get(target, prop, receiver) {
+      if (prop === '$queryRaw') {
+        const queryRaw = target.$queryRaw.bind(target) as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          rawQueryCount += 1;
+          return queryRaw(...args);
+        };
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as ReturnType<typeof getTestPrisma>;
+
+  return {
+    prisma: proxy,
+    getRawQueryCount: () => rawQueryCount,
+  };
+}
+
+function sqlFragmentText(value: unknown): string {
+  if (value && typeof value === 'object') {
+    const maybeSql = value as { strings?: unknown[]; values?: unknown[]; sql?: string; text?: string };
+    if (Array.isArray(maybeSql.strings)) {
+      return maybeSql.strings.reduce((text, part, index) => {
+        const nextValue = maybeSql.values?.[index];
+        return text + String(part) + (nextValue === undefined ? '' : sqlFragmentText(nextValue));
+      }, '');
+    }
+    if (typeof maybeSql.sql === 'string') return maybeSql.sql;
+    if (typeof maybeSql.text === 'string') return maybeSql.text;
+  }
+
+  return '?';
+}
+
+function sqlTextFromRawArgs(args: unknown[]): string {
+  const [strings, ...values] = args;
+  if (Array.isArray(strings)) {
+    return strings.reduce((text, part, index) => {
+      const nextValue = values[index];
+      return text + String(part) + (nextValue === undefined ? '' : sqlFragmentText(nextValue));
+    }, '');
+  }
+
+  return sqlFragmentText(strings);
+}
+
+function withRawQueryCapture(prisma: ReturnType<typeof getTestPrisma>): {
+  prisma: ReturnType<typeof getTestPrisma>;
+  getRawQueries: () => string[];
+} {
+  const rawQueries: string[] = [];
+
+  const proxy = new Proxy(prisma, {
+    get(target, prop, receiver) {
+      if (prop === '$queryRaw') {
+        const queryRaw = target.$queryRaw.bind(target) as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          rawQueries.push(sqlTextFromRawArgs(args));
+          return queryRaw(...args);
+        };
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as ReturnType<typeof getTestPrisma>;
+
+  return {
+    prisma: proxy,
+    getRawQueries: () => rawQueries,
+  };
+}
+
+function expectedMemberHash(postIds: number[]): string {
+  return createHash('md5')
+    .update([...postIds].sort((a, b) => a - b).join(','))
+    .digest('hex');
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBackendLockWait(prisma: ReturnType<typeof getTestPrisma>, pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const [activity] = await prisma.$queryRaw<Array<{
+      waitEventType: string | null;
+      waitEvent: string | null;
+    }>>`
+      SELECT wait_event_type AS "waitEventType", wait_event AS "waitEvent"
+      FROM pg_stat_activity
+      WHERE pid = ${pid}
+    `;
+
+    if (activity?.waitEventType === 'Lock') {
+      return;
+    }
+
+    await sleep(10);
+  }
+
+  throw new Error(`Backend ${pid} did not wait on a lock`);
+}
 
 describe('Groups Module (Integration)', () => {
   beforeAll(async () => {
@@ -266,6 +378,31 @@ describe('Groups Module (Integration)', () => {
         expect(result.mergedTotal).toBe(5);
         expect(result.totalPages).toBe(2);
       });
+
+      it('should avoid an extra merged-total query on filtered first pages', async () => {
+        const prisma = getTestPrisma();
+        const artist = await createTag(prisma, 'perf_filter_artist', TagCategory.ARTIST);
+
+        for (let index = 0; index < 3; index++) {
+          const group = await createGroup(prisma, SourceType.PIXIV, `perf-match-${index}`);
+          const post = await createPostInGroup(prisma, group, 0);
+          await createPostInGroup(prisma, group, 1);
+          await prisma.postTag.create({ data: { postId: post.id, tagId: artist.id } });
+        }
+
+        const { prisma: countedPrisma, getRawQueryCount } = withRawQueryCounter(prisma);
+
+        const result = await searchGroups({
+          creatorFilter: 'perf_filter',
+          order: 'oldest',
+          pageSize: 2,
+        }, countedPrisma);
+
+        expect(result.groups).toHaveLength(2);
+        expect(result.filteredCount).toBe(3);
+        expect(result.mergedTotal).toBe(3);
+        expect(getRawQueryCount()).toBeLessThanOrEqual(4);
+      });
     });
 
     describe('ordering', () => {
@@ -363,6 +500,25 @@ describe('Groups Module (Integration)', () => {
         // With 10 items, different seeds should produce different orderings
         expect(ids1).not.toEqual(ids2);
       });
+
+      it('should not compute a per-row MD5 expression for random ordering', async () => {
+        const prisma = getTestPrisma();
+
+        for (let i = 0; i < 5; i++) {
+          const group = await createGroup(prisma, SourceType.PIXIV, `random-query-shape-${i}`);
+          await createPostInGroup(prisma, group, 0);
+          await createPostInGroup(prisma, group, 1);
+        }
+
+        const { prisma: capturedPrisma, getRawQueries } = withRawQueryCapture(prisma);
+        const result = await searchGroups({
+          order: 'random',
+          seed: 'shape-seed',
+        }, capturedPrisma);
+
+        expect(result.groups).toHaveLength(5);
+        expect(getRawQueries().join('\n')).not.toContain('ORDER BY MD5');
+      });
     });
 
     describe('pagination', () => {
@@ -400,6 +556,107 @@ describe('Groups Module (Integration)', () => {
 
         expect(hashes1).not.toEqual(hashes2);
         expect([...hashes1, ...hashes2]).toHaveLength(4);
+      });
+    });
+
+    describe('cached member stats', () => {
+      it('should maintain cached member count and hash when group membership changes', async () => {
+        const prisma = getTestPrisma();
+        const group = await createGroup(prisma, SourceType.PIXIV, 'cached-stats-group');
+
+        const firstPost = await createPostInGroup(prisma, group, 0);
+        const secondPost = await createPostInGroup(prisma, group, 1);
+
+        const [initialStats] = await prisma.$queryRaw<Array<{
+          memberCount: number;
+          memberHash: string | null;
+        }>>`
+          SELECT "memberCount", "memberHash"
+          FROM "Group"
+          WHERE id = ${group.id}
+        `;
+
+        expect(initialStats).toEqual({
+          memberCount: 2,
+          memberHash: expectedMemberHash([firstPost.id, secondPost.id]),
+        });
+
+        await prisma.postGroup.delete({
+          where: {
+            postId_groupId: {
+              postId: secondPost.id,
+              groupId: group.id,
+            },
+          },
+        });
+
+        const [updatedStats] = await prisma.$queryRaw<Array<{
+          memberCount: number;
+          memberHash: string | null;
+        }>>`
+          SELECT "memberCount", "memberHash"
+          FROM "Group"
+          WHERE id = ${group.id}
+        `;
+
+        expect(updatedStats).toEqual({
+          memberCount: 1,
+          memberHash: expectedMemberHash([firstPost.id]),
+        });
+      });
+
+      it('should serialize concurrent member stat refreshes for the same group', async () => {
+        const prisma = getTestPrisma();
+        const group = await createGroup(prisma, SourceType.PIXIV, 'concurrent-cached-stats-group');
+        const firstPost = await createPost(prisma);
+        const secondPost = await createPost(prisma);
+
+        const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+        const firstClient = await pool.connect();
+        const secondClient = await pool.connect();
+
+        try {
+          await firstClient.query('BEGIN');
+          await firstClient.query(
+            'INSERT INTO "PostGroup" ("postId", "groupId", position) VALUES ($1, $2, 0)',
+            [firstPost.id, group.id]
+          );
+
+          await secondClient.query('BEGIN');
+          const [{ pid: secondPid }] = (await secondClient.query<{ pid: number }>(
+            'SELECT pg_backend_pid() AS pid'
+          )).rows;
+
+          const secondInsert = secondClient.query(
+            'INSERT INTO "PostGroup" ("postId", "groupId", position) VALUES ($1, $2, 1)',
+            [secondPost.id, group.id]
+          );
+
+          await waitForBackendLockWait(prisma, secondPid);
+          await firstClient.query('COMMIT');
+          await secondInsert;
+          await secondClient.query('COMMIT');
+
+          const [stats] = await prisma.$queryRaw<Array<{
+            memberCount: number;
+            memberHash: string | null;
+          }>>`
+            SELECT "memberCount", "memberHash"
+            FROM "Group"
+            WHERE id = ${group.id}
+          `;
+
+          expect(stats).toEqual({
+            memberCount: 2,
+            memberHash: expectedMemberHash([firstPost.id, secondPost.id]),
+          });
+        } finally {
+          await firstClient.query('ROLLBACK').catch(() => undefined);
+          await secondClient.query('ROLLBACK').catch(() => undefined);
+          firstClient.release();
+          secondClient.release();
+          await pool.end();
+        }
       });
     });
   });
