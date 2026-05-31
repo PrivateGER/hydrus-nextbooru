@@ -35,7 +35,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-900 dark:text-zinc-100`}
+        className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-900 dark:text-zinc-100 font-sans`}
       >
         {/* Header */}
         <header className="sticky top-0 z-50 border-b border-zinc-200 bg-zinc-100/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/95">

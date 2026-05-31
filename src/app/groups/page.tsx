@@ -182,7 +182,7 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                 href={buildUrl({ order: o, page: 1, newSeed: o === "random" && order !== "random" })}
                 className={`rounded px-2 py-1 text-sm transition-colors ${
                   order === o
-                    ? "bg-zinc-300 text-zinc-900 dark:bg-zinc-600 dark:text-white"
+                    ? "bg-blue-600 text-white dark:bg-blue-600"
                     : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
                 }`}
               >

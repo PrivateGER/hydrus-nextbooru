@@ -77,7 +77,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
       {currentPage > 1 ? (
         <Link
           href={buildPageUrl(currentPage - 1)}
-          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900"
         >
           Previous
         </Link>
@@ -98,7 +98,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
             <Link
               key={page}
               href={buildPageUrl(page)}
-              className={`rounded px-3 py-2 text-sm font-medium transition-colors ${
+              className={`rounded px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900 ${
                 page === currentPage
                   ? "bg-blue-600 text-white"
                   : "text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -114,7 +114,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
       {currentPage < totalPages ? (
         <Link
           href={buildPageUrl(currentPage + 1)}
-          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          className="rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900"
         >
           Next
         </Link>

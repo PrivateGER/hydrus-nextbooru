@@ -84,7 +84,7 @@ export function TagSidebar({ tags, currentTags = [] }: TagSidebarProps) {
                   <li key={tag.id} className="flex items-baseline gap-1">
                     <Link
                       href={buildSearchUrl(tag.name)}
-                      className={`truncate text-sm ${TAG_LINK_COLORS[category]} ${
+                      className={`truncate text-sm rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900 ${TAG_LINK_COLORS[category]} ${
                         isActive ? "font-bold" : ""
                       }`}
                       title={tag.name}

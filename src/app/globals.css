@@ -20,12 +20,6 @@
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
 /* View Transitions */
 @supports (view-transition-name: none) {
   ::view-transition-old(root) {
