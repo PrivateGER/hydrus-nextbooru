@@ -85,7 +85,7 @@ export function GroupFilmstrip({
               className={`relative shrink-0 rounded-lg bg-zinc-300 dark:bg-zinc-700 snap-start transition-all duration-200 ${
                 isCurrent
                   ? "ring-2 ring-blue-500 scale-[1.02]"
-                  : "hover:ring-2 hover:ring-blue-400 hover:scale-[1.02] opacity-80 hover:opacity-100"
+                  : "hover:ring-2 hover:ring-blue-400 hover:scale-[1.02] opacity-80 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               }`}
             >
               <ThumbnailCard

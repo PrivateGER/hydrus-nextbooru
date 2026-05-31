@@ -23,8 +23,8 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
           aria-pressed={mode === "tags"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
             mode === "tags"
-              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-700"
+              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
           }`}
           title="Search by tags"
         >
@@ -37,8 +37,8 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
           aria-pressed={mode === "notes"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
             mode === "notes"
-              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-700"
+              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
           }`}
           title="Full-text search in notes"
         >
@@ -51,8 +51,8 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
           aria-pressed={mode === "semantic"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
             mode === "semantic"
-              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-700"
+              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
           }`}
           title="Semantic image search"
         >

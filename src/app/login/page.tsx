@@ -24,7 +24,7 @@ function LoginFormSkeleton() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="w-full max-w-sm">
-        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-xl">
+        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-sm">
           <div className="mb-2 h-7 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
           <div className="mb-6 h-5 w-48 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
           <div className="space-y-4">
@@ -78,7 +78,7 @@ function LoginForm() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="w-full max-w-sm">
-        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-xl">
+        <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-6 shadow-sm">
           <h1 className="mb-2 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             Admin Login
           </h1>

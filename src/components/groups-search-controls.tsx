@@ -211,7 +211,7 @@ export function GroupsSearchControls({
             <button
               type="button"
               onClick={clearFilters}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-white"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
               <XMarkIcon className="h-4 w-4" aria-hidden="true" />
               Clear
@@ -219,7 +219,7 @@ export function GroupsSearchControls({
           )}
           <button
             type="submit"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-zinc-200 px-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-600"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-zinc-200 px-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
           >
             <MagnifyingGlassIcon className="h-4 w-4" aria-hidden="true" />
             Search

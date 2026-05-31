@@ -42,7 +42,7 @@ export const SuggestionsDropdown = forwardRef<HTMLDivElement, SuggestionsDropdow
             role="option"
             aria-selected={index === highlightedIndex}
             onClick={() => onSelect(suggestion.name)}
-            className={`flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer ${
+            className={`flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
               index === highlightedIndex ? "bg-zinc-100 dark:bg-zinc-700" : ""
             }`}
           >

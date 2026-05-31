@@ -71,7 +71,7 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
     hasTranslation && !showOriginal ? note.translation!.translatedContent : note.content;
 
   return (
-    <div className="rounded bg-zinc-300/50 dark:bg-zinc-700/50 p-3">
+    <div className="rounded-lg bg-zinc-300/50 dark:bg-zinc-700/50 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{note.name}</h3>
         <div className="flex items-center gap-2">
@@ -87,7 +87,7 @@ export function NoteCard({ note: initialNote }: NoteCardProps) {
           <button
             onClick={handleTranslate}
             disabled={isTranslating}
-            className="inline-flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             title={hasTranslation ? "Re-translate" : "Translate"}
           >
             {isTranslating ? (

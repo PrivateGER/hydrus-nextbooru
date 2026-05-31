@@ -141,7 +141,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             {selectedTags.map((tag, index) => (
               <span
                 key={tag}
-                className="group flex items-center gap-1 rounded bg-blue-200 dark:bg-blue-600/30 border border-blue-400 dark:border-blue-500/50 px-2 py-1 text-sm"
+                className="group flex items-center gap-1 rounded bg-blue-100 dark:bg-blue-700/40 border border-blue-300 dark:border-blue-600/60 px-2 py-1 text-sm"
               >
                 <span className="text-zinc-500 dark:text-zinc-400 text-xs">{index + 1}.</span>
                 <span>{tag.replace(/_/g, " ")}</span>
@@ -186,7 +186,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
           onClick={() => setCategoryFilter("")}
           className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
             categoryFilter === ""
-              ? "bg-zinc-600 text-white"
+              ? "bg-blue-600 text-white"
               : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           }`}
         >
@@ -198,7 +198,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
             onClick={() => setCategoryFilter(cat)}
             className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
               categoryFilter === cat
-                ? "bg-zinc-600 text-white"
+                ? "bg-blue-600 text-white"
                 : `bg-zinc-200 dark:bg-zinc-800 hover:text-zinc-900 dark:hover:text-white ${TAG_TEXT_COLORS[cat]}`
             }`}
           >

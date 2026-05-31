@@ -100,7 +100,7 @@ export function Filmstrip({
       {showButtons && canScrollLeft && (
         <button
           onClick={() => scroll("left")}
-          className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/70 p-2 text-white opacity-0 transition-opacity hover:bg-black/90 group-hover/filmstrip:opacity-100 focus:opacity-100"
+          className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/70 p-2 text-white opacity-0 transition-opacity hover:bg-black/90 group-hover/filmstrip:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
           aria-label="Scroll left"
         >
           <ChevronLeftIcon className="h-5 w-5" />
@@ -111,7 +111,7 @@ export function Filmstrip({
       {showButtons && canScrollRight && (
         <button
           onClick={() => scroll("right")}
-          className="absolute right-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/70 p-2 text-white opacity-0 transition-opacity hover:bg-black/90 group-hover/filmstrip:opacity-100 focus:opacity-100"
+          className="absolute right-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/70 p-2 text-white opacity-0 transition-opacity hover:bg-black/90 group-hover/filmstrip:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
           aria-label="Scroll right"
         >
           <ChevronRightIcon className="h-5 w-5" />

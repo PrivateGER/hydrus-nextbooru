@@ -266,7 +266,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
                 href={buildUrl({ sort: option.value, page: 1 })}
                 className={`rounded px-2 py-1 transition-colors ${
                   sort === option.value
-                    ? "bg-zinc-300 text-zinc-900 dark:bg-zinc-700 dark:text-white"
+                    ? "bg-blue-600 text-white dark:bg-blue-600"
                     : "text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                 }`}
               >
@@ -289,7 +289,7 @@ async function TagsPageContent({ searchParams }: { searchParams: Promise<{ q?: s
             <Link
               key={tag.id}
               href={`/search?tags=${encodeURIComponent(tag.name)}`}
-              className={`rounded-lg bg-white border border-zinc-200 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:bg-zinc-800 dark:border-transparent dark:hover:bg-zinc-700 ${TAG_LINK_COLORS[tag.category as TagCategory]}`}
+              className={`rounded-lg bg-white border border-zinc-200 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-50 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:bg-zinc-700 ${TAG_LINK_COLORS[tag.category as TagCategory]}`}
             >
               {tag.name.replace(/_/g, " ")}
               <span className="ml-1.5 text-zinc-400 dark:text-zinc-500">{tag.count.toLocaleString()}</span>
