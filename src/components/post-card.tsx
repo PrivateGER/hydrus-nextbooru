@@ -170,7 +170,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   return (
     <Link
       href={`/post/${hash}`}
-      className={`group relative block overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
+      className={`group relative block overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900 ${
         isMasonry ? "mb-3 break-inside-avoid" : ""
       }`}
       onMouseEnter={() => setIsHovering(true)}

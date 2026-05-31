@@ -32,7 +32,7 @@ export function SelectedTagChip({ tag, canToggle, onToggleNegation, onRemove }: 
       <button
         type="button"
         onClick={() => canToggle && onToggleNegation(tag)}
-        className={`flex items-center px-2 py-0.5 rounded-l focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${canToggle ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
+        className={`flex items-center px-2 py-0.5 rounded-l focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800 ${canToggle ? "hover:bg-black/10 dark:hover:bg-white/10" : "cursor-default"}`}
         title={canToggle ? (negated ? "Click to include" : "Click to exclude") : "Tag filter"}
       >
         {negated && <MinusIcon className="h-3 w-3 text-red-400 mr-0.5" aria-hidden="true" />}
@@ -45,7 +45,7 @@ export function SelectedTagChip({ tag, canToggle, onToggleNegation, onRemove }: 
       <button
         type="button"
         onClick={() => onRemove(tag)}
-        className="flex items-center px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 hover:bg-black/10 dark:text-zinc-400 dark:hover:text-white dark:hover:bg-white/10 rounded-r focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
+        className="flex items-center px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 hover:bg-black/10 dark:text-zinc-400 dark:hover:text-white dark:hover:bg-white/10 rounded-r focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
         aria-label={`Remove ${displayName}`}
       >
         <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />

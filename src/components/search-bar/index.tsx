@@ -332,7 +332,7 @@ function SearchBarContent({
         <button
           type="button"
           onClick={performSearch}
-          className="rounded bg-zinc-200 px-3 py-1 text-sm font-medium hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="rounded bg-zinc-200 px-3 py-1 text-sm font-medium hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
         >
           Search
         </button>
