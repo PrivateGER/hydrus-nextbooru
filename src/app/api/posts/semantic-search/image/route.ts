@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  MAX_PAGE,
   prepareImageQueryEmbedding,
   searchSemanticPostsByImageHash,
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
@@ -93,7 +92,8 @@ export async function GET(request: NextRequest) {
 
   const searchParams = request.nextUrl.searchParams;
   const hash = (searchParams.get("hash") || "").trim().toLowerCase();
-  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(searchParams.get("page") || "1", 10)));
+  const parsedPage = parseInt(searchParams.get("page") || "1", 10);
+  const page = Number.isFinite(parsedPage) ? Math.max(1, parsedPage) : 1;
   const limit = parseInt(searchParams.get("limit") || "48", 10);
   const minScoreParam = searchParams.get("minScore");
   const minScore = minScoreParam === null ? undefined : Number.parseFloat(minScoreParam);

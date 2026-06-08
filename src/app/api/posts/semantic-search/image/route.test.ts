@@ -126,6 +126,17 @@ describe("GET /api/posts/semantic-search/image", () => {
     expect(data.posts).toHaveLength(1);
   });
 
+  it("passes over-limit pages through so the search helper can reject them", async () => {
+    const res = await GET(getRequest({ hash: VALID_HASH, page: "100000" }));
+
+    expect(res.status).toBe(200);
+    expect(mocks.searchSemanticPostsByImageHash).toHaveBeenCalledWith(
+      VALID_HASH,
+      100000,
+      { limit: 48, minScore: undefined }
+    );
+  });
+
   it("rejects a malformed hash with 400", async () => {
     const res = await GET(getRequest({ hash: "nope" }));
     expect(res.status).toBe(400);
