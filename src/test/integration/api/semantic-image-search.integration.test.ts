@@ -6,6 +6,7 @@ import { upsertCompleteEmbedding } from "@/lib/embeddings/store";
 import {
   getCachedImageQueryEmbedding,
   hashImageBytes,
+  hashImageQueryCacheKey,
   upsertImageQueryEmbedding,
 } from "@/lib/embeddings/image-query-cache";
 import { upsertSemanticQueryEmbedding } from "@/lib/embeddings/query-cache";
@@ -61,7 +62,7 @@ describe("image-based semantic search", () => {
     const rows = await getTestPrisma().semanticQueryEmbedding.findMany();
     expect(rows).toHaveLength(1);
     expect(rows[0].query).toBeNull();
-    expect(rows[0].queryHash).toBe(imageHash);
+    expect(rows[0].queryHash).toBe(hashImageQueryCacheKey(imageHash, config.imageMaxResolution));
   });
 
   it("keeps image rows and text rows independent in the shared cache", async () => {
@@ -139,6 +140,21 @@ describe("image-based semantic search", () => {
     await prisma.settings.update({
       where: { key: "openrouter.embedding.model" },
       data: { value: "another/model-v2" },
+    });
+
+    const result = await searchSemanticPostsByImageHash(imageHash, 1);
+    expect(result.notFound).toBe(true);
+  });
+
+  it("misses the cache when image preprocessing resolution changed after upload", async () => {
+    const prisma = getTestPrisma();
+    await seedEmbeddingSettings();
+    await upsertImageQueryEmbedding({ imageHash, config, embedding: embedding(1, 0) });
+
+    // Admin switches only the preprocessing size after the image was embedded.
+    await prisma.settings.update({
+      where: { key: "openrouter.embedding.imageMaxResolution" },
+      data: { value: "2048" },
     });
 
     const result = await searchSemanticPostsByImageHash(imageHash, 1);

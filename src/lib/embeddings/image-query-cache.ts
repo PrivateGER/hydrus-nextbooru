@@ -17,8 +17,8 @@ const IMAGE_HASH_PATTERN = /^[a-f0-9]{64}$/;
 /**
  * SHA-256 hex digest of the raw (pre-processing) uploaded image bytes.
  *
- * Identical byte content always yields the same hash, so a previously embedded
- * query image is served from cache instead of re-calling the embedding provider.
+ * Identical byte content always yields the same public hash. The stored cache
+ * key also includes preprocessing settings that can change the embedded vector.
  */
 export function hashImageBytes(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
@@ -30,24 +30,40 @@ function assertValidImageHash(imageHash: string): void {
   }
 }
 
+export function hashImageQueryCacheKey(imageHash: string, imageMaxResolution: number): string {
+  assertValidImageHash(imageHash);
+  if (!Number.isInteger(imageMaxResolution) || imageMaxResolution < 1) {
+    throw new RangeError("imageMaxResolution must be a positive integer");
+  }
+
+  return createHash("sha256")
+    .update("semantic-image-query\0", "utf8")
+    .update(imageHash, "utf8")
+    .update("\0", "utf8")
+    .update(String(imageMaxResolution), "utf8")
+    .digest("hex");
+}
+
 /**
  * Look up a cached query-image embedding for the active embedding config,
  * refreshing `lastUsedAt` so least-recently-used pruning stays accurate.
  *
  * Query images share the `SemanticQueryEmbedding` cache with text queries; an
- * image row is identified by `queryHash = <image byte hash>` and `query = NULL`.
- * Returns `null` when no row matches the (hash, baseUrl, model, dimensions) key.
+ * image row is identified by a hash derived from the raw image-byte hash and
+ * preprocessing resolution, with `query = NULL`.
+ * Returns `null` when no row matches the (hash, baseUrl, model, dimensions,
+ * imageMaxResolution) key.
  */
 export async function getCachedImageQueryEmbedding(
   imageHash: string,
-  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions">
+  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">
 ): Promise<CachedImageQueryEmbedding | null> {
-  assertValidImageHash(imageHash);
+  const queryHash = hashImageQueryCacheKey(imageHash, config.imageMaxResolution);
 
   const rows = await prisma.$queryRaw<{ embedding: string }[]>`
     UPDATE "SemanticQueryEmbedding"
     SET "lastUsedAt" = NOW(), "updatedAt" = NOW()
-    WHERE "queryHash" = ${imageHash}
+    WHERE "queryHash" = ${queryHash}
       AND query IS NULL
       AND "baseUrl" = ${config.baseUrl}
       AND model = ${config.model}
@@ -71,10 +87,10 @@ export async function getCachedImageQueryEmbedding(
  */
 export async function upsertImageQueryEmbedding(options: {
   imageHash: string;
-  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions">;
+  config: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">;
   embedding: number[];
 }): Promise<CachedImageQueryEmbedding> {
-  assertValidImageHash(options.imageHash);
+  const queryHash = hashImageQueryCacheKey(options.imageHash, options.config.imageMaxResolution);
   const embedding = validateEmbeddingVector(options.embedding, options.config.dimensions);
   const vector = toVectorLiteral(embedding);
 
@@ -83,7 +99,7 @@ export async function upsertImageQueryEmbedding(options: {
       "queryHash", query, "baseUrl", model, dimensions, embedding, "lastUsedAt", "updatedAt"
     )
     VALUES (
-      ${options.imageHash}, NULL, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions},
+      ${queryHash}, NULL, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions},
       ${vector}::vector, NOW(), NOW()
     )
     ON CONFLICT ("queryHash", "baseUrl", model, dimensions)

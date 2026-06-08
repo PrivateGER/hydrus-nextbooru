@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedImageQueryEmbedding,
   hashImageBytes,
+  hashImageQueryCacheKey,
   upsertImageQueryEmbedding,
 } from "./image-query-cache";
 
@@ -23,6 +24,7 @@ describe("semantic image query cache", () => {
     baseUrl: "https://openrouter.ai/api/v1",
     model: "embedding-model",
     dimensions: 3,
+    imageMaxResolution: 1024,
   };
 
   beforeEach(() => {
@@ -42,6 +44,14 @@ describe("semantic image query cache", () => {
     const a = Buffer.from("the same image bytes");
     const b = Buffer.from("the same image bytes");
     expect(hashImageBytes(a)).toBe(hashImageBytes(b));
+  });
+
+  it("scopes image query cache keys by preprocessing resolution", () => {
+    const imageHash = hashImageBytes(Buffer.from("img"));
+
+    expect(hashImageQueryCacheKey(imageHash, 1024)).not.toBe(
+      hashImageQueryCacheKey(imageHash, 2048)
+    );
   });
 
   it("returns null when no cached row matches the image config", async () => {

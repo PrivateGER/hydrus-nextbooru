@@ -100,7 +100,12 @@ describe("prepareImageQueryEmbedding", () => {
     expect(mocks.createImageEmbedding).toHaveBeenCalledTimes(1);
     expect(mocks.upsertImageQueryEmbedding).toHaveBeenCalledWith({
       imageHash: expectedHash,
-      config: { baseUrl: config.baseUrl, model: config.model, dimensions: config.dimensions },
+      config: {
+        baseUrl: config.baseUrl,
+        model: config.model,
+        dimensions: config.dimensions,
+        imageMaxResolution: config.imageMaxResolution,
+      },
       embedding: [1, 0, 0],
     });
   });

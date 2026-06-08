@@ -698,14 +698,15 @@ export interface SemanticImageSearchResult extends SemanticSearchResult {
 
 /**
  * Embed an uploaded query image with the active multimodal model and cache the
- * vector keyed by the SHA-256 of its raw bytes.
+ * vector keyed by the SHA-256 of its raw bytes plus preprocessing config.
  *
  * The hash is returned so the client can run (and paginate) the actual vector
  * search via {@link searchSemanticPostsByImageHash} without re-uploading. A
- * byte-identical image that was embedded before is served straight from cache,
- * so no embedding round-trip occurs. The query image is embedded with the same
- * `SEARCH_DOCUMENT` input type used when indexing post images, keeping the query
- * vector in the same space as the corpus for apples-to-apples cosine similarity.
+ * byte-identical image under the same preprocessing settings is served straight
+ * from cache, so no embedding round-trip occurs. The query image is embedded with
+ * the same `SEARCH_DOCUMENT` input type used when indexing post images, keeping
+ * the query vector in the same space as the corpus for apples-to-apples cosine
+ * similarity.
  */
 export async function prepareImageQueryEmbedding(
   buffer: Buffer
@@ -717,6 +718,7 @@ export async function prepareImageQueryEmbedding(
     baseUrl: embeddingConfig.baseUrl,
     model: embeddingConfig.model,
     dimensions: embeddingConfig.dimensions,
+    imageMaxResolution: embeddingConfig.imageMaxResolution,
   };
 
   const cached = await getCachedImageQueryEmbedding(imageHash, queryConfig);
@@ -799,6 +801,7 @@ export async function searchSemanticPostsByImageHash(
       baseUrl: embeddingConfig.baseUrl,
       model: embeddingConfig.model,
       dimensions: embeddingConfig.dimensions,
+      imageMaxResolution: embeddingConfig.imageMaxResolution,
     });
 
     if (!cached) {
