@@ -96,6 +96,20 @@ describe("POST /api/posts/semantic-search/image", () => {
     expect(res.status).toBe(502);
   });
 
+  it("maps an unexpected embedding exception to 500", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.prepareImageQueryEmbedding.mockRejectedValueOnce(new Error("database unavailable"));
+
+    try {
+      const res = await POST(postRequest(formWithFile(new Uint8Array([1]), "image/png")));
+
+      expect(res.status).toBe(500);
+      await expect(res.json()).resolves.toEqual({ error: "Failed to prepare image search" });
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it("returns the rate-limit response when throttled", async () => {
     const limited = new Response(JSON.stringify({ error: "Too many requests" }), { status: 429 });
     mocks.checkApiRateLimit.mockReturnValueOnce(limited);

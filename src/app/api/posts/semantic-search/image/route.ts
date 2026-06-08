@@ -63,8 +63,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const buffer = Buffer.from(await fileEntry.arrayBuffer());
-  const result = await prepareImageQueryEmbedding(buffer);
+  let result: Awaited<ReturnType<typeof prepareImageQueryEmbedding>>;
+  try {
+    const buffer = Buffer.from(await fileEntry.arrayBuffer());
+    result = await prepareImageQueryEmbedding(buffer);
+  } catch (err) {
+    console.error("Failed to prepare image search", err);
+    return NextResponse.json({ error: "Failed to prepare image search" }, { status: 500 });
+  }
 
   if ("error" in result) {
     // Misconfiguration is the caller's to fix (400); an undecodable upload is
