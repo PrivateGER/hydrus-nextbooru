@@ -91,61 +91,7 @@ async function checkSemanticSearchPageRateLimit(): Promise<SemanticSearchResult 
 async function SearchPageContent({ searchParams }: { searchParams: Promise<SearchPageParams> }) {
   const params = await searchParams;
   const isReverseMode = params.mode === "reverse";
-  const tagsParam = params.tags || "";
-  const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
-  const notesQuery = params.notes?.trim() || "";
-  const semanticQuery = params.semantic?.trim() || "";
-  const semanticMinScore = params.minScore === undefined ? undefined : Number.parseFloat(params.minScore);
   const page = Math.max(1, parseInt(params.page || "1", 10));
-  const requestedSearchMode = semanticQuery.length >= 2
-    ? "semantic"
-    : notesQuery.length >= 2
-      ? "notes"
-      : "tags";
-  const isSemanticSearch = !isReverseMode && requestedSearchMode === "semantic";
-  const isNotesSearch = !isReverseMode && requestedSearchMode === "notes";
-  const shouldRunSemanticSearch = isSemanticSearch;
-  const semanticRateLimit = shouldRunSemanticSearch
-    ? await checkSemanticSearchPageRateLimit()
-    : null;
-
-  // Execute search. Semantic search is intentionally uncached because it depends
-  // on current embedding settings and newly generated vectors.
-  const result = shouldRunSemanticSearch
-    ? semanticRateLimit ?? (await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore }))
-    : isNotesSearch
-    ? await getCachedNoteSearch(notesQuery, page)
-    : tags.length > 0
-      ? await getCachedPostSearch(tags, page)
-      : null;
-
-  const posts = result && "posts" in result ? result.posts : [];
-  const rawNotes = result && "notes" in result ? result.notes : [];
-
-  // Group notes by contentHash to merge duplicate content (e.g., same Pixiv description across multiple images)
-  const groupedNotes = rawNotes.reduce((acc, note) => {
-    const existing = acc.get(note.contentHash);
-    if (existing) {
-      existing.posts.push(note.post);
-    } else {
-      acc.set(note.contentHash, { ...note, posts: [note.post] });
-    }
-    return acc;
-  }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
-  const notes = Array.from(groupedNotes.values());
-
-  const totalCount = result?.totalCount ?? 0;
-  const totalPages = result?.totalPages ?? 0;
-  const queryTimeMs = result?.queryTimeMs ?? 0;
-  const resolvedWildcards: ResolvedWildcard[] =
-    result && "resolvedWildcards" in result && Array.isArray(result.resolvedWildcards)
-      ? result.resolvedWildcards as ResolvedWildcard[]
-      : [];
-  const error = result?.error;
-
-  const wildcardMap = new Map(resolvedWildcards.map((w) => [w.pattern, w]));
-  const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
-  const hasQuery = isSemanticSearch || isNotesSearch || tags.length > 0;
 
   if (isReverseMode) {
     return (
@@ -196,6 +142,61 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
       </div>
     );
   }
+
+  const tagsParam = params.tags || "";
+  const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const notesQuery = params.notes?.trim() || "";
+  const semanticQuery = params.semantic?.trim() || "";
+  const semanticMinScore = params.minScore === undefined ? undefined : Number.parseFloat(params.minScore);
+  const requestedSearchMode = semanticQuery.length >= 2
+    ? "semantic"
+    : notesQuery.length >= 2
+      ? "notes"
+      : "tags";
+  const isSemanticSearch = !isReverseMode && requestedSearchMode === "semantic";
+  const isNotesSearch = !isReverseMode && requestedSearchMode === "notes";
+  const shouldRunSemanticSearch = isSemanticSearch;
+  const semanticRateLimit = shouldRunSemanticSearch
+    ? await checkSemanticSearchPageRateLimit()
+    : null;
+
+  // Execute search. Semantic search is intentionally uncached because it depends
+  // on current embedding settings and newly generated vectors.
+  const result = shouldRunSemanticSearch
+    ? semanticRateLimit ?? (await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore }))
+    : isNotesSearch
+    ? await getCachedNoteSearch(notesQuery, page)
+    : tags.length > 0
+      ? await getCachedPostSearch(tags, page)
+      : null;
+
+  const posts = result && "posts" in result ? result.posts : [];
+  const rawNotes = result && "notes" in result ? result.notes : [];
+
+  // Group notes by contentHash to merge duplicate content (e.g., same Pixiv description across multiple images)
+  const groupedNotes = rawNotes.reduce((acc, note) => {
+    const existing = acc.get(note.contentHash);
+    if (existing) {
+      existing.posts.push(note.post);
+    } else {
+      acc.set(note.contentHash, { ...note, posts: [note.post] });
+    }
+    return acc;
+  }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
+  const notes = Array.from(groupedNotes.values());
+
+  const totalCount = result?.totalCount ?? 0;
+  const totalPages = result?.totalPages ?? 0;
+  const queryTimeMs = result?.queryTimeMs ?? 0;
+  const resolvedWildcards: ResolvedWildcard[] =
+    result && "resolvedWildcards" in result && Array.isArray(result.resolvedWildcards)
+      ? result.resolvedWildcards as ResolvedWildcard[]
+      : [];
+  const error = result?.error;
+
+  const wildcardMap = new Map(resolvedWildcards.map((w) => [w.pattern, w]));
+  const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
+  const hasQuery = isSemanticSearch || isNotesSearch || tags.length > 0;
 
   return (
     <div className="space-y-6">
