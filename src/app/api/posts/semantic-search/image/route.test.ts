@@ -169,7 +169,7 @@ describe("GET /api/posts/semantic-search/image", () => {
     expect(res.status).toBe(404);
   });
 
-  it("maps a search error to 400", async () => {
+  it("maps a search error to 500", async () => {
     mocks.searchSemanticPostsByImageHash.mockResolvedValueOnce({
       posts: [],
       totalCount: 0,
@@ -178,6 +178,6 @@ describe("GET /api/posts/semantic-search/image", () => {
       error: "Failed to search image embeddings",
     });
     const res = await GET(getRequest({ hash: VALID_HASH }));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(500);
   });
 });
