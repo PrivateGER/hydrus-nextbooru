@@ -3,4 +3,5 @@ export * from "./image";
 export * from "./settings";
 export * from "./store";
 export * from "./query-cache";
+export * from "./image-query-cache";
 export * from "./vector";

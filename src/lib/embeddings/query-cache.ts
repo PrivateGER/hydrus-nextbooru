@@ -32,6 +32,7 @@ export async function getCachedSemanticQueryEmbedding(
     UPDATE "SemanticQueryEmbedding"
     SET "lastUsedAt" = NOW(), "updatedAt" = NOW()
     WHERE "queryHash" = ${queryHash}
+      AND query IS NOT NULL
       AND "baseUrl" = ${config.baseUrl}
       AND model = ${config.model}
       AND dimensions = ${config.dimensions}

@@ -9,6 +9,7 @@ import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
 import { SimilarSearch } from "@/components/similar-search";
+import { SemanticImageResults } from "@/components/semantic-image-results";
 import { NoteSearchResult } from "@/components/note-search-result";
 import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
 import {
@@ -58,6 +59,7 @@ interface SearchPageParams {
   page?: string;
   mode?: string;
   minScore?: string;
+  imgHash?: string;
 }
 
 interface SearchPageProps {
@@ -166,6 +168,31 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
           </div>
         </div>
         <SimilarSearch initialThreshold={10} />
+      </div>
+    );
+  }
+
+  // Image-based semantic search: an uploaded query image embedded via the search
+  // bar, identified by its hash in the URL. Results render client-side (the image
+  // bytes never travel in the URL) while the bar still reads as "Semantic".
+  const imageHash = (params.imgHash || "").trim().toLowerCase();
+  const isImageSemanticMode = params.mode === "semantic-image" && /^[a-f0-9]{64}$/.test(imageHash);
+  if (isImageSemanticMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <div className="flex w-full max-w-2xl items-end gap-2">
+            <SearchBar initialMode="semantic" />
+            <Link
+              href="/search?mode=reverse"
+              className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
+              title="Reverse image search"
+            >
+              <CameraIcon className="h-5 w-5" />
+            </Link>
+          </div>
+        </div>
+        <SemanticImageResults imageHash={imageHash} page={page} />
       </div>
     );
   }
