@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const originalConsoleError = console.error;
+let restoreConsoleError: (() => void) | undefined;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -77,7 +80,8 @@ const processed = {
 beforeEach(() => {
   vi.clearAllMocks();
   // Production code logs handled errors via console.error; silence the expected ones.
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  restoreConsoleError = () => consoleErrorSpy.mockRestore();
   mocks.getEmbeddingOpenRouterSettings.mockResolvedValue({ apiKey: "or-key", ...config });
   mocks.toEmbeddingConfig.mockReturnValue(config);
   mocks.isEmbeddingProviderConfigured.mockReturnValue(true);
@@ -86,6 +90,15 @@ beforeEach(() => {
   mocks.upsertImageQueryEmbedding.mockImplementation(async ({ imageHash, embedding }) => ({ imageHash, embedding }));
   mocks.createImageEmbedding.mockResolvedValue({ embedding: [1, 0, 0] });
   mocks.searchPostsByEmbedding.mockResolvedValue({ posts: [], totalCount: 0 });
+});
+
+afterEach(() => {
+  restoreConsoleError?.();
+  restoreConsoleError = undefined;
+});
+
+afterAll(() => {
+  expect(console.error).toBe(originalConsoleError);
 });
 
 describe("prepareImageQueryEmbedding", () => {
