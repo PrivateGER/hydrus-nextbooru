@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import { PhotoIcon } from "@heroicons/react/24/outline";
 import {
   isNegatedTag,
   getBaseTagName,
@@ -19,6 +20,7 @@ import { ModeToggle, type SearchMode } from "@/components/search-bar/mode-toggle
 import { SelectedTagChip } from "@/components/search-bar/selected-tag-chip";
 import { SuggestionsDropdown } from "@/components/search-bar/suggestions-dropdown";
 import { useTagSuggestions } from "@/components/search-bar/use-tag-suggestions";
+import { cancelPendingImageUpload, isCurrentImageUpload } from "@/components/search-bar/image-upload-state";
 
 interface SearchBarProps {
   initialTags?: string[];
@@ -85,8 +87,15 @@ function SearchBarContent({
   );
   const [selectedTags, setSelectedTags] = useState<string[]>(initialTags);
 
+  // Image-based semantic search (only used in "semantic" mode)
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const imageUploadAbortRef = useRef<AbortController | null>(null);
 
   // Detect exclude mode when input starts with "-"
   const isExcludeMode = inputValue.startsWith("-");
@@ -187,13 +196,92 @@ function SearchBarContent({
     }
   }, [selectedTags, router]);
 
+  // Embed an uploaded image, then navigate to its results on the search page.
+  // The hash (not the bytes) rides in the URL, so results are reload-safe and
+  // shareable, and pagination reuses the cached vector.
+  const handleImageSearch = useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setImageError("Please choose an image file.");
+      return;
+    }
+
+    imageUploadAbortRef.current?.abort();
+    const controller = new AbortController();
+    imageUploadAbortRef.current = controller;
+
+    setIsUploadingImage(true);
+    setImageError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/posts/semantic-search/image", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Image search failed");
+      }
+
+      if (!isCurrentImageUpload(imageUploadAbortRef, controller)) return;
+      router.push(`/search?mode=semantic-image&imgHash=${data.imageHash}`);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (!isCurrentImageUpload(imageUploadAbortRef, controller)) return;
+      setImageError(err instanceof Error ? err.message : "Image search failed");
+    } finally {
+      if (isCurrentImageUpload(imageUploadAbortRef, controller)) {
+        imageUploadAbortRef.current = null;
+        setIsUploadingImage(false);
+      }
+    }
+  }, [router]);
+
+  // Abort an in-flight image upload on unmount.
+  useEffect(() => {
+    return () => imageUploadAbortRef.current?.abort();
+  }, []);
+
+  const handleImageDrop = useCallback((e: React.DragEvent) => {
+    if (searchMode !== "semantic") return;
+    e.preventDefault();
+    setIsDraggingImage(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleImageSearch(file);
+  }, [searchMode, handleImageSearch]);
+
+  const handleImageFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleImageSearch(file);
+    // Reset so selecting the same file again re-triggers a search.
+    e.target.value = "";
+  }, [handleImageSearch]);
+
   const handlePaste = useCallback((e: ClipboardEvent<HTMLInputElement>) => {
+    // In semantic mode, a pasted image runs an image-based semantic search.
+    if (searchMode === "semantic") {
+      for (const item of e.clipboardData.items) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            handleImageSearch(file);
+            return;
+          }
+        }
+      }
+    }
+
     const pastedText = e.clipboardData.getData("text").trim();
     if (isValidSha256Hash(pastedText)) {
       e.preventDefault();
       router.push(`/post/${pastedText.toLowerCase()}`);
     }
-  }, [router]);
+  }, [router, searchMode, handleImageSearch]);
 
   const performSearch = useCallback(() => {
     const params = new URLSearchParams();
@@ -272,6 +360,9 @@ function SearchBarContent({
     setSelectedTags([]);
     setShowSuggestions(false);
     setHighlightedIndex(-1);
+    setImageError(null);
+    setIsDraggingImage(false);
+    cancelPendingImageUpload(imageUploadAbortRef, setIsUploadingImage);
   };
 
   const handleSuggestionSelect = useCallback((tagName: string) => {
@@ -282,8 +373,17 @@ function SearchBarContent({
     <div className="relative w-full max-w-2xl">
       <ModeToggle mode={searchMode} onModeChange={handleModeChange} />
 
-      {/* Input container */}
-      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 focus-within:border-zinc-400 focus-within:ring-1 focus-within:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:focus-within:border-zinc-500 dark:focus-within:ring-zinc-500">
+      {/* Input container. In semantic mode it doubles as an image drop zone. */}
+      <div
+        onDragOver={searchMode === "semantic" ? (e) => { e.preventDefault(); setIsDraggingImage(true); } : undefined}
+        onDragLeave={searchMode === "semantic" ? () => setIsDraggingImage(false) : undefined}
+        onDrop={searchMode === "semantic" ? handleImageDrop : undefined}
+        className={`flex flex-wrap items-center gap-1 rounded-lg border bg-white px-3 py-2 focus-within:ring-1 dark:bg-zinc-800 ${
+          isDraggingImage
+            ? "border-blue-500 ring-1 ring-blue-500 dark:border-blue-500 dark:ring-blue-500"
+            : "border-zinc-300 focus-within:border-zinc-400 focus-within:ring-zinc-400 dark:border-zinc-700 dark:focus-within:border-zinc-500 dark:focus-within:ring-zinc-500"
+        }`}
+      >
         {/* Selected tags */}
         {selectedTags.map((tag) => (
           <SelectedTagChip
@@ -315,7 +415,7 @@ function SearchBarContent({
             searchMode === "notes"
               ? "Search note content..."
               : searchMode === "semantic"
-                ? "Describe images to find..."
+                ? "Describe images, or drop/paste an image..."
               : selectedTags.length === 0
               ? placeholder
               : ""
@@ -324,8 +424,31 @@ function SearchBarContent({
         />
 
         {/* Loading indicator */}
-        {isLoading && (
+        {(isLoading || isUploadingImage) && (
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-blue-500" />
+        )}
+
+        {/* Image search trigger (semantic mode only) */}
+        {searchMode === "semantic" && (
+          <>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleImageFileSelect}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isUploadingImage}
+              aria-label="Search by image"
+              title="Search by image"
+              className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              <PhotoIcon className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </>
         )}
 
         {/* Search button */}
@@ -343,6 +466,11 @@ function SearchBarContent({
         <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
           Enter at least 2 characters to search
         </div>
+      )}
+
+      {/* Image search error */}
+      {searchMode === "semantic" && imageError && (
+        <div className="mt-1 text-xs text-red-500">{imageError}</div>
       )}
 
       {/* Suggestions dropdown */}

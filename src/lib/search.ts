@@ -25,11 +25,17 @@ import {
   toEmbeddingConfig,
 } from "@/lib/embeddings/settings";
 import { searchPostsByEmbedding } from "@/lib/embeddings/store";
+import { preprocessImageBufferForEmbedding } from "@/lib/embeddings/image";
 import {
   getCachedSemanticQueryEmbedding,
   normalizeSemanticQuery,
   upsertSemanticQueryEmbedding,
 } from "@/lib/embeddings/query-cache";
+import {
+  getCachedImageQueryEmbedding,
+  hashImageBytes,
+  upsertImageQueryEmbedding,
+} from "@/lib/embeddings/image-query-cache";
 import type { ApiRateLimitConfig } from "@/lib/rate-limit";
 
 /** Default number of results per page */
@@ -669,6 +675,166 @@ export async function searchSemanticPosts(
         ? error.message
         : "Failed to search image embeddings";
 
+    return {
+      posts: [],
+      totalCount: 0,
+      totalPages: 0,
+      queryTimeMs: performance.now() - startTime,
+      error: message,
+    };
+  }
+}
+
+/** Outcome of embedding an uploaded query image for image-based semantic search. */
+export type PrepareImageQueryEmbeddingResult =
+  | { imageHash: string }
+  | { error: string; reason: "not_configured" | "invalid_image" | "embed_failed" };
+
+/** Result of an image-based semantic search, with a `notFound` flag when the query embedding is uncached. */
+export interface SemanticImageSearchResult extends SemanticSearchResult {
+  /** True when no cached embedding exists for the supplied hash (caller should prompt a re-upload). */
+  notFound?: boolean;
+}
+
+/**
+ * Embed an uploaded query image with the active multimodal model and cache the
+ * vector keyed by the SHA-256 of its raw bytes plus preprocessing config.
+ *
+ * The hash is returned so the client can run (and paginate) the actual vector
+ * search via {@link searchSemanticPostsByImageHash} without re-uploading. A
+ * byte-identical image under the same preprocessing settings is served straight
+ * from cache, so no embedding round-trip occurs. The query image is embedded with
+ * the same `SEARCH_DOCUMENT` input type used when indexing post images, keeping
+ * the query vector in the same space as the corpus for apples-to-apples cosine
+ * similarity.
+ */
+export async function prepareImageQueryEmbedding(
+  buffer: Buffer
+): Promise<PrepareImageQueryEmbeddingResult> {
+  const imageHash = hashImageBytes(buffer);
+  const settings = await getEmbeddingOpenRouterSettings();
+  const embeddingConfig = toEmbeddingConfig(settings);
+  const queryConfig = {
+    baseUrl: embeddingConfig.baseUrl,
+    model: embeddingConfig.model,
+    dimensions: embeddingConfig.dimensions,
+    imageMaxResolution: embeddingConfig.imageMaxResolution,
+  };
+
+  const cached = await getCachedImageQueryEmbedding(imageHash, queryConfig);
+  if (cached) {
+    return { imageHash };
+  }
+
+  if (!isEmbeddingProviderConfigured(settings)) {
+    return { error: "OpenRouter API key not configured for embeddings", reason: "not_configured" };
+  }
+
+  // Decode/resize first so a corrupt or non-image payload (which can slip past a
+  // client-supplied MIME type) is reported as a client error, not a gateway one.
+  let processed;
+  try {
+    processed = await preprocessImageBufferForEmbedding(buffer, embeddingConfig.imageMaxResolution);
+  } catch (error) {
+    console.error("Image query decode error:", error);
+    return { error: "Could not read the uploaded file as an image", reason: "invalid_image" };
+  }
+
+  try {
+    const client = new OpenRouterClient({
+      apiKey: settings.apiKey ?? "",
+      model: settings.model,
+      baseUrl: embeddingConfig.baseUrl,
+    });
+    const embedding = await client.createImageEmbedding({
+      model: settings.model,
+      imageUrl: processed.dataUrl,
+      dimensions: settings.dimensions,
+    });
+
+    await upsertImageQueryEmbedding({
+      imageHash,
+      config: queryConfig,
+      embedding: embedding.embedding,
+    });
+
+    return { imageHash };
+  } catch (error) {
+    console.error("Image query embedding error:", error);
+    const message =
+      error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
+        ? error.message
+        : "Failed to embed the uploaded image";
+    return { error: message, reason: "embed_failed" };
+  }
+}
+
+/**
+ * Search image embeddings using a previously cached query-image vector.
+ *
+ * Looks up the vector cached under `imageHash` for the *current* embedding
+ * config, then ranks stored post embeddings by cosine distance. If the embedding
+ * config changed since the image was embedded (e.g. an admin switched models),
+ * the lookup misses and `notFound` is returned so the caller can request a fresh
+ * upload. Pagination reuses the cached vector — no re-embedding per page.
+ */
+export async function searchSemanticPostsByImageHash(
+  imageHash: string,
+  page: number,
+  options?: SearchSemanticPostsOptions
+): Promise<SemanticImageSearchResult> {
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const minScore = normalizeSemanticMinScore(options?.minScore);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = Math.min(Math.max(1, requestedPage), MAX_PAGE);
+  if (requestedPage > MAX_PAGE) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const skip = (validatedPage - 1) * limit;
+  const startTime = performance.now();
+
+  try {
+    const settings = await getEmbeddingOpenRouterSettings();
+    const embeddingConfig = toEmbeddingConfig(settings);
+    const cached = await getCachedImageQueryEmbedding(imageHash, {
+      baseUrl: embeddingConfig.baseUrl,
+      model: embeddingConfig.model,
+      dimensions: embeddingConfig.dimensions,
+      imageMaxResolution: embeddingConfig.imageMaxResolution,
+    });
+
+    if (!cached) {
+      return {
+        posts: [],
+        totalCount: 0,
+        totalPages: 0,
+        queryTimeMs: performance.now() - startTime,
+        notFound: true,
+      };
+    }
+
+    const result = await searchPostsByEmbedding({
+      config: embeddingConfig,
+      embedding: cached.embedding,
+      skip,
+      limit,
+      minScore,
+      resultCap: SEMANTIC_RESULT_CAP,
+    });
+
+    return {
+      posts: result.posts,
+      totalCount: result.totalCount,
+      totalPages: Math.ceil(result.totalCount / limit),
+      queryTimeMs: performance.now() - startTime,
+    };
+  } catch (error) {
+    console.error("Image semantic search error:", error);
+    const message =
+      error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
+        ? error.message
+        : "Failed to search image embeddings";
     return {
       posts: [],
       totalCount: 0,

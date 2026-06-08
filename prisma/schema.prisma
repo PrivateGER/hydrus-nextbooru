@@ -293,9 +293,14 @@ model PostEmbedding {
   @@index([baseUrl, model, dimensions, imageMaxResolution, status], map: "PostEmbedding_config_status_idx")
 }
 
+// Caches query embeddings for semantic image search. Rows are keyed by a
+// content hash + embedding config. Text queries store their normalized text in
+// `query`; uploaded query images have no recoverable text source, so `query`
+// is NULL and the hash is derived from the raw image-byte hash plus preprocessing
+// resolution.
 model SemanticQueryEmbedding {
   queryHash  String                @db.Char(64)
-  query      String
+  query      String?
   baseUrl    String
   model      String
   dimensions Int

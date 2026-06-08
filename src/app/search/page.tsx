@@ -9,6 +9,7 @@ import { PostGrid } from "@/components/post-grid";
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
 import { SimilarSearch } from "@/components/similar-search";
+import { SemanticImageResults } from "@/components/semantic-image-results";
 import { NoteSearchResult } from "@/components/note-search-result";
 import { SearchBarSkeleton, PostGridSkeleton, PageHeaderSkeleton } from "@/components/skeletons";
 import {
@@ -58,6 +59,7 @@ interface SearchPageParams {
   page?: string;
   mode?: string;
   minScore?: string;
+  imgHash?: string;
 }
 
 interface SearchPageProps {
@@ -89,12 +91,63 @@ async function checkSemanticSearchPageRateLimit(): Promise<SemanticSearchResult 
 async function SearchPageContent({ searchParams }: { searchParams: Promise<SearchPageParams> }) {
   const params = await searchParams;
   const isReverseMode = params.mode === "reverse";
+  const page = Math.max(1, parseInt(params.page || "1", 10));
+
+  if (isReverseMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <div className="relative w-full max-w-2xl">
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-semibold flex-1">Reverse Image Search</h1>
+              <Link
+                href="/search"
+                className="rounded-lg p-2 text-blue-500 bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
+                title="Back to text search"
+              >
+                <ArrowLeftIcon className="h-5 w-5" />
+              </Link>
+            </div>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Upload an image to find perceptually identical posts.
+            </p>
+          </div>
+        </div>
+        <SimilarSearch initialThreshold={10} />
+      </div>
+    );
+  }
+
+  // Image-based semantic search: an uploaded query image embedded via the search
+  // bar, identified by its hash in the URL. Results render client-side (the image
+  // bytes never travel in the URL) while the bar still reads as "Semantic".
+  const imageHash = (params.imgHash || "").trim().toLowerCase();
+  const isImageSemanticMode = params.mode === "semantic-image" && /^[a-f0-9]{64}$/.test(imageHash);
+  if (isImageSemanticMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <div className="flex w-full max-w-2xl items-end gap-2">
+            <SearchBar initialMode="semantic" />
+            <Link
+              href="/search?mode=reverse"
+              className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
+              title="Reverse image search"
+            >
+              <CameraIcon className="h-5 w-5" />
+            </Link>
+          </div>
+        </div>
+        <SemanticImageResults imageHash={imageHash} page={page} />
+      </div>
+    );
+  }
+
   const tagsParam = params.tags || "";
   const tags = tagsParam.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
   const notesQuery = params.notes?.trim() || "";
   const semanticQuery = params.semantic?.trim() || "";
   const semanticMinScore = params.minScore === undefined ? undefined : Number.parseFloat(params.minScore);
-  const page = Math.max(1, parseInt(params.page || "1", 10));
   const requestedSearchMode = semanticQuery.length >= 2
     ? "semantic"
     : notesQuery.length >= 2
@@ -144,31 +197,6 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   const wildcardMap = new Map(resolvedWildcards.map((w) => [w.pattern, w]));
   const hasResults = isNotesSearch ? notes.length > 0 : posts.length > 0;
   const hasQuery = isSemanticSearch || isNotesSearch || tags.length > 0;
-
-  if (isReverseMode) {
-    return (
-      <div className="space-y-6">
-        <div className="flex justify-center">
-          <div className="relative w-full max-w-2xl">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold flex-1">Reverse Image Search</h1>
-              <Link
-                href="/search"
-                className="rounded-lg p-2 text-blue-500 bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
-                title="Back to text search"
-              >
-                <ArrowLeftIcon className="h-5 w-5" />
-              </Link>
-            </div>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Upload an image to find perceptually identical posts.
-            </p>
-          </div>
-        </div>
-        <SimilarSearch initialThreshold={10} />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
