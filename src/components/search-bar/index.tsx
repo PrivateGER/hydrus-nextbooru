@@ -20,6 +20,7 @@ import { ModeToggle, type SearchMode } from "@/components/search-bar/mode-toggle
 import { SelectedTagChip } from "@/components/search-bar/selected-tag-chip";
 import { SuggestionsDropdown } from "@/components/search-bar/suggestions-dropdown";
 import { useTagSuggestions } from "@/components/search-bar/use-tag-suggestions";
+import { cancelPendingImageUpload, isCurrentImageUpload } from "@/components/search-bar/image-upload-state";
 
 interface SearchBarProps {
   initialTags?: string[];
@@ -226,12 +227,17 @@ function SearchBarContent({
         throw new Error(data.error || "Image search failed");
       }
 
+      if (!isCurrentImageUpload(imageUploadAbortRef, controller)) return;
       router.push(`/search?mode=semantic-image&imgHash=${data.imageHash}`);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
+      if (!isCurrentImageUpload(imageUploadAbortRef, controller)) return;
       setImageError(err instanceof Error ? err.message : "Image search failed");
     } finally {
-      if (!controller.signal.aborted) setIsUploadingImage(false);
+      if (isCurrentImageUpload(imageUploadAbortRef, controller)) {
+        imageUploadAbortRef.current = null;
+        setIsUploadingImage(false);
+      }
     }
   }, [router]);
 
@@ -356,6 +362,7 @@ function SearchBarContent({
     setHighlightedIndex(-1);
     setImageError(null);
     setIsDraggingImage(false);
+    cancelPendingImageUpload(imageUploadAbortRef, setIsUploadingImage);
   };
 
   const handleSuggestionSelect = useCallback((tagName: string) => {
