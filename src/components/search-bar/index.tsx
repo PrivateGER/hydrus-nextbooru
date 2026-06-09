@@ -415,7 +415,7 @@ function SearchBarContent({
             searchMode === "notes"
               ? "Search note content..."
               : searchMode === "semantic"
-                ? "Describe images, or drop/paste an image..."
+                ? "Describe images semantically, or drop/paste an image..."
               : selectedTags.length === 0
               ? placeholder
               : ""
@@ -442,8 +442,8 @@ function SearchBarContent({
               type="button"
               onClick={() => imageInputRef.current?.click()}
               disabled={isUploadingImage}
-              aria-label="Search by image"
-              title="Search by image"
+              aria-label="Semantic search by image"
+              title="Semantic search by image (meaning/content, not exact match)"
               className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             >
               <PhotoIcon className="h-5 w-5" aria-hidden="true" />

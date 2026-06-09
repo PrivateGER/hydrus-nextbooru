@@ -54,7 +54,7 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
               ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-700"
               : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-800"
           }`}
-          title="Semantic image search"
+          title="Semantic text/image search by meaning"
         >
           <SparklesIcon className="w-4 h-4" aria-hidden="true" />
           Semantic

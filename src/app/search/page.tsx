@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { unstable_cache } from "next/cache";
 import { headers } from "next/headers";
 import Link from "next/link";
-import { CameraIcon, ArrowLeftIcon } from "@heroicons/react/24/outline";
+import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 import { PostGrid } from "@/components/post-grid";
 
 import { Pagination } from "@/components/pagination";
@@ -127,16 +127,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
     return (
       <div className="space-y-6">
         <div className="flex justify-center">
-          <div className="flex w-full max-w-2xl items-end gap-2">
-            <SearchBar initialMode="semantic" />
-            <Link
-              href="/search?mode=reverse"
-              className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
-              title="Reverse image search"
-            >
-              <CameraIcon className="h-5 w-5" />
-            </Link>
-          </div>
+          <SearchBar initialMode="semantic" />
         </div>
         <SemanticImageResults imageHash={imageHash} page={page} />
       </div>
@@ -201,20 +192,19 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   return (
     <div className="space-y-6">
       <div className="flex justify-center">
-        <div className="flex w-full max-w-2xl items-end gap-2">
+        <div className="w-full max-w-2xl">
           <SearchBar
             initialTags={tags}
             initialNotesQuery={notesQuery}
             initialSemanticQuery={semanticQuery}
             initialMode={isSemanticSearch ? "semantic" : isNotesSearch ? "notes" : "tags"}
           />
-          <Link
-            href="/search?mode=reverse"
-            className="mb-0.5 shrink-0 rounded-lg border border-zinc-300 p-2.5 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:hover:border-zinc-600 dark:hover:text-zinc-300 transition-colors"
-            title="Reverse image search"
-          >
-            <CameraIcon className="h-5 w-5" />
-          </Link>
+          <div className="mt-2 text-right text-xs text-zinc-500 dark:text-zinc-400">
+            Need exact/duplicate matching?{" "}
+            <Link href="/search?mode=reverse" className="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400">
+              Open perceptual hash search
+            </Link>
+          </div>
         </div>
       </div>
 
