@@ -157,9 +157,11 @@ export function assertSafeBaseUrl(
     );
   }
 
-  if (hostname === "localhost") {
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
     if (!allowLoopback) {
-      throw new UnsafeBaseUrlError("Base URL must not target localhost.");
+      throw new UnsafeBaseUrlError(
+        "Base URL must not target localhost or *.localhost."
+      );
     }
     return trimmed;
   }

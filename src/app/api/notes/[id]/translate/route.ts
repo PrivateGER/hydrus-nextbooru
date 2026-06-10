@@ -3,25 +3,12 @@ import { prisma } from "@/lib/db";
 import { getOpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 import { aiLog } from "@/lib/logger";
+import { TRANSLATE_RATE_LIMIT_CONFIG } from "@/lib/translation/rate-limit";
 
 interface TranslateRequestBody {
   sourceLang?: string;
   targetLang?: string;
 }
-
-/**
- * Relaxed rate limit shared across all translation endpoints (notes, group titles, image OCR).
- *
- * Translations call paid LLM APIs, but the product decision is to keep them public and generous
- * (most boorus pre-generate translations). The limit is intentionally looser than the
- * search route (60/min) so normal browsing never trips it, while still capping runaway abuse
- * of the paid API budget. A shared key caps a single client's *total* translation spend.
- */
-const TRANSLATE_RATE_LIMIT_CONFIG = {
-  prefix: "translate",
-  limit: 120,
-  windowMs: 60 * 1000,
-};
 
 /**
  * Translate a note's content identified by the route `id` and persist translation metadata.

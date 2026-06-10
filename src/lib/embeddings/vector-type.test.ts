@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
-import { vectorType } from "./store";
+import { vectorType } from "@/lib/embeddings/store";
 
 /**
  * Guard for ITEM 4: `dimensions` is interpolated into raw SQL (`vector(N)`) via

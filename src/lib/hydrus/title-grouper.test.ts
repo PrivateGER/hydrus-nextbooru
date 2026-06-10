@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTitleSourceId, extractTitleGroups } from './title-grouper';
+import { deriveTitleSourceId, extractTitleGroups } from '@/lib/hydrus/title-grouper';
 import { createMockFileMetadata } from '@/test/mocks/fixtures/hydrus-metadata';
 
 // The legacy 32-bit djb2 hash, kept here only to prove the new scheme avoids a
@@ -115,9 +115,25 @@ describe('extractTitleGroups', () => {
 });
 
 describe('deriveTitleSourceId', () => {
-  it('returns the lowercased title verbatim (collision-free)', () => {
+  it('returns normal-length titles lowercased verbatim', () => {
     expect(deriveTitleSourceId('Some Long Series Title')).toBe('some long series title');
     expect(deriveTitleSourceId('ALREADY LOWER')).toBe('already lower');
+  });
+
+  it('uses a bounded deterministic SHA-256 sourceId for very long titles', () => {
+    const longTitle = 'A'.repeat(500);
+    const sourceId = deriveTitleSourceId(longTitle);
+
+    expect(sourceId).toMatch(/^title-sha256:[a-f0-9]{64}$/);
+    expect(sourceId.length).toBeLessThan(longTitle.length);
+    expect(deriveTitleSourceId(longTitle)).toBe(sourceId);
+    expect(deriveTitleSourceId(`${longTitle}!`)).not.toBe(sourceId);
+  });
+
+  it('counts UTF-8 bytes when deciding whether to hash the title sourceId', () => {
+    const multibyteTitle = 'あ'.repeat(81); // 243 bytes once lowercased.
+
+    expect(deriveTitleSourceId(multibyteTitle)).toMatch(/^title-sha256:[a-f0-9]{64}$/);
   });
 
   it('gives distinct sourceIds for two titles that collided under the old djb2 hash', () => {

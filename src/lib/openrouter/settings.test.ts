@@ -281,6 +281,9 @@ describe("validateLocalBaseUrl / validateOpenRouterBaseUrl wrappers", () => {
     expect(() => validateOpenRouterBaseUrl("http://127.0.0.1/v1")).toThrow(
       UnsafeBaseUrlError
     );
+    expect(() => validateOpenRouterBaseUrl("http://foo.localhost/v1")).toThrow(
+      UnsafeBaseUrlError
+    );
     expect(() => validateOpenRouterBaseUrl("http://192.168.0.1/v1")).toThrow(
       UnsafeBaseUrlError
     );

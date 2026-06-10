@@ -4,7 +4,7 @@ import {
   checkApiRateLimit,
   checkRateLimit,
   getClientIPFromHeaders,
-} from "./rate-limit";
+} from "@/lib/rate-limit";
 
 describe("checkRateLimit", () => {
   let keyId = 0;
@@ -77,19 +77,56 @@ describe("getClientIPFromHeaders", () => {
     };
   }
 
-  it("uses the first x-forwarded-for address and trims proxy whitespace", () => {
+  it("uses x-real-ip as the canonical proxy-provided client IP", () => {
+    expect(
+      getClientIPFromHeaders(
+        headers({
+          "x-real-ip": " 198.51.100.7 ",
+          "x-forwarded-for": "203.0.113.4, 198.51.100.10",
+        })
+      )
+    ).toBe("198.51.100.7");
+  });
+
+  it("uses the right-most valid x-forwarded-for address when x-real-ip is absent", () => {
     expect(
       getClientIPFromHeaders(
         headers({ "x-forwarded-for": " 203.0.113.4, 198.51.100.10 " })
       )
-    ).toBe("203.0.113.4");
+    ).toBe("198.51.100.10");
   });
 
-  it("falls back to x-real-ip and then unknown", () => {
-    expect(getClientIPFromHeaders(headers({ "x-real-ip": " 198.51.100.7 " }))).toBe(
-      "198.51.100.7"
-    );
+  it("ignores invalid header values instead of using them as limiter keys", () => {
+    expect(
+      getClientIPFromHeaders(
+        headers({
+          "x-real-ip": "not-an-ip",
+          "x-forwarded-for": "spoofed, 203.0.113.4",
+        })
+      )
+    ).toBe("203.0.113.4");
+
+    expect(
+      getClientIPFromHeaders(headers({ "x-real-ip": "not-an-ip" }))
+    ).toBe("unknown");
+  });
+
+  it("supports IPv6 literals from trusted headers", () => {
+    expect(
+      getClientIPFromHeaders(headers({ "x-real-ip": " [2001:db8::1] " }))
+    ).toBe("2001:db8::1");
+    expect(
+      getClientIPFromHeaders(
+        headers({ "x-forwarded-for": "203.0.113.4, 2001:db8::2" })
+      )
+    ).toBe("2001:db8::2");
+  });
+
+  it("falls back to unknown", () => {
     expect(getClientIPFromHeaders(headers({}))).toBe("unknown");
+    expect(
+      getClientIPFromHeaders(headers({ "x-forwarded-for": "spoofed, also-bad" }))
+    ).toBe("unknown");
   });
 });
 

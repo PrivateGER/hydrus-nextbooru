@@ -1,9 +1,13 @@
+import { createHash } from "crypto";
 import { SourceType } from "@/generated/prisma/client";
 import type { HydrusFileMetadata } from "./types";
 
+const MAX_TITLE_SOURCE_ID_BYTES = 240;
+const HASHED_TITLE_SOURCE_ID_PREFIX = "title-sha256:";
+
 export interface TitleGroup {
   sourceType: typeof SourceType.TITLE;
-  sourceId: string; // Lowercased normalized title (used directly, collision-free)
+  sourceId: string; // Lowercased normalized title, or a bounded SHA-256 key for very long titles.
   normalizedTitle: string;
   position: number;
 }
@@ -140,18 +144,29 @@ function normalizeTitle(title: string): { baseTitle: string; position: number } 
  * Historically this hashed the title with a 32-bit djb2 hash, but at ~65k
  * distinct title groups that has a ~50% chance of at least one collision
  * (birthday bound), which would silently merge two unrelated series into one
- * group. Using the lowercased normalized title directly is collision-free.
+ * group. Using the lowercased normalized title directly is collision-free for
+ * normal title sizes.
  *
- * The DB column (Group.sourceId) is an unbounded TEXT/String, so there is no
- * length constraint to worry about. Lowercasing matches the previous hash
- * input (`baseTitle.toLowerCase()`), so two titles differing only in case still
- * map to the same group, exactly as before.
+ * PostgreSQL btree indexes cannot store arbitrarily large TEXT keys, so titles
+ * above 240 UTF-8 bytes are represented as `title-sha256:<hex digest>`. That
+ * keeps the `(sourceType, sourceId)` unique index safely bounded while retaining
+ * a deterministic, collision-resistant key. Lowercasing matches the previous
+ * hash input (`baseTitle.toLowerCase()`), so two titles differing only in case
+ * still map to the same group, exactly as before.
  *
  * The migration 20260610000000_widen_title_group_sourceid backfills existing
- * rows from this same scheme (lower(Group.title)).
+ * rows from this same scheme.
  */
 export function deriveTitleSourceId(normalizedTitle: string): string {
-  return normalizedTitle.toLowerCase();
+  const lowercasedTitle = normalizedTitle.toLowerCase();
+
+  if (Buffer.byteLength(lowercasedTitle, "utf8") <= MAX_TITLE_SOURCE_ID_BYTES) {
+    return lowercasedTitle;
+  }
+
+  return `${HASHED_TITLE_SOURCE_ID_PREFIX}${createHash("sha256")
+    .update(lowercasedTitle)
+    .digest("hex")}`;
 }
 
 /**

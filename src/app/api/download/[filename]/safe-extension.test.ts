@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { safeExtension } from "./route";
+import { safeExtension } from "@/app/api/download/[filename]/route";
 
 /**
  * Guard for ITEM 3: the DB-stored extension is interpolated into the

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitizePositiveInt, normalizePositiveInteger, MAX_PAGE, MAX_LIMIT } from "./search";
+import { sanitizePositiveInt, normalizePositiveInteger, MAX_PAGE, MAX_LIMIT } from "@/lib/search";
 
 /**
  * Guards for ITEM 1: NaN / non-finite values must never reach Prisma take/skip.

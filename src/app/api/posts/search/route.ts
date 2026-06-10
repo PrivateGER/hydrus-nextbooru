@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchPosts, sanitizePositiveInt, MAX_LIMIT } from "@/lib/search";
+import { searchPosts, sanitizePositiveInt, MAX_LIMIT, MAX_PAGE } from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
-
-const MAX_PAGE = 10000;
 
 const RATE_LIMIT_CONFIG = {
   prefix: "posts-search",
