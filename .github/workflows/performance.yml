@@ -5,6 +5,9 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  schedule:
+    # Nightly benchmark run for trend tracking.
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       dataset:
@@ -21,6 +24,7 @@ jobs:
   # query-count (N+1) budgets. These are CI-stable — they assert on plan
   # structure and statement counts, never on wall-clock time.
   guards:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -46,13 +50,18 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: true
 
-  # Wall-clock benchmarks are report-only on shared runners (thresholds are
-  # not enforced when CI is set) and only run on demand. Trend tracking on a
-  # schedule is planned to replace ad-hoc inspection of these numbers.
+  # Wall-clock benchmarks. Thresholds are report-only on shared runners
+  # (assertPerformance does not enforce when CI is set); regressions are
+  # caught by trend comparison instead: nightly and master-push runs feed
+  # github-action-benchmark, which alerts and fails on >175% of baseline.
+  # workflow_dispatch runs are ad-hoc and never written to the trend data.
   benchmarks:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      # Push trend data to the gh-pages branch and comment on alerts.
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -71,8 +80,33 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      - name: Run timing benchmarks (report only)
+      - name: Run timing benchmarks
         run: npm run test:perf
         env:
-          PERF_DATASET_SIZE: ${{ inputs.dataset }}
+          PERF_DATASET_SIZE: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset || 'medium' }}
+          PERF_RESULTS_DIR: perf-results
           TESTCONTAINERS_RYUK_DISABLED: true
+
+      - name: Merge benchmark results
+        run: jq -s 'add' perf-results/*.json > benchmark-results.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
+
+      - name: Track benchmark trends
+        if: github.event_name != 'workflow_dispatch'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: API benchmarks
+          tool: customSmallerIsBetter
+          output-file-path: benchmark-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: bench
+          alert-threshold: '175%'
+          comment-on-alert: true
+          fail-on-alert: true
+          summary-always: true

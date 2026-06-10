@@ -32,7 +32,7 @@ describe('Performance: Post Search API', () => {
       const [tag] = await getRandomTagNames(prisma, 1, 100);
 
       const s = await benchmarkWithStats(
-        `Single tag search (tag=${tag})`,
+        'Single tag search',
         async () => {
           const request = new NextRequest(
             `http://localhost/api/posts/search?tags=${encodeURIComponent(tag)}`
@@ -108,7 +108,7 @@ describe('Performance: Post Search API', () => {
       const tagsParam = tags.map(t => encodeURIComponent(t)).join(',');
 
       const s = await benchmarkWithStats(
-        `2-tag AND search (tags=${tags.join(', ')})`,
+        '2-tag AND search',
         async () => {
           const request = new NextRequest(
             `http://localhost/api/posts/search?tags=${tagsParam}`
@@ -127,7 +127,7 @@ describe('Performance: Post Search API', () => {
       const tagsParam = tags.map(t => encodeURIComponent(t)).join(',');
 
       const s = await benchmarkWithStats(
-        `3-tag AND search (tags=${tags.join(', ')})`,
+        '3-tag AND search',
         async () => {
           const request = new NextRequest(
             `http://localhost/api/posts/search?tags=${tagsParam}`

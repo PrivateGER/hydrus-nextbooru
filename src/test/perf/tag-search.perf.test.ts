@@ -146,7 +146,7 @@ describe('Performance: Tag Search API', () => {
       const [selectedTag] = await getRandomTagNames(prisma, 1, 50);
 
       const s = await benchmarkWithStats(
-        `Co-occurrence search (1 selected: ${selectedTag})`,
+        'Co-occurrence search (1 selected)',
         async () => {
           const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${encodeURIComponent(selectedTag)}`
@@ -167,7 +167,7 @@ describe('Performance: Tag Search API', () => {
       const selectedParam = selectedTags.map(t => encodeURIComponent(t)).join(',');
 
       const s = await benchmarkWithStats(
-        `Co-occurrence search (2 selected: ${selectedTags.join(', ')})`,
+        'Co-occurrence search (2 selected)',
         async () => {
           const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${selectedParam}`
@@ -188,7 +188,7 @@ describe('Performance: Tag Search API', () => {
       const selectedParam = selectedTags.map(t => encodeURIComponent(t)).join(',');
 
       const s = await benchmarkWithStats(
-        `Co-occurrence search (3 selected: ${selectedTags.join(', ')})`,
+        'Co-occurrence search (3 selected)',
         async () => {
           const request = tagSearchRequest(
             `http://localhost/api/tags/search?q=tag&selected=${selectedParam}`

@@ -44,3 +44,7 @@ next-env.d.ts
 data/thumbnails
 .idea
 .playwright/
+
+# benchmark output
+/perf-results
+/benchmark-results.json

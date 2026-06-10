@@ -2,6 +2,8 @@
  * Performance test helpers for timing and statistics
  */
 
+import { recordBenchmark } from './results';
+
 export interface Stats {
   min: number;
   max: number;
@@ -94,7 +96,8 @@ export async function benchmark(
 }
 
 /**
- * Run benchmark and return stats with formatted output
+ * Run benchmark and return stats with formatted output.
+ * Results are also buffered for machine-readable output (see results.ts).
  */
 export async function benchmarkWithStats(
   name: string,
@@ -106,6 +109,8 @@ export async function benchmarkWithStats(
 
   console.log(`\n${name}:`);
   console.table(formatStats(s));
+
+  recordBenchmark(name, s);
 
   return s;
 }
