@@ -97,7 +97,7 @@ describe("POST /api/admin/stats", () => {
     expect(mockInvalidateAllCaches).toHaveBeenCalledTimes(1);
   });
 
-  it("logs failures and returns the error message without invalidating caches", async () => {
+  it("logs the real failure server-side but returns a generic error without invalidating caches", async () => {
     mockUpdateHomeStatsCache.mockRejectedValueOnce(new Error("stats cache unavailable"));
 
     const { POST } = await import("./route");
@@ -105,7 +105,10 @@ describe("POST /api/admin/stats", () => {
     const body = await response.json();
 
     expect(response.status).toBe(500);
-    expect(body).toEqual({ error: "stats cache unavailable" });
+    // The raw error message must NOT leak to the client.
+    expect(body).toEqual({ error: "Internal server error" });
+    expect(body.error).not.toContain("stats cache unavailable");
+    // ...but it is still logged server-side for diagnosis.
     expect(mockApiLogError).toHaveBeenCalledWith(
       { error: "stats cache unavailable" },
       "Failed to recalculate stats"

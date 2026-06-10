@@ -10,7 +10,9 @@ import {
   modelSupportsVision,
 } from "@/lib/openrouter";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import { aiLog } from "@/lib/logger";
+import { TRANSLATE_RATE_LIMIT_CONFIG } from "@/lib/translation/rate-limit";
 
 interface TranslateImageRequestBody {
   targetLang?: string;
@@ -27,6 +29,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ hash: string }> }
 ) {
+  const rateLimitResponse = checkApiRateLimit(request, TRANSLATE_RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const { hash } = await params;
 

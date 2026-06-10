@@ -92,3 +92,27 @@ Query logging outputs formatted SQL with execution duration via pino. Useful for
 - **File serving**: Hash-based paths (`f{hash[0:2]}/{hash}.{ext}`) with 1-year cache headers
 - **Sync concurrency**: Uses Promise.all with chunked batches to avoid overwhelming Hydrus
 - **Tag search**: Progressive filtering - only shows tags that co-occur with already-selected tags
+
+## Deployment / Concurrency
+
+**The app currently assumes a SINGLE Next.js process.** Several mechanisms keep
+state in process memory and therefore do NOT coordinate across multiple
+workers/replicas. They are silently bypassed (each process gets its own copy)
+under a multi-worker or multi-replica deployment:
+
+- **In-memory rate limiter** (`src/lib/rate-limit.ts`): the sliding-window
+  counters live in a per-process `Map`. With N processes a client effectively
+  gets up to N× the configured limit. Replace with a shared store (e.g. Redis)
+  before scaling out.
+- **In-process batch locks** on the admin maintenance routes — thumbnails,
+  phash, and embeddings (`src/app/api/admin/{thumbnails,phash,embeddings}/route.ts`)
+  use a module-level `let batchRunning` flag to prevent overlapping batch runs.
+  Across multiple processes the guard does not hold and batches can run
+  concurrently against the same data.
+- **Recommendation compute coalescing** (`src/lib/recommendations.ts`): the
+  in-flight promise map that dedupes concurrent recomputes for the same post is
+  per-process. The underlying DB writes are transactional and remain safe
+  regardless, but cross-process requests may each recompute.
+
+If/when moving to multi-process, these need a shared coordination layer
+(distributed lock / shared cache) rather than in-memory state.

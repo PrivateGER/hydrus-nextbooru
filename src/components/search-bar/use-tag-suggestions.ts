@@ -36,6 +36,12 @@ export function useTagSuggestions({
 
   const prevSelectedTagsRef = useRef<string[]>([]);
   const prevPropsKeyRef = useRef(propsKey);
+  // Tracks the in-flight popular-tags request so a newer call can abort it.
+  const popularAbortRef = useRef<AbortController | null>(null);
+  // Always reflects the latest suggestions length without forcing fetchPopularTags
+  // to re-create (which would re-run the focus/selection effects).
+  const suggestionsLengthRef = useRef(0);
+  suggestionsLengthRef.current = suggestions.length;
 
   // Close suggestions when props change (navigation)
   useEffect(() => {
@@ -49,7 +55,13 @@ export function useTagSuggestions({
   const fetchPopularTags = useCallback(async (options: { forceRefresh?: boolean; showDropdown?: boolean } = {}) => {
     const { forceRefresh = false, showDropdown = true } = options;
     if (!enabled) return;
-    if (!forceRefresh && (searchQuery.length > 0 || suggestions.length > 0)) return;
+    if (!forceRefresh && (searchQuery.length > 0 || suggestionsLengthRef.current > 0)) return;
+
+    // Abort any popular-tags request still in flight so a slow earlier response
+    // cannot resolve after a newer one and clobber the suggestions.
+    popularAbortRef.current?.abort();
+    const controller = new AbortController();
+    popularAbortRef.current = controller;
 
     setIsLoading(true);
     try {
@@ -59,7 +71,9 @@ export function useTagSuggestions({
       if (selectedTags.length > 0) {
         params.set("selected", selectedTags.join(","));
       }
-      const response = await fetch(`/api/tags/search?${params.toString()}`);
+      const response = await fetch(`/api/tags/search?${params.toString()}`, {
+        signal: controller.signal,
+      });
       const data = await response.json();
 
       // Filter out omnipresent tags when there are selected tags
@@ -72,11 +86,19 @@ export function useTagSuggestions({
         setShowSuggestions(true);
       }
     } catch (error) {
+      // Ignore AbortError - request was intentionally cancelled
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
       console.error("Error fetching tags:", error);
     } finally {
-      setIsLoading(false);
+      // Only the most recent request should clear the loading state; a stale
+      // aborted request resolving later must not flip it off prematurely.
+      if (popularAbortRef.current === controller) {
+        setIsLoading(false);
+      }
     }
-  }, [searchQuery, selectedTags, suggestions.length, enabled]);
+  }, [searchQuery, selectedTags, enabled]);
 
   // Refresh narrowing tags when selectedTags changes
   // Keep dropdown open if it was already open (user interaction), otherwise don't open it (navigation)
@@ -136,7 +158,12 @@ export function useTagSuggestions({
         }
         console.error("Error fetching suggestions:", error);
       } finally {
-        setIsLoading(false);
+        // Only clear loading if this request is still the current one; an
+        // aborted (superseded) request must not flip the spinner off while a
+        // newer fetch is in flight.
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+        }
       }
     }, 200);
 
@@ -150,6 +177,13 @@ export function useTagSuggestions({
   useEffect(() => {
     setHighlightedIndex(-1);
   }, [isExcludeMode]);
+
+  // Abort any in-flight popular-tags request on unmount.
+  useEffect(() => {
+    return () => {
+      popularAbortRef.current?.abort();
+    };
+  }, []);
 
   // Sort and filter suggestions based on mode
   const displaySuggestions = isExcludeMode

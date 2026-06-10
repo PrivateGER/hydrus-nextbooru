@@ -15,6 +15,7 @@ const {
   mockAiLogInfo,
   mockAiLogWarn,
   mockAiLogError,
+  mockCheckApiRateLimit,
   MockOpenRouterApiError,
   MockOpenRouterConfigError,
 } = vi.hoisted(() => {
@@ -43,6 +44,7 @@ const {
     mockAiLogInfo: vi.fn(),
     mockAiLogWarn: vi.fn(),
     mockAiLogError: vi.fn(),
+    mockCheckApiRateLimit: vi.fn(),
     MockOpenRouterApiError: TestOpenRouterApiError,
     MockOpenRouterConfigError: TestOpenRouterConfigError,
   };
@@ -74,6 +76,10 @@ vi.mock("@/lib/logger", () => ({
   },
 }));
 
+vi.mock("@/lib/rate-limit", () => ({
+  checkApiRateLimit: mockCheckApiRateLimit,
+}));
+
 vi.mock("@/lib/openrouter", () => ({
   getOpenRouterSettings: mockGetOpenRouterSettings,
   getEffectiveModel: mockGetEffectiveModel,
@@ -90,6 +96,7 @@ describe("POST /api/posts/[hash]/translate-image", () => {
     vi.resetModules();
     vi.clearAllMocks();
 
+    mockCheckApiRateLimit.mockReturnValue(null);
     mockFindUnique.mockResolvedValue({
       id: 1,
       hash: validHash,
@@ -111,6 +118,44 @@ describe("POST /api/posts/[hash]/translate-image", () => {
       translateImage: mockTranslateImage,
     });
     mockUpdatePost.mockResolvedValue({});
+  });
+
+  it("returns the 429 rate-limit response before any work when throttled", async () => {
+    const limited = new Response(
+      JSON.stringify({ error: "Too many requests. Please try again later." }),
+      { status: 429 }
+    );
+    mockCheckApiRateLimit.mockReturnValueOnce(limited);
+
+    const { POST } = await import("./route");
+    const response = await POST(
+      new NextRequest(`http://localhost/api/posts/${validHash}/translate-image`, {
+        method: "POST",
+        body: JSON.stringify({ targetLang: "en" }),
+      }),
+      { params: Promise.resolve({ hash: validHash }) }
+    );
+
+    expect(response.status).toBe(429);
+    // No DB lookup or LLM call should happen once rate limited.
+    expect(mockFindUnique).not.toHaveBeenCalled();
+    expect(mockGetOpenRouterClient).not.toHaveBeenCalled();
+  });
+
+  it("proceeds normally and returns 200 when under the rate limit", async () => {
+    const { POST } = await import("./route");
+    const response = await POST(
+      new NextRequest(`http://localhost/api/posts/${validHash}/translate-image`, {
+        method: "POST",
+        body: JSON.stringify({ targetLang: "en" }),
+      }),
+      { params: Promise.resolve({ hash: validHash }) }
+    );
+    const data = await response.json();
+
+    expect(mockCheckApiRateLimit).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(data.hasText).toBe(true);
   });
 
   it("returns 400 for invalid hash format", async () => {

@@ -12,10 +12,25 @@ import { syncLog } from "@/lib/logger";
 import { withSpan, addSpanEvent, setSpanAttributes } from "@/lib/tracing";
 import { computePhash, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { IncompleteLookupError, assertLookupComplete } from "./lookup-validation";
 
 export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
 const MAX_RETRIES = 3; // Max retries for transient failures
+
+// PostgreSQL caps bind parameters at 65,535 per statement. Chunk bulk
+// INSERT/SELECT so we never exceed that limit regardless of batch size.
+const PG_MAX_BIND_PARAMS = 65535;
+// We pass params via the spread form `$executeRawUnsafe(sql, ...params)`. V8
+// caps the number of arguments in a spread/apply call at ~65,535, so spreading
+// ~65k params throws "Maximum call stack size exceeded". Stay comfortably below
+// BOTH the PG bind limit and the JS arg limit by capping bind params per
+// statement well under PG_MAX_BIND_PARAMS.
+const MAX_PARAMS_PER_STATEMENT = Math.min(30000, PG_MAX_BIND_PARAMS);
+// Tags use 2 bind params per entry (name, category).
+export const TAG_CHUNK_SIZE = Math.floor(MAX_PARAMS_PER_STATEMENT / 2); // 15000
+// Groups use 3 bind params per entry (sourceType, sourceId, title).
+export const GROUP_CHUNK_SIZE = Math.floor(MAX_PARAMS_PER_STATEMENT / 3); // 10000
 
 /**
  * Lookup maps populated before parallel processing to avoid race conditions
@@ -42,6 +57,10 @@ export interface SyncOptions {
   tags?: string[]; // Filter by specific tags, defaults to system:everything
   onProgress?: (progress: SyncProgress) => void;
   batchSize?: number; // Override batch size (for testing)
+  // Set when the caller has already atomically acquired the sync lock (e.g. the
+  // admin API route decided the 409 via acquireSyncLock). Skips re-acquisition
+  // so the caller's lock is not mistaken for a concurrent sync.
+  lockAlreadyHeld?: boolean;
 }
 
 // =============================================================================
@@ -116,7 +135,7 @@ function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, GroupD
  * Wrapped in a transaction to ensure INSERT and SELECT are atomic.
  * Returns a Map of "CATEGORY:name" -> id
  */
-async function bulkEnsureTags(
+export async function bulkEnsureTags(
   tags: Map<string, { name: string; category: TagCategory }>
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
@@ -131,39 +150,39 @@ async function bulkEnsureTags(
     throw new Error(`Invalid tag categories: ${invalidTags.map(t => t.category).join(', ')}`);
   }
 
-  // Wrap INSERT and SELECT in a transaction to prevent race conditions
+  // Wrap INSERT and SELECT in a transaction to prevent race conditions.
+  // Chunk both the INSERT and the resolving SELECT so we never exceed
+  // PostgreSQL's 65,535 bind-parameter limit (2 params per tag).
   await prisma.$transaction(async (tx) => {
-    // Build values for INSERT
-    const values = tagArray.map((t, i) => `($${i * 2 + 1}, $${i * 2 + 2}::"TagCategory")`).join(', ');
-    const params = tagArray.flatMap(t => [t.name, t.category]);
+    for (let i = 0; i < tagArray.length; i += TAG_CHUNK_SIZE) {
+      const chunk = tagArray.slice(i, i + TAG_CHUNK_SIZE);
 
-    // Atomic bulk insert - ON CONFLICT DO NOTHING handles duplicates
-    await tx.$executeRawUnsafe(
-      `INSERT INTO "Tag" (name, category) VALUES ${values} ON CONFLICT (name, category) DO NOTHING`,
-      ...params
-    );
+      // Build values for INSERT (placeholder indices reset per chunk)
+      const values = chunk.map((t, j) => `($${j * 2 + 1}, $${j * 2 + 2}::"TagCategory")`).join(', ');
+      const params = chunk.flatMap(t => [t.name, t.category]);
 
-    // Fetch all IDs in same transaction - guaranteed to see our inserts
-    const existingTags = await tx.tag.findMany({
-      where: {
-        OR: tagArray.map(t => ({ name: t.name, category: t.category }))
-      },
-      select: { id: true, name: true, category: true }
-    });
+      // Atomic bulk insert - ON CONFLICT DO NOTHING handles duplicates
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "Tag" (name, category) VALUES ${values} ON CONFLICT (name, category) DO NOTHING`,
+        ...params
+      );
 
-    for (const tag of existingTags) {
-      const key = `${tag.category}:${tag.name.toLowerCase()}`;
-      result.set(key, tag.id);
+      // Fetch IDs for this chunk in same transaction - guaranteed to see our inserts
+      const existingTags = await tx.tag.findMany({
+        where: {
+          OR: chunk.map(t => ({ name: t.name, category: t.category }))
+        },
+        select: { id: true, name: true, category: true }
+      });
+
+      for (const tag of existingTags) {
+        const key = `${tag.category}:${tag.name.toLowerCase()}`;
+        result.set(key, tag.id);
+      }
     }
   }, {
     timeout: 30000, // 30s for large tag sets
   });
-
-  // Verify all tags were resolved
-  if (result.size !== tagArray.length) {
-    const missing = tagArray.filter(t => !result.has(`${t.category}:${t.name.toLowerCase()}`));
-    syncLog.error({ missingCount: missing.length, sample: missing.slice(0, 5) }, 'Failed to resolve tags during bulk insert');
-  }
 
   syncLog.debug({ tagCount: tagArray.length, resolvedCount: result.size }, 'Bulk tag insert completed');
 
@@ -175,7 +194,7 @@ async function bulkEnsureTags(
  * Wrapped in a transaction to ensure INSERT and SELECT are atomic.
  * Returns a Map of "SOURCETYPE:sourceId" -> id
  */
-async function bulkEnsureGroups(
+export async function bulkEnsureGroups(
   groups: Map<string, GroupData>
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
@@ -190,40 +209,40 @@ async function bulkEnsureGroups(
     throw new Error(`Invalid source types: ${invalidGroups.map(g => g.sourceType).join(', ')}`);
   }
 
-  // Wrap INSERT and SELECT in a transaction to prevent race conditions
+  // Wrap INSERT and SELECT in a transaction to prevent race conditions.
+  // Chunk both the INSERT and the resolving SELECT so we never exceed
+  // PostgreSQL's 65,535 bind-parameter limit (3 params per group).
   await prisma.$transaction(async (tx) => {
-    // Build values for INSERT with title
-    const values = groupArray.map((g, i) => `($${i * 3 + 1}::"SourceType", $${i * 3 + 2}, $${i * 3 + 3})`).join(', ');
-    const params = groupArray.flatMap(g => [g.sourceType, g.sourceId, g.title ?? null]);
+    for (let i = 0; i < groupArray.length; i += GROUP_CHUNK_SIZE) {
+      const chunk = groupArray.slice(i, i + GROUP_CHUNK_SIZE);
 
-    // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
-    await tx.$executeRawUnsafe(
-      `INSERT INTO "Group" ("sourceType", "sourceId", "title") VALUES ${values}
-       ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")`,
-      ...params
-    );
+      // Build values for INSERT with title (placeholder indices reset per chunk)
+      const values = chunk.map((g, j) => `($${j * 3 + 1}::"SourceType", $${j * 3 + 2}, $${j * 3 + 3})`).join(', ');
+      const params = chunk.flatMap(g => [g.sourceType, g.sourceId, g.title ?? null]);
 
-    // Fetch all IDs in same transaction - guaranteed to see our inserts
-    const existingGroups = await tx.group.findMany({
-      where: {
-        OR: groupArray.map(g => ({ sourceType: g.sourceType, sourceId: g.sourceId }))
-      },
-      select: { id: true, sourceType: true, sourceId: true }
-    });
+      // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "Group" ("sourceType", "sourceId", "title") VALUES ${values}
+         ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")`,
+        ...params
+      );
 
-    for (const group of existingGroups) {
-      const key = `${group.sourceType}:${group.sourceId}`;
-      result.set(key, group.id);
+      // Fetch IDs for this chunk in same transaction - guaranteed to see our inserts
+      const existingGroups = await tx.group.findMany({
+        where: {
+          OR: chunk.map(g => ({ sourceType: g.sourceType, sourceId: g.sourceId }))
+        },
+        select: { id: true, sourceType: true, sourceId: true }
+      });
+
+      for (const group of existingGroups) {
+        const key = `${group.sourceType}:${group.sourceId}`;
+        result.set(key, group.id);
+      }
     }
   }, {
     timeout: 30000, // 30s for large group sets
   });
-
-  // Verify all groups were resolved
-  if (result.size !== groupArray.length) {
-    const missing = groupArray.filter(g => !result.has(`${g.sourceType}:${g.sourceId}`));
-    syncLog.error({ missingCount: missing.length, sample: missing.slice(0, 5) }, 'Failed to resolve groups during bulk insert');
-  }
 
   syncLog.debug({ groupCount: groupArray.length, resolvedCount: result.size }, 'Bulk group insert completed');
 
@@ -259,6 +278,34 @@ async function processBatchWithPrepopulation(
     }, { "sync.unique_group_count": uniqueGroups.size });
 
     const lookups: BatchLookups = { tagIds, groupIds };
+
+    // Validate that the bulk lookups resolved every entry. After chunking
+    // (above), a complete lookup is the norm. If something is still missing,
+    // DO NOT discard the whole batch: degrade to per-file processing using the
+    // partial maps. The per-file path (processFileSafe) throws per-file on any
+    // missing tag/group ID, and those throws are isolated by the downstream
+    // Promise.allSettled - so only the genuinely-broken files fail, while every
+    // other file in the batch still succeeds.
+    try {
+      assertLookupComplete([...uniqueTags.values()], tagIds, (tag) => `${tag.category}:${tag.name.toLowerCase()}`, 'tag');
+      assertLookupComplete([...uniqueGroups.values()], groupIds, (group) => `${group.sourceType}:${group.sourceId}`, 'group');
+    } catch (error) {
+      if (error instanceof IncompleteLookupError) {
+        syncLog.error(
+          {
+            batch: progress.currentBatch,
+            lookup: error.lookupName,
+            missingCount: error.missingEntries.length,
+            sample: error.missingEntries.slice(0, 5),
+          },
+          'Incomplete bulk lookup; degrading to per-file processing so only affected files fail'
+        );
+        batchSpan.setAttribute("sync.batch_incomplete_lookup", true);
+        // Fall through: continue to the per-file path below with the partial maps.
+      } else {
+        throw error;
+      }
+    }
 
     // Phase 2: Process files in parallel (now safe - no tag/group creation races)
     progress.phase = "processing";
@@ -368,9 +415,9 @@ async function processFileSafe(
     }
   }
 
-  // Log warning if any tags couldn't be resolved (shouldn't happen normally)
   if (missingTags.length > 0) {
-    syncLog.warn({ hash: metadata.hash, missingCount: missingTags.length, sample: missingTags.slice(0, 5) }, 'Missing tag IDs from lookup');
+    syncLog.error({ hash: metadata.hash, missingCount: missingTags.length, sample: missingTags.slice(0, 5) }, 'Missing tag IDs from lookup');
+    throw new Error(`Missing ${missingTags.length} tag IDs from pre-populated lookup for ${metadata.hash}`);
   }
 
   // Parse source URLs and lookup group IDs
@@ -402,9 +449,9 @@ async function processFileSafe(
     }
   }
 
-  // Log warning if any groups couldn't be resolved (shouldn't happen normally)
   if (missingGroups.length > 0) {
-    syncLog.warn({ hash: metadata.hash, missingCount: missingGroups.length, groups: missingGroups }, 'Missing group IDs from lookup');
+    syncLog.error({ hash: metadata.hash, missingCount: missingGroups.length, groups: missingGroups }, 'Missing group IDs from lookup');
+    throw new Error(`Missing ${missingGroups.length} group IDs from pre-populated lookup for ${metadata.hash}`);
   }
 
   // Determine thumbnail status based on mime type
@@ -658,14 +705,17 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     syncLog.info({ tags: searchTags }, 'Starting sync from Hydrus');
 
     try {
-    // Prevent concurrent sync operations - check if one is already running
-    const existingState = await prisma.syncState.findFirst();
-    if (existingState?.status === "running") {
-      throw new Error("A sync operation is already in progress. Please wait for it to complete or cancel it first.");
+    // Prevent concurrent sync operations via an ATOMIC conditional write.
+    // The DB write (not a prior read) decides the winner: two concurrent calls
+    // race on the same UPDATE and exactly one flips the status to "running".
+    // If the caller already acquired the lock (e.g. the API route), skip
+    // re-acquisition so its own lock is not mistaken for a concurrent sync.
+    if (!options.lockAlreadyHeld) {
+      const acquired = await acquireSyncLock();
+      if (!acquired) {
+        throw new Error("A sync operation is already in progress. Please wait for it to complete or cancel it first.");
+      }
     }
-
-    // Update sync state to running (force to clear any previous cancelled state)
-    await updateSyncState({ status: "running", totalFiles: 0, processedFiles: 0, currentBatch: 0, totalBatches: 0, force: true });
 
     // Search for files
     progress.phase = "searching";
@@ -796,11 +846,25 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
     const hasFailedBatches = (progress.failedBatches ?? 0) > 0;
 
+    // Guard against mass deletion: cleanup compares DB posts against the
+    // resolved Hydrus hash set, but `hashes` is an OPTIONAL Hydrus field while
+    // we iterate `file_ids`. If Hydrus returned file_ids without hashes, the
+    // hash set is empty and cleanup would delete EVERY post. Skip cleanup in
+    // that case rather than wipe the database.
+    const emptyHashSet = hydrusHashes.size === 0 && fileIds.length > 0;
+
     if (isFullSync && hasFailedBatches) {
       syncLog.warn({ failedBatches: progress.failedBatches }, 'Skipping cleanup due to failed batch fetches');
     }
 
-    if (isFullSync && !hasFailedBatches) {
+    if (isFullSync && !hasFailedBatches && emptyHashSet) {
+      syncLog.warn(
+        { fileIdCount: fileIds.length, hashCount: hydrusHashes.size },
+        'Skipping cleanup to avoid mass deletion: Hydrus returned file_ids but no hashes, so the comparison hash set is empty'
+      );
+    }
+
+    if (isFullSync && !hasFailedBatches && !emptyHashSet) {
       progress.phase = "cleanup";
       onProgress(progress);
 
@@ -995,6 +1059,58 @@ async function updateSyncState(update: SyncStateUpdate): Promise<void> {
  */
 export async function getSyncState() {
   return prisma.syncState.findFirst();
+}
+
+/**
+ * Atomically acquire the sync lock by flipping the SyncState row to "running"
+ * only if it is not already running. The decision is made by the DB write, not
+ * a prior read, so concurrent callers cannot both win.
+ *
+ * Returns true if this caller acquired the lock (and the row now reads
+ * "running"), false if a sync was already running.
+ */
+export async function acquireSyncLock(): Promise<boolean> {
+  const runningData = {
+    status: "running",
+    errorMessage: null,
+    totalFiles: 0,
+    processedFiles: 0,
+    currentBatch: 0,
+    totalBatches: 0,
+  };
+
+  // Fast path: a SyncState row already exists. Atomically claim it only if it
+  // is not currently running. count === 1 means we won; count === 0 means
+  // either it was already running OR (rarely) no row exists yet.
+  const claimed = await prisma.syncState.updateMany({
+    where: { status: { not: "running" } },
+    data: runningData,
+  });
+  if (claimed.count > 0) {
+    return true;
+  }
+
+  // No row was updated. Distinguish "already running" from "no row yet".
+  // (First sync ever, or after the table was cleared.)
+  const existing = await prisma.syncState.findFirst({ select: { status: true } });
+  if (existing) {
+    // A row exists but was not claimable -> a sync is already running.
+    return false;
+  }
+
+  // No row exists yet: create one in the running state. If a concurrent caller
+  // created it first we may end up with the row already present; re-attempt the
+  // atomic claim to keep the single-winner guarantee.
+  try {
+    await prisma.syncState.create({ data: runningData });
+    return true;
+  } catch {
+    const retry = await prisma.syncState.updateMany({
+      where: { status: { not: "running" } },
+      data: runningData,
+    });
+    return retry.count > 0;
+  }
 }
 
 /**

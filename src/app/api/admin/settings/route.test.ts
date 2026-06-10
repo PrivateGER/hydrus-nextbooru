@@ -52,19 +52,45 @@ vi.mock("@/lib/auth", () => ({
   verifyAdminSession: mockVerifyAdminSession,
 }));
 
-vi.mock("@/lib/logger", () => ({
-  apiLog: {
-    error: mockApiLogError,
-  },
-}));
+vi.mock("@/lib/logger", () => {
+  const noop = () => {};
+  const stub = { debug: noop, info: noop, warn: noop, error: noop };
+  return {
+    // The real openrouter/settings module is imported (for the SSRF
+    // validators), which transitively loads the db client and its logger.
+    // Provide stubs for every named logger so that chain resolves.
+    createLogger: () => stub,
+    logger: stub,
+    dbLog: stub,
+    syncLog: stub,
+    hydrusLog: stub,
+    thumbnailLog: stub,
+    fileLog: stub,
+    aiLog: stub,
+    phashLog: stub,
+    wildcardLog: stub,
+    apiLog: {
+      error: mockApiLogError,
+    },
+  };
+});
 
-vi.mock("@/lib/openrouter", () => ({
-  getTranslationSettings: mockGetTranslationSettings,
-  updateSettings: mockUpdateSettings,
-  maskApiKey: mockMaskApiKey,
-  SETTINGS_KEYS: settingsKeys,
-  OpenRouterClient: MockOpenRouterClient,
-}));
+vi.mock("@/lib/openrouter", async () => {
+  // Use the real SSRF validators so the route's URL validation is exercised.
+  const actual = await vi.importActual<typeof import("@/lib/openrouter/settings")>(
+    "@/lib/openrouter/settings"
+  );
+  return {
+    getTranslationSettings: mockGetTranslationSettings,
+    updateSettings: mockUpdateSettings,
+    maskApiKey: mockMaskApiKey,
+    SETTINGS_KEYS: settingsKeys,
+    OpenRouterClient: MockOpenRouterClient,
+    validateLocalBaseUrl: actual.validateLocalBaseUrl,
+    validateOpenRouterBaseUrl: actual.validateOpenRouterBaseUrl,
+    UnsafeBaseUrlError: actual.UnsafeBaseUrlError,
+  };
+});
 
 function createSettings() {
   return {
@@ -230,6 +256,79 @@ describe("Admin settings route", () => {
       [settingsKeys.MODEL]: "google/gemini-3-flash-preview",
       [settingsKeys.BASE_URL]: "https://openrouter.ai/api/v1",
       [settingsKeys.LOCAL_MODEL]: "qwen2.5",
+      [settingsKeys.LOCAL_BASE_URL]: "http://localhost:11434/v1",
+    });
+  });
+
+  it("rejects an SSRF-style local baseUrl (cloud metadata) with 400 and does not persist", async () => {
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "http://169.254.169.254/latest/meta-data/" },
+        }),
+      })
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toMatch(/Invalid local base URL/);
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-http scheme local baseUrl with 400", async () => {
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "file:///etc/passwd" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects an openrouter baseUrl pointing at loopback with 400", async () => {
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "openrouter",
+          openrouter: { baseUrl: "http://127.0.0.1:8080/v1" },
+        }),
+      })
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toMatch(/Invalid OpenRouter base URL/);
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("accepts a loopback local baseUrl (local LLM runtime) and persists it", async () => {
+    mockGetTranslationSettings.mockResolvedValueOnce(createSettings());
+
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "http://localhost:11434/v1" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      [settingsKeys.PROVIDER]: "local",
       [settingsKeys.LOCAL_BASE_URL]: "http://localhost:11434/v1",
     });
   });

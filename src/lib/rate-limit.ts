@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isIP } from "net";
 
 /**
  * Simple in-memory rate limiter.
  * Sliding window with lazy cleanup.
+ *
+ * SINGLE-PROCESS ONLY: the `store` Map below lives in this process's memory, so
+ * limits are PER-PROCESS and are NOT shared across multiple workers/replicas.
+ * The app assumes a single Next.js process. See the "Deployment / Concurrency"
+ * section in CLAUDE.md before deploying multi-worker/multi-replica.
  */
 
 interface RateLimitEntry {
@@ -83,17 +89,45 @@ interface HeaderReader {
 }
 
 /**
+ * Return a canonical IP value when the header contains a valid IPv4/IPv6
+ * literal. Invalid or empty header values are ignored instead of becoming
+ * attacker-controlled rate-limit keys.
+ */
+function normalizeHeaderIp(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  const withoutIpv6Brackets = trimmed.startsWith("[") && trimmed.endsWith("]")
+    ? trimmed.slice(1, -1)
+    : trimmed;
+
+  return isIP(withoutIpv6Brackets) ? withoutIpv6Brackets : null;
+}
+
+/**
  * Extract client IP from request headers.
+ *
+ * Trust model: deployments that put the app behind a reverse proxy must ensure
+ * the proxy overwrites client-supplied forwarding headers. Prefer X-Real-IP as
+ * the proxy's single canonical client IP. If it is absent, use the right-most
+ * valid X-Forwarded-For hop, which is less spoofable than the user-controlled
+ * left-most hop when a proxy appends to XFF.
  */
 export function getClientIPFromHeaders(headers: HeaderReader): string {
-  const forwardedFor = headers.get("x-forwarded-for");
-  if (forwardedFor) {
-    return forwardedFor.split(",")[0].trim();
+  const realIP = normalizeHeaderIp(headers.get("x-real-ip"));
+  if (realIP) {
+    return realIP;
   }
 
-  const realIP = headers.get("x-real-ip");
-  if (realIP) {
-    return realIP.trim();
+  const forwardedFor = headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    const forwardedIp = forwardedFor
+      .split(",")
+      .map((value) => normalizeHeaderIp(value))
+      .filter((value): value is string => Boolean(value))
+      .at(-1);
+
+    if (forwardedIp) return forwardedIp;
   }
 
   // Fallback for direct connections (development)

@@ -5,6 +5,7 @@ import {
   useEffect,
   useRef,
   useCallback,
+  useId,
   type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
@@ -18,7 +19,7 @@ import {
 } from "@/lib/tag-utils";
 import { ModeToggle, type SearchMode } from "@/components/search-bar/mode-toggle";
 import { SelectedTagChip } from "@/components/search-bar/selected-tag-chip";
-import { SuggestionsDropdown } from "@/components/search-bar/suggestions-dropdown";
+import { SuggestionsDropdown, getOptionId } from "@/components/search-bar/suggestions-dropdown";
 import { useTagSuggestions } from "@/components/search-bar/use-tag-suggestions";
 import { cancelPendingImageUpload, isCurrentImageUpload } from "@/components/search-bar/image-upload-state";
 
@@ -96,6 +97,10 @@ function SearchBarContent({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const imageUploadAbortRef = useRef<AbortController | null>(null);
+
+  // Stable id linking the combobox input to its listbox popup (aria-controls /
+  // aria-activedescendant) for the WAI-ARIA combobox pattern.
+  const listboxId = useId();
 
   // Detect exclude mode when input starts with "-"
   const isExcludeMode = inputValue.startsWith("-");
@@ -369,6 +374,13 @@ function SearchBarContent({
     addTag(tagName, isExcludeMode);
   }, [addTag, isExcludeMode]);
 
+  // The listbox popup is visible only in tag mode when there are suggestions to
+  // show (SuggestionsDropdown renders null otherwise). The combobox ARIA state
+  // must reflect that actual visibility.
+  const isListboxOpen = searchMode === "tags" && showSuggestions && displaySuggestions.length > 0;
+  const activeOptionId =
+    isListboxOpen && highlightedIndex >= 0 ? getOptionId(listboxId, highlightedIndex) : undefined;
+
   return (
     <div className="relative w-full max-w-2xl">
       <ModeToggle mode={searchMode} onModeChange={handleModeChange} />
@@ -400,6 +412,13 @@ function SearchBarContent({
           ref={inputRef}
           type="text"
           value={inputValue}
+          // WAI-ARIA 1.2 combobox (tag mode only). In notes/semantic mode the
+          // input is a plain text field, so the combobox semantics are omitted.
+          role={searchMode === "tags" ? "combobox" : undefined}
+          aria-autocomplete={searchMode === "tags" ? "list" : undefined}
+          aria-expanded={searchMode === "tags" ? isListboxOpen : undefined}
+          aria-controls={searchMode === "tags" && isListboxOpen ? listboxId : undefined}
+          aria-activedescendant={activeOptionId}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -481,6 +500,7 @@ function SearchBarContent({
           highlightedIndex={highlightedIndex}
           isExcludeMode={isExcludeMode}
           onSelect={handleSuggestionSelect}
+          listboxId={listboxId}
         />
       )}
     </div>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncFromHydrus, getSyncState } from "@/lib/hydrus";
+import { getSyncState } from "@/lib/hydrus";
+import { syncFromHydrus, acquireSyncLock } from "@/lib/hydrus/sync";
 import { prisma } from "@/lib/db";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, syncLog } from "@/lib/logger";
@@ -39,23 +40,43 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const tags = body.tags as string[] | undefined;
 
-    // Check if sync is already running
-    const currentState = await getSyncState();
-    if (currentState?.status === "running") {
+    // Runtime-validate the body: `tags`, when present, must be an array of
+    // strings. An unchecked cast would let malformed input reach the sync path.
+    let tags: string[] | undefined;
+    if (body.tags !== undefined) {
+      if (!Array.isArray(body.tags) || !body.tags.every((t: unknown) => typeof t === "string")) {
+        return NextResponse.json(
+          { error: "tags must be an array of strings" },
+          { status: 400 }
+        );
+      }
+      tags = body.tags;
+    }
+
+    // Compute/log BEFORE acquiring the lock so no throwable statement sits
+    // between a successful acquire and the background promise start. Otherwise
+    // a throw in that window would leave SyncState stuck at "running" forever,
+    // since syncFromHydrus (which clears the lock on failure) was never called.
+    const searchTags = tags || ["system:everything"];
+    syncLog.info({ tags: searchTags }, 'Sync request initiated');
+
+    // Atomically acquire the sync lock. The DB conditional write (not a prior
+    // read) decides the winner, so two concurrent POSTs cannot both start.
+    // count === 0 (acquired === false) means a sync is already running -> 409.
+    const acquired = await acquireSyncLock();
+    if (!acquired) {
       return NextResponse.json(
         { error: "Sync is already running" },
         { status: 409 }
       );
     }
 
-    // Start sync in background
-    // We can't use streaming here easily, so we just start it and return immediately
-    const searchTags = tags || ["system:everything"];
-    syncLog.info({ tags: searchTags }, 'Sync request initiated');
-
-    syncFromHydrus({ tags })
+    // Start sync in background. The lock is already held, so tell syncFromHydrus
+    // not to re-acquire it (which would otherwise see "running" and reject).
+    // Invoking an async fn never throws synchronously (a sync throw becomes a
+    // rejected promise handled by .catch), so the lock cannot leak here.
+    syncFromHydrus({ tags, lockAlreadyHeld: true })
       .then((result) => {
         syncLog.info({ processedFiles: result.processedFiles, errors: result.errors.length }, 'Background sync completed');
       })

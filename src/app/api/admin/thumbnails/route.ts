@@ -10,6 +10,10 @@ import {
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, thumbnailLog } from "@/lib/logger";
 
+// Sane upper bounds for the batch-generation request body.
+const MAX_BATCH_SIZE = 1000;
+const MAX_LIMIT = 10_000_000;
+
 // Track if batch generation is running
 let batchRunning = false;
 let batchProgress = { processed: 0, total: 0 };
@@ -45,6 +49,27 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const limit = body.limit as number | undefined;
     const batchSize = body.batchSize as number | undefined;
+
+    // Runtime-validate optional numeric inputs (mirrors admin/phash). These bound an unbounded
+    // background job, so reject non-integers, out-of-range, and NaN/Infinity values.
+    if (
+      batchSize !== undefined &&
+      (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_BATCH_SIZE)
+    ) {
+      return NextResponse.json(
+        { error: `batchSize must be a positive integer no greater than ${MAX_BATCH_SIZE}` },
+        { status: 400 }
+      );
+    }
+    if (
+      limit !== undefined &&
+      (!Number.isInteger(limit) || limit < 0 || limit > MAX_LIMIT)
+    ) {
+      return NextResponse.json(
+        { error: `limit must be a non-negative integer no greater than ${MAX_LIMIT}` },
+        { status: 400 }
+      );
+    }
 
     // Check if batch is already running
     if (batchRunning) {

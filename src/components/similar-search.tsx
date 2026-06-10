@@ -157,6 +157,17 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
   // Paste image from clipboard
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
+      // Don't hijack pastes aimed at an editable element (e.g. a search box on
+      // the same page) - only handle "page-level" image pastes.
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
       const items = e.clipboardData?.items;
       if (!items) return;
 

@@ -56,7 +56,7 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchTags = useCallback(async () => {
+  const fetchTags = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     try {
       const params = new URLSearchParams();
@@ -71,19 +71,31 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
       }
       params.set("limit", "100");
 
-      const response = await fetch(`/api/tags/tree?${params.toString()}`);
+      const response = await fetch(`/api/tags/tree?${params.toString()}`, { signal });
       const data: TagTreeResponse = await response.json();
       setTags(data.tags);
       setPostCount(data.postCount);
     } catch (error) {
+      // Ignore AbortError - request was intentionally cancelled
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
       console.error("Error fetching tags:", error);
     } finally {
-      setIsLoading(false);
+      // A stale aborted request resolving later must not clear the loading
+      // state belonging to the newer in-flight request.
+      if (!signal?.aborted) {
+        setIsLoading(false);
+      }
     }
   }, [selectedTags, categoryFilter, debouncedQuery]);
 
   useEffect(() => {
-    fetchTags();
+    // AbortController guards against a slow response from a prior fetch
+    // resolving after a newer one and clobbering the displayed tags.
+    const controller = new AbortController();
+    fetchTags(controller.signal);
+    return () => controller.abort();
   }, [fetchTags]);
 
   const addTag = (tagName: string) => {

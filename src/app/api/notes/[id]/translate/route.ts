@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getOpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import { aiLog } from "@/lib/logger";
+import { TRANSLATE_RATE_LIMIT_CONFIG } from "@/lib/translation/rate-limit";
 
 interface TranslateRequestBody {
   sourceLang?: string;
@@ -22,6 +24,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rateLimitResponse = checkApiRateLimit(request, TRANSLATE_RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const { id } = await params;
     const noteId = parseInt(id, 10);

@@ -267,6 +267,24 @@ export interface MetaTagCountsResult {
   total: number;
 }
 
+/** Safe SQL identifier shape for the `meta_<tag>` column alias: word chars only. */
+const SAFE_META_TAG_IDENTIFIER = /^[a-zA-Z0-9_]+$/;
+
+/**
+ * Assert that a meta tag name is safe to interpolate into a raw SQL identifier.
+ *
+ * The `meta_<tag>` column alias is built with Prisma.raw, which performs no
+ * escaping. Throw on anything outside `[A-Za-z0-9_]` (e.g. `tag; DROP`, quotes,
+ * whitespace) so a future caller cannot introduce SQL injection.
+ *
+ * @throws Error if `tagName` contains any character outside `[A-Za-z0-9_]`.
+ */
+export function assertSafeMetaTagIdentifier(tagName: string): void {
+  if (!SAFE_META_TAG_IDENTIFIER.test(tagName)) {
+    throw new Error(`Unsafe meta tag identifier: ${tagName}`);
+  }
+}
+
 /**
  * Get counts for multiple meta tags in a single optimized SQL query.
  * Uses COUNT(*) FILTER (WHERE ...) for efficient batched counting.
@@ -292,6 +310,12 @@ export async function getMetaTagCountsBatched(
   for (const tagName of tagNames) {
     const def = getMetaTagDefinition(tagName);
     if (!def) continue;
+
+    // Defense-in-depth: tagName is interpolated into a raw SQL identifier via
+    // Prisma.raw below, which performs no escaping. getMetaTagDefinition() only
+    // returns for a known allowlist, but assert the safe-identifier shape here
+    // at the construction site so a future caller can't inject SQL.
+    assertSafeMetaTagIdentifier(tagName);
 
     const condition = def.getSqlCondition(false);
     // Use explicit column alias to ensure reliable result parsing

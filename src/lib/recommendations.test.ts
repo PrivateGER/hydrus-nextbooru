@@ -223,6 +223,109 @@ describe("recommendations", () => {
     expect(client.postRecommendation.deleteMany).toHaveBeenLastCalledWith();
   });
 
+  it("coalesces concurrent cold-cache calls for the same postId into one computation", async () => {
+    // Cold cache: findMany returns [] for every call.
+    mockPostRecommendationFindMany.mockResolvedValue([]);
+
+    // The SQL compute resolves once; assert it is only invoked once even with
+    // three concurrent callers.
+    mockQueryRaw.mockResolvedValue([
+      { recommended_id: 3, score: 0.7 },
+      { recommended_id: 4, score: 0.6 },
+    ]);
+    mockPostFindMany.mockResolvedValue([
+      {
+        id: 3,
+        hash: "hash-3",
+        width: 103,
+        height: 203,
+        blurhash: null,
+        mimeType: "image/png",
+      },
+      {
+        id: 4,
+        hash: "hash-4",
+        width: 104,
+        height: 204,
+        blurhash: null,
+        mimeType: "image/png",
+      },
+    ]);
+
+    const [a, b, c] = await Promise.all([
+      getOrComputeRecommendations(42, 10),
+      getOrComputeRecommendations(42, 10),
+      getOrComputeRecommendations(42, 10),
+    ]);
+
+    // Exactly one computation (one SQL call, one transaction/write).
+    expect(mockQueryRaw).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockPostRecommendationCreateMany).toHaveBeenCalledTimes(1);
+
+    // No empty-result window: every concurrent caller sees the full set.
+    for (const result of [a, b, c]) {
+      expect(result.map((r) => r.id)).toEqual([3, 4]);
+    }
+  });
+
+  it("runs a fresh computation after a previous coalesced batch settles (key cleaned up on success)", async () => {
+    mockPostRecommendationFindMany.mockResolvedValue([]);
+    mockQueryRaw.mockResolvedValue([{ recommended_id: 9, score: 0.5 }]);
+    mockPostFindMany.mockResolvedValue([
+      {
+        id: 9,
+        hash: "hash-9",
+        width: 1,
+        height: 1,
+        blurhash: null,
+        mimeType: "image/png",
+      },
+    ]);
+
+    await getOrComputeRecommendations(50, 10);
+    // Second, sequential call must NOT reuse the settled in-flight promise; it
+    // recomputes (cache is still mocked empty), proving the key was cleared.
+    await getOrComputeRecommendations(50, 10);
+
+    expect(mockQueryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleans up the in-flight key on error so a retry recomputes instead of returning a poisoned rejection", async () => {
+    mockPostRecommendationFindMany.mockResolvedValue([]);
+
+    // First computation fails (e.g. transient DB error inside the SQL call).
+    mockQueryRaw.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(getOrComputeRecommendations(77, 10)).rejects.toThrow("db down");
+
+    // Key must be cleared: a retry triggers a NEW computation that can succeed.
+    mockQueryRaw.mockResolvedValueOnce([{ recommended_id: 11, score: 0.4 }]);
+    mockPostFindMany.mockResolvedValueOnce([
+      {
+        id: 11,
+        hash: "hash-11",
+        width: 1,
+        height: 1,
+        blurhash: null,
+        mimeType: "image/png",
+      },
+    ]);
+
+    await expect(getOrComputeRecommendations(77, 10)).resolves.toEqual([
+      {
+        id: 11,
+        hash: "hash-11",
+        width: 1,
+        height: 1,
+        blurhash: null,
+        mimeType: "image/png",
+        score: 0.4,
+      },
+    ]);
+    expect(mockQueryRaw).toHaveBeenCalledTimes(2);
+  });
+
   it("reports recommendation presence and aggregate stats", async () => {
     mockPostRecommendationCount.mockResolvedValueOnce(1);
     await expect(hasRecommendations()).resolves.toBe(true);
