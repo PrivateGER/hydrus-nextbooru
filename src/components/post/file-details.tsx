@@ -84,7 +84,14 @@ export function FileDetails({
         )}
         <div>
           <dt className="text-zinc-500 dark:text-zinc-400">Imported</dt>
-          <dd>{importedAt.toLocaleDateString()}</dd>
+          <dd>
+            {importedAt.toLocaleDateString("en-US", {
+              timeZone: "UTC",
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            })}
+          </dd>
         </div>
         <div className="col-span-2 sm:col-span-3">
           <dt className="text-zinc-500 dark:text-zinc-400">Hash</dt>
