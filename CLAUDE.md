@@ -23,11 +23,19 @@ npx prisma migrate dev  # Create and apply migrations
 
 **Always run tests after making changes:**
 ```bash
-npm test         # Run all tests (unit + integration)
-npm run test:ui  # Run all tests with coverage (optional)
+npm test               # Unit tests
+npm run test:integration  # Integration tests (real PostgreSQL via Testcontainers)
+npm run test:guards    # Performance guards: query-plan + query-count (N+1) checks
+npm run test:perf      # Timing benchmarks (PERF_DATASET_SIZE=small|medium|large|xlarge)
 ```
 
-Tests use Vitest with real PostgreSQL via Testcontainers. Integration tests require Docker.
+Tests use Vitest with real PostgreSQL via Testcontainers. Integration, guard, and perf tests require Docker.
+
+**Performance testing model:**
+- `test:guards` is deterministic and runs on every PR: it captures the SQL each hot path executes, re-runs it under `EXPLAIN`, asserts index usage, and enforces per-endpoint query-count budgets (pinned in `src/test/guards/query-counts.guard.test.ts` — if you add a query to an endpoint, justify raising its budget).
+- `test:perf` measures wall-clock timings. Thresholds are enforced locally but report-only on CI (`PERF_ASSERT` overrides); CI regressions are caught by trend tracking instead (nightly + master runs feed github-action-benchmark via `perf-results/*.json`).
+- Benchmark names must stay stable across runs — the trend tracker keys series by name.
+- Dataset seeding is deterministic (seeded PRNG, Zipf-distributed tags) in `src/test/perf/seeders.ts`; changing the seed or distribution shifts every benchmark baseline.
 
 ## Architecture
 
