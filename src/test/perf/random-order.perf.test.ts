@@ -1,8 +1,8 @@
-import { describe, it, beforeAll, afterAll, expect } from 'vitest';
+import { describe, it, beforeAll, afterAll } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { seedDataset } from './seeders';
-import { benchmarkWithStats, assertPerformance, shouldEnforcePerfThresholds, stats, formatStats } from './helpers';
+import { benchmarkWithStats, assertPerformance, assertScaling, stats, formatStats } from './helpers';
 
 // Dynamic import to ensure prisma injection works
 let getPostsByHashRotation: typeof import('@/lib/random-order').getPostsByHashRotation;
@@ -71,10 +71,7 @@ describe('Performance: Random-order browsing', () => {
       Object.fromEntries(Object.entries(results).map(([k, v]) => [k, formatStats(v)]))
     );
 
-    const ratio = results['page 25'].p95 / Math.max(results['page 1'].p95, 0.01);
-    if (shouldEnforcePerfThresholds()) {
-      expect(ratio).toBeLessThan(3);
-    }
+    assertScaling(results['page 1'], results['page 25'], { maxRatio: 3, absoluteCeilingMs: 50 });
   });
 
   it('handles wrap-around pages past the cursor under 100ms p95', async () => {

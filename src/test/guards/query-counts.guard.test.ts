@@ -44,13 +44,10 @@ let tagsSearchGET: typeof import('@/app/api/tags/search/route').GET;
 let postDetailGET: typeof import('@/app/api/posts/[hash]/route').GET;
 let recommendationsGET: typeof import('@/app/api/recommendations/[hash]/route').GET;
 
-let requestCounter = 0;
-
+// Rate limits are disabled for this suite via DISABLE_RATE_LIMITS in
+// vitest.guards.config.ts.
 function apiRequest(url: string): NextRequest {
-  requestCounter += 1;
-  return new NextRequest(url, {
-    headers: { 'x-forwarded-for': `count-guard-${requestCounter}` },
-  });
+  return new NextRequest(url);
 }
 
 /** Run a request cold (caches cleared) and count its SQL statements. */

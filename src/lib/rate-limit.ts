@@ -158,10 +158,26 @@ export interface ApiRateLimitConfig {
  * @param config - Rate limit configuration
  * @returns NextResponse with 429 status if rate limited, null otherwise
  */
+/**
+ * Test/benchmark escape hatch: high-volume suites exceed per-IP budgets by
+ * design, and a 429 short-circuit would silently corrupt their measurements.
+ * Never honored in production builds.
+ */
+function rateLimitsDisabled(): boolean {
+  return (
+    process.env.DISABLE_RATE_LIMITS === "true" &&
+    process.env.NODE_ENV !== "production"
+  );
+}
+
 export function checkApiRateLimit(
   request: NextRequest,
   config: ApiRateLimitConfig
 ): NextResponse | null {
+  if (rateLimitsDisabled()) {
+    return null;
+  }
+
   const ip = getClientIP(request);
   const key = `${config.prefix}:${ip}`;
 

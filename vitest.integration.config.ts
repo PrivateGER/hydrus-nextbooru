@@ -7,6 +7,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
 
+    // Integration tests verify route behavior, not rate limiting (which has
+    // dedicated unit tests). Without this, suites stay under per-IP budgets
+    // only because the forks pool gives each file a fresh in-memory limiter.
+    env: { DISABLE_RATE_LIMITS: 'true' },
+
     // Only run integration tests
     include: ['src/test/integration/**/*.integration.test.ts'],
     exclude: ['node_modules', '.next'],
