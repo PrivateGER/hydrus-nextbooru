@@ -12,6 +12,8 @@ const navLinks = [
   { href: "/admin", label: "Admin" },
 ];
 
+const MENU_ID = "mobile-nav-menu";
+
 export function MobileNav() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -38,6 +40,8 @@ export function MobileNav() {
         onClick={() => setIsOpen(!isOpen)}
         className="flex h-10 w-10 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
         aria-label="Toggle menu"
+        aria-haspopup="menu"
+        aria-controls={MENU_ID}
         aria-expanded={isOpen}
       >
         {isOpen ? (
@@ -75,11 +79,17 @@ export function MobileNav() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-4 top-14 z-50 min-w-[160px] rounded-md border border-zinc-200 bg-white py-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+        <div
+          id={MENU_ID}
+          role="menu"
+          aria-label="Navigation"
+          className="absolute right-4 top-14 z-50 min-w-[160px] rounded-md border border-zinc-200 bg-white py-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
+        >
           {navLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
+              role="menuitem"
               onClick={() => setIsOpen(false)}
               className="block px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-white"
             >
