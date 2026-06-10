@@ -7,6 +7,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
 
+    // Benchmarks exceed per-IP rate budgets by design; a 429 short-circuit
+    // would be timed as if it were the real route.
+    env: { DISABLE_RATE_LIMITS: 'true' },
+
     // Only run perf tests
     include: ['src/test/perf/**/*.perf.test.ts'],
     exclude: ['node_modules', '.next'],

@@ -4,20 +4,47 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integ
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { seedDataset, getRandomTagNames } from './seeders';
-import { benchmarkWithStats, assertPerformance, shouldEnforcePerfThresholds, stats, formatStats } from './helpers';
+import { benchmarkWithStats, assertPerformance, assertScaling, shouldEnforcePerfThresholds, stats, formatStats } from './helpers';
 import type { PrismaClient } from '@/generated/prisma/client';
 
 // Dynamic import to ensure prisma injection works
 let GET: typeof import('@/app/api/tags/search/route').GET;
-let perfRequestCounter = 0;
 
+// Rate limits are disabled for this suite via DISABLE_RATE_LIMITS in
+// vitest.perf.config.ts; benchmark volume would exhaust any per-IP budget.
 function tagSearchRequest(url: string): NextRequest {
-  perfRequestCounter += 1;
-  return new NextRequest(url, {
-    headers: {
-      'x-forwarded-for': `perf-tag-search-${perfRequestCounter}`,
-    },
-  });
+  return new NextRequest(url);
+}
+
+/**
+ * Snapshot the database state the grouped-creator query depends on, layer
+ * by layer, so an empty result reports which layer was empty: matching
+ * artist tags, groups with cached member stats, or artist tags actually
+ * present on grouped posts.
+ */
+async function describeGroupedCreatorState(): Promise<string> {
+  try {
+    const prisma = getTestPrisma();
+    const [artistTags, eligibleGroups, [{ count: groupedArtistRows }]] = await Promise.all([
+      prisma.tag.count({
+        where: { category: 'ARTIST', name: { contains: 'artist' } },
+      }),
+      prisma.group.count({
+        where: { memberCount: { gte: 2 }, NOT: { memberHash: null } },
+      }),
+      prisma.$queryRaw<[{ count: number }]>`
+        SELECT COUNT(*)::int AS count
+        FROM "PostTag" pt
+        JOIN "Tag" t ON t.id = pt."tagId" AND t.category = 'ARTIST'::"TagCategory"
+        JOIN "PostGroup" pg ON pg."postId" = pt."postId"
+        JOIN "Group" g ON g.id = pg."groupId"
+        WHERE g."memberCount" >= 2 AND g."memberHash" IS NOT NULL
+      `,
+    ]);
+    return `diag(artistTagsMatching=${artistTags}, eligibleGroups=${eligibleGroups}, artistTagRowsOnGroupedPosts=${groupedArtistRows})`;
+  } catch (err) {
+    return `diag-failed(${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 async function seedGroupedPosts(prisma: PrismaClient): Promise<void> {
@@ -110,7 +137,7 @@ describe('Performance: Tag Search API', () => {
       );
 
       // All queries should complete reasonably fast
-      for (const [query, s] of Object.entries(results)) {
+      for (const s of Object.values(results)) {
         assertPerformance(s, { p95: 100 });
       }
     });
@@ -125,9 +152,12 @@ describe('Performance: Tag Search API', () => {
             'http://localhost/api/tags/search?q=artist&category=ARTIST&validCreators=true&withGroups=true&limit=10'
           );
           const response = await GET(request);
-          const data = await response.json();
-          if (!Array.isArray(data.tags) || data.tags.length === 0) {
-            throw new Error('Grouped creator autocomplete benchmark returned no suggestions');
+          const data = await response.json().catch(() => null);
+          if (!response.ok || !Array.isArray(data?.tags) || data.tags.length === 0) {
+            throw new Error(
+              'Grouped creator autocomplete returned no usable suggestions: ' +
+                `status=${response.status} body=${JSON.stringify(data)?.slice(0, 300)} :: ${await describeGroupedCreatorState()}`
+            );
           }
         },
         { iterations: 50, warmup: 5 }
@@ -231,12 +261,8 @@ describe('Performance: Tag Search API', () => {
       );
 
       // Verify it doesn't explode exponentially
-      // 5 tags should be less than 10x the time of 1 tag
-      const ratio = results['5 tags'].p95 / results['1 tags'].p95;
-      console.log(`\n5-tag / 1-tag ratio: ${ratio.toFixed(2)}x`);
-      if (shouldEnforcePerfThresholds()) {
-        expect(ratio).toBeLessThan(10);
-      }
+      console.log(`\n5-tag / 1-tag ratio: ${(results['5 tags'].p95 / results['1 tags'].p95).toFixed(2)}x`);
+      assertScaling(results['1 tags'], results['5 tags'], { maxRatio: 10, absoluteCeilingMs: 150 });
     });
   });
 

@@ -167,4 +167,42 @@ describe("checkApiRateLimit", () => {
       error: "Too many requests. Please try again later.",
     });
   });
+
+  describe("DISABLE_RATE_LIMITS bypass", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    function limitedRequest() {
+      return new NextRequest("https://nextbooru.test/api/posts/search", {
+        headers: { "x-forwarded-for": "203.0.113.42" },
+      });
+    }
+
+    it("bypasses limiting when DISABLE_RATE_LIMITS=true outside production", () => {
+      vi.stubEnv("DISABLE_RATE_LIMITS", "true");
+      const config = { prefix: `unit-bypass-${keyId}`, limit: 1, windowMs: 60_000 };
+
+      expect(checkApiRateLimit(limitedRequest(), config)).toBeNull();
+      expect(checkApiRateLimit(limitedRequest(), config)).toBeNull();
+      expect(checkApiRateLimit(limitedRequest(), config)).toBeNull();
+    });
+
+    it("ignores DISABLE_RATE_LIMITS in production", () => {
+      vi.stubEnv("DISABLE_RATE_LIMITS", "true");
+      vi.stubEnv("NODE_ENV", "production");
+      const config = { prefix: `unit-bypass-prod-${keyId}`, limit: 1, windowMs: 60_000 };
+
+      expect(checkApiRateLimit(limitedRequest(), config)).toBeNull();
+      expect(checkApiRateLimit(limitedRequest(), config)?.status).toBe(429);
+    });
+
+    it("limits normally when the variable is unset or not 'true'", () => {
+      vi.stubEnv("DISABLE_RATE_LIMITS", "1");
+      const config = { prefix: `unit-bypass-off-${keyId}`, limit: 1, windowMs: 60_000 };
+
+      expect(checkApiRateLimit(limitedRequest(), config)).toBeNull();
+      expect(checkApiRateLimit(limitedRequest(), config)?.status).toBe(429);
+    });
+  });
 });

@@ -34,14 +34,10 @@ import {
 let postsSearchGET: typeof import('@/app/api/posts/search/route').GET;
 let tagsSearchGET: typeof import('@/app/api/tags/search/route').GET;
 
-let requestCounter = 0;
-
-/** Unique client IP per request so in-memory rate limiting never interferes. */
+// Rate limits are disabled for this suite via DISABLE_RATE_LIMITS in
+// vitest.guards.config.ts.
 function apiRequest(url: string): NextRequest {
-  requestCounter += 1;
-  return new NextRequest(url, {
-    headers: { 'x-forwarded-for': `plan-guard-${requestCounter}` },
-  });
+  return new NextRequest(url);
 }
 
 async function captureQueries(fn: () => Promise<unknown>): Promise<CapturedQuery[]> {

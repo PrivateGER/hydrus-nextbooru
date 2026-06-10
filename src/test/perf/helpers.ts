@@ -132,6 +132,39 @@ export function shouldEnforcePerfThresholds(
 }
 
 /**
+ * Assert that a scaled measurement stays within a ratio of its baseline.
+ *
+ * Ratios over sub-5ms baselines are dominated by fixed overhead and
+ * measurement noise rather than algorithmic scaling, so below that floor
+ * the check falls back to an absolute ceiling on the scaled measurement.
+ * Throws locally; logs a warning on CI (see shouldEnforcePerfThresholds).
+ */
+export function assertScaling(
+  baseline: Stats,
+  scaled: Stats,
+  { maxRatio, absoluteCeilingMs }: { maxRatio: number; absoluteCeilingMs: number }
+): void {
+  const MEANINGFUL_BASELINE_MS = 5;
+  let violation: string | null = null;
+
+  if (baseline.p95 >= MEANINGFUL_BASELINE_MS) {
+    const ratio = scaled.p95 / baseline.p95;
+    if (ratio > maxRatio) {
+      violation = `scaling ratio ${ratio.toFixed(2)}x exceeded ${maxRatio}x (baseline p95 ${baseline.p95.toFixed(2)}ms, scaled p95 ${scaled.p95.toFixed(2)}ms)`;
+    }
+  } else if (scaled.p95 > absoluteCeilingMs) {
+    violation = `scaled p95 (${scaled.p95.toFixed(2)}ms) exceeded absolute ceiling (${absoluteCeilingMs}ms; baseline too fast to ratio against)`;
+  }
+
+  if (violation === null) return;
+
+  if (shouldEnforcePerfThresholds()) {
+    throw new Error(violation);
+  }
+  console.warn(`[perf threshold exceeded — report only] ${violation}`);
+}
+
+/**
  * Assert that percentiles are below thresholds.
  * Throws locally; logs a warning on CI (see shouldEnforcePerfThresholds).
  */

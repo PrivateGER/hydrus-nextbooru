@@ -11,6 +11,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
 
+    // Guards assert query plans and counts; a 429 short-circuit would make
+    // capture come back empty and fail the suite for the wrong reason.
+    env: { DISABLE_RATE_LIMITS: 'true' },
+
     include: ['src/test/guards/**/*.guard.test.ts'],
     exclude: ['node_modules', '.next'],
 

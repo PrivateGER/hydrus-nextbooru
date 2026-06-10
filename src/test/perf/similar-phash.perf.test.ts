@@ -1,6 +1,6 @@
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import { NextRequest } from 'next/server';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integration/setup';
+import { setupTestDatabase, teardownTestDatabase } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { seedDataset, seedPhashes } from './seeders';
 import { benchmarkWithStats, assertPerformance } from './helpers';
