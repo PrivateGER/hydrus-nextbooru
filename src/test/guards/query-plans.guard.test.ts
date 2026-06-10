@@ -13,6 +13,7 @@ import {
 import {
   parseExplainRows,
   seqScannedRelations,
+  indexesUsed,
   type ExplainJson,
 } from './plan-utils';
 
@@ -111,10 +112,12 @@ describe('Query plan guards', () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
 
-    // 10k tags so the Tag table is large enough that index access beats a
-    // seq scan for selective patterns; 5k posts keeps seeding fast while
-    // PostTag (~60k rows) makes index-vs-seq unambiguous.
-    await seedLargeDataset(prisma, { posts: 5_000, uniqueTags: 10_000, tagsPerPost: 12 });
+    // Sized so index access is decisively optimal, not borderline: 10k tags
+    // make selective trigram lookups beat scanning Tag, and 20k posts
+    // (~240k PostTag rows) put co-occurrence joins firmly in index-scan
+    // territory. At 5k posts the planner legitimately flip-flopped between
+    // hash-join-over-seq-scan and index probes for co-occurrence.
+    await seedLargeDataset(prisma, { posts: 20_000, uniqueTags: 10_000, tagsPerPost: 12 });
     await prisma.$executeRawUnsafe('ANALYZE');
 
     postsSearchGET = (await import('@/app/api/posts/search/route')).GET;
@@ -139,7 +142,7 @@ describe('Query plan guards', () => {
 
   it('single-tag post search reaches PostTag and Post through indexes', async () => {
     const prisma = getTestPrisma();
-    const [tag] = await getRandomTagNames(prisma, 1, 10);
+    const [tag] = await getRandomTagNames(prisma, 1, 10, 500);
 
     const captured = await captureQueries(() =>
       postsSearchGET(apiRequest(`http://localhost/api/posts/search?tags=${encodeURIComponent(tag)}`))
@@ -150,7 +153,7 @@ describe('Query plan guards', () => {
 
   it('multi-tag AND post search reaches PostTag and Post through indexes', async () => {
     const prisma = getTestPrisma();
-    const tags = await getRandomTagNames(prisma, 2, 10);
+    const tags = await getRandomTagNames(prisma, 2, 10, 500);
     const tagsParam = tags.map((t) => encodeURIComponent(t)).join(',');
 
     const captured = await captureQueries(() =>
@@ -169,9 +172,15 @@ describe('Query plan guards', () => {
     expectNoSeqScanOn(await explainSelectsTouching(captured, 'Tag'), ['Tag']);
   });
 
-  it('co-occurrence tag search reaches PostTag through indexes', async () => {
+  it('co-occurrence tag search uses the PostTag (tagId, postId) index', async () => {
+    // "No seq scan" is NOT an invariant here: a broad autocomplete pattern
+    // can match Zipf-head tags covering most of PostTag, where a hash join
+    // over a seq scan is genuinely optimal and the planner flip-flops at
+    // the margin. What IS invariant: resolving the selected tag's posts
+    // must go through the (tagId, postId) index — dropping that index is
+    // the regression this guard exists to catch.
     const prisma = getTestPrisma();
-    const [selected] = await getRandomTagNames(prisma, 1, 10);
+    const [selected] = await getRandomTagNames(prisma, 1, 10, 500);
 
     const captured = await captureQueries(() =>
       tagsSearchGET(
@@ -181,7 +190,11 @@ describe('Query plan guards', () => {
       )
     );
 
-    expectNoSeqScanOn(await explainSelectsTouching(captured, 'PostTag'), ['PostTag']);
+    const explained = await explainSelectsTouching(captured, 'PostTag');
+    expect(explained.length, 'no queries captured — route likely errored').toBeGreaterThan(0);
+
+    const usedIndexes = explained.flatMap(({ explain }) => indexesUsed(explain));
+    expect(usedIndexes).toContain('PostTag_tagId_postId_idx');
   });
 
   it('random-order browsing walks the Post hash index', async () => {
