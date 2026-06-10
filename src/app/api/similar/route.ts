@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { computePhashFromBuffer, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import { apiLog } from "@/lib/logger";
 
 const DEFAULT_THRESHOLD = 10;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024; // 20MB
+
+/**
+ * Tight rate limit for anonymous image uploads.
+ *
+ * Each POST decodes an up-to-20MB image with sharp and computes a perceptual hash, which is CPU
+ * and memory intensive. This is far cheaper to abuse than search, so the limit is deliberately
+ * tighter than the search route (60/min) to bound the decode workload from any single client.
+ */
+const SIMILAR_UPLOAD_RATE_LIMIT_CONFIG = {
+  prefix: "similar-upload",
+  limit: 10,
+  windowMs: 60 * 1000,
+};
 
 /**
  * Search for similar images by existing post hash.
@@ -64,6 +78,9 @@ export async function GET(request: NextRequest) {
  * POST /api/similar (multipart/form-data with "file" field)
  */
 export async function POST(request: NextRequest) {
+  const rateLimitResponse = checkApiRateLimit(request, SIMILAR_UPLOAD_RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const formData = await request.formData();
     const fileEntry = formData.get("file");

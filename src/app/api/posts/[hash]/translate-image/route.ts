@@ -10,11 +10,24 @@ import {
   modelSupportsVision,
 } from "@/lib/openrouter";
 import { buildFilePath } from "@/lib/hydrus/paths";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import { aiLog } from "@/lib/logger";
 
 interface TranslateImageRequestBody {
   targetLang?: string;
 }
+
+/**
+ * Relaxed rate limit shared across all translation endpoints (notes, group titles, image OCR).
+ *
+ * See notes/[id]/translate for rationale. Looser than the search route (60/min) and keyed by a
+ * shared `translate` prefix so a single client's total translation spend is capped together.
+ */
+const TRANSLATE_RATE_LIMIT_CONFIG = {
+  prefix: "translate",
+  limit: 120,
+  windowMs: 60 * 1000,
+};
 
 /**
  * Translate a stored image identified by the route `hash` and return its translated text and language metadata.
@@ -27,6 +40,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ hash: string }> }
 ) {
+  const rateLimitResponse = checkApiRateLimit(request, TRANSLATE_RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const { hash } = await params;
 

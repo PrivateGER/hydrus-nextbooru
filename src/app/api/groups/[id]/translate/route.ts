@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getOpenRouterClient, OpenRouterApiError, OpenRouterConfigError } from "@/lib/openrouter";
+import { checkApiRateLimit } from "@/lib/rate-limit";
 import { aiLog } from "@/lib/logger";
 
 interface TranslateRequestBody {
   sourceLang?: string;
   targetLang?: string;
 }
+
+/**
+ * Relaxed rate limit shared across all translation endpoints (notes, group titles, image OCR).
+ *
+ * See notes/[id]/translate for rationale. Looser than the search route (60/min) and keyed by a
+ * shared `translate` prefix so a single client's total translation spend is capped together.
+ */
+const TRANSLATE_RATE_LIMIT_CONFIG = {
+  prefix: "translate",
+  limit: 120,
+  windowMs: 60 * 1000,
+};
 
 /**
  * Translate a group's title and persist translation metadata.
@@ -22,6 +35,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const rateLimitResponse = checkApiRateLimit(request, TRANSLATE_RATE_LIMIT_CONFIG);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const { id } = await params;
     const groupId = parseInt(id, 10);
