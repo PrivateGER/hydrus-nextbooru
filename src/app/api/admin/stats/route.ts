@@ -56,10 +56,7 @@ export async function POST() {
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to recalculate stats");
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Failed to recalculate stats",
-      },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }

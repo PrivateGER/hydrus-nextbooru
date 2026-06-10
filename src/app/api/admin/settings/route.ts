@@ -4,6 +4,9 @@ import {
   updateSettings,
   maskApiKey,
   SETTINGS_KEYS,
+  validateLocalBaseUrl,
+  validateOpenRouterBaseUrl,
+  UnsafeBaseUrlError,
 } from "@/lib/openrouter";
 import { OpenRouterClient } from "@/lib/openrouter";
 import { verifyAdminSession } from "@/lib/auth";
@@ -112,7 +115,21 @@ export async function PUT(request: NextRequest) {
         updates[SETTINGS_KEYS.MODEL] = body.openrouter.model;
       }
       if (body.openrouter.baseUrl !== undefined) {
-        updates[SETTINGS_KEYS.BASE_URL] = body.openrouter.baseUrl;
+        const baseUrl = body.openrouter.baseUrl.trim();
+        if (baseUrl !== "") {
+          try {
+            validateOpenRouterBaseUrl(baseUrl);
+          } catch (err) {
+            if (err instanceof UnsafeBaseUrlError) {
+              return NextResponse.json(
+                { error: `Invalid OpenRouter base URL: ${err.message}` },
+                { status: 400 }
+              );
+            }
+            throw err;
+          }
+        }
+        updates[SETTINGS_KEYS.BASE_URL] = baseUrl;
       }
     }
 
@@ -125,7 +142,24 @@ export async function PUT(request: NextRequest) {
         updates[SETTINGS_KEYS.LOCAL_MODEL] = body.local.model;
       }
       if (body.local.baseUrl !== undefined) {
-        updates[SETTINGS_KEYS.LOCAL_BASE_URL] = body.local.baseUrl;
+        const baseUrl = body.local.baseUrl.trim();
+        if (baseUrl !== "") {
+          // Local provider may legitimately target a loopback LLM runtime, so
+          // loopback is permitted here; metadata/link-local/private ranges are
+          // still rejected.
+          try {
+            validateLocalBaseUrl(baseUrl);
+          } catch (err) {
+            if (err instanceof UnsafeBaseUrlError) {
+              return NextResponse.json(
+                { error: `Invalid local base URL: ${err.message}` },
+                { status: 400 }
+              );
+            }
+            throw err;
+          }
+        }
+        updates[SETTINGS_KEYS.LOCAL_BASE_URL] = baseUrl;
       }
     }
 

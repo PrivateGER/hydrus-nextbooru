@@ -240,18 +240,20 @@ describe("session", () => {
       expect(result).toBe(false);
     });
 
-    it("should accept generated password when ADMIN_PASSWORD is not set", async () => {
-      // Capture the generated password via logger mock
-      let capturedPassword: string | undefined;
+    it("should accept generated password when ADMIN_PASSWORD is not set, surfacing it only via console (never the structured log)", async () => {
+      // The generated password must be printed to the console for the operator
+      // but must NOT be written into the structured logging pipeline.
       const loggerMock = {
-        warn: vi.fn((obj: { password: string }) => {
-          capturedPassword = obj.password;
-        }),
+        warn: vi.fn(),
       };
 
       vi.doMock("@/lib/logger", () => ({
         createLogger: () => loggerMock,
       }));
+
+      const consoleWarnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
 
       // Clear cached modules and import fresh
       vi.resetModules();
@@ -265,15 +267,33 @@ describe("session", () => {
       // Create a session which triggers password generation
       await createSession("admin");
 
-      // The password should have been logged
-      expect(capturedPassword).toBeDefined();
-      expect(loggerMock.warn).toHaveBeenCalled();
+      // The password is printed to the console exactly once.
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
+      const consoleOutput = consoleWarnSpy.mock.calls[0][0] as string;
+
+      // Extract the generated password from the console output. It is a
+      // base64url string printed on its own indented line.
+      const match = consoleOutput.match(/^\s+([A-Za-z0-9_-]{16,})\s*$/m);
+      expect(match).not.toBeNull();
+      const capturedPassword = match![1];
+
+      // The structured logger must NOT have received the password value.
+      expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+      const loggerArgs = loggerMock.warn.mock.calls[0];
+      for (const arg of loggerArgs) {
+        if (typeof arg === "string") {
+          expect(arg).not.toContain(capturedPassword);
+        } else {
+          expect(JSON.stringify(arg)).not.toContain(capturedPassword);
+        }
+      }
 
       // Verify that the generated password works for login
-      expect(verify(capturedPassword!)).toBe(true);
+      expect(verify(capturedPassword)).toBe(true);
       expect(verify("wrong-password-definitely")).toBe(false);
 
       // Cleanup
+      consoleWarnSpy.mockRestore();
       vi.doUnmock("@/lib/logger");
     });
 

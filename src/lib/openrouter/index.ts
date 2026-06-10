@@ -9,6 +9,10 @@ export {
   maskApiKey,
   isCustomEndpoint,
   getEffectiveModel,
+  assertSafeBaseUrl,
+  validateLocalBaseUrl,
+  validateOpenRouterBaseUrl,
+  UnsafeBaseUrlError,
 } from "./settings";
 export {
   SETTINGS_KEYS,

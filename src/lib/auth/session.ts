@@ -65,9 +65,20 @@ function getSecret(): string {
     // Generate a random password if not provided
     if (!generatedPassword) {
       generatedPassword = generateRandomPassword();
+      // SECURITY: Never write the generated password into the structured log
+      // pipeline (it may be persisted/forwarded to log aggregators). Surface it
+      // only via a direct startup console print so the operator can save it on
+      // first run, and log a non-sensitive hint to the structured logger.
+      console.warn(
+        `\n========================================================================\n` +
+          `ADMIN_PASSWORD is not set. A temporary admin password has been generated:\n\n` +
+          `    ${generatedPassword}\n\n` +
+          `SAVE THIS NOW — it is shown only once and is not written to any log.\n` +
+          `Set the ADMIN_PASSWORD env var to a persistent value to avoid this.\n` +
+          `========================================================================\n`
+      );
       authLog.warn(
-        { password: generatedPassword },
-        "ADMIN_PASSWORD not set. Generated random password (shown above). Set ADMIN_PASSWORD env var for persistence."
+        "ADMIN_PASSWORD not set. A temporary password was generated and printed to the console (not logged). Set ADMIN_PASSWORD env var for persistence."
       );
     }
     secret = generatedPassword;
