@@ -33,7 +33,7 @@ Tests use Vitest with real PostgreSQL via Testcontainers. Integration, guard, an
 
 **Performance testing model:**
 - `test:guards` is deterministic and runs on every PR: it captures the SQL each hot path executes, re-runs it under `EXPLAIN`, asserts index usage, and enforces per-endpoint query-count budgets (pinned in `src/test/guards/query-counts.guard.test.ts` — if you add a query to an endpoint, justify raising its budget).
-- `test:perf` measures wall-clock timings. Thresholds are enforced locally but report-only on CI (`PERF_ASSERT` overrides); CI regressions are caught by trend tracking instead (nightly + master runs feed github-action-benchmark via `perf-results/*.json`).
+- `test:perf` measures wall-clock timings. Thresholds are enforced locally but report-only on CI (`PERF_ASSERT` overrides); CI regressions are caught by trend tracking instead (nightly + master runs feed github-action-benchmark via `perf-results/*.json`). A weekly large-dataset run tracks a separate trend series for scale-dependent regressions; it serializes test files because the tmpfs-backed Postgres containers would otherwise exhaust runner memory.
 - Benchmark names must stay stable across runs — the trend tracker keys series by name.
 - Dataset seeding is deterministic (seeded PRNG, Zipf-distributed tags) in `src/test/perf/seeders.ts`; changing the seed or distribution shifts every benchmark baseline.
 

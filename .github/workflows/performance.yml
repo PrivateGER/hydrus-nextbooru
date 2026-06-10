@@ -6,8 +6,12 @@ on:
   pull_request:
     branches: [master, main]
   schedule:
-    # Nightly benchmark run for trend tracking.
+    # Nightly benchmark run for trend tracking (medium dataset).
     - cron: '17 3 * * *'
+    # Weekly large-dataset run: catches scale-dependent regressions the
+    # medium dataset is too small to surface. Tracked as its own trend
+    # series so the two dataset sizes never compare against each other.
+    - cron: '23 4 * * 0'
   workflow_dispatch:
     inputs:
       dataset:
@@ -58,13 +62,15 @@ jobs:
   benchmarks:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       # Job-level permissions REPLACE the workflow-level set: grant push
       # access for gh-pages trend data plus comment scopes for alerts.
       contents: write
       issues: write
       pull-requests: write
+    env:
+      PERF_DATASET_SIZE: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset || (github.event.schedule == '23 4 * * 0' && 'large' || 'medium') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -83,10 +89,13 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
+      # Large runs serialize test files: each perf file starts a Postgres
+      # container with tmpfs-backed storage, so eight parallel containers
+      # holding large datasets in RAM would exhaust the standard runner's
+      # memory (4 vCPU / 16 GB) and contend timings into noise.
       - name: Run timing benchmarks
-        run: npm run test:perf
+        run: npm run test:perf ${{ env.PERF_DATASET_SIZE == 'large' && '-- --no-file-parallelism' || '' }}
         env:
-          PERF_DATASET_SIZE: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset || 'medium' }}
           PERF_RESULTS_DIR: perf-results
           TESTCONTAINERS_RYUK_DISABLED: true
 
@@ -103,7 +112,9 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: API benchmarks
+          # Separate series per dataset size: identical benchmark names with
+          # different dataset scales must never share a baseline.
+          name: ${{ env.PERF_DATASET_SIZE == 'large' && 'API benchmarks (large)' || 'API benchmarks' }}
           tool: customSmallerIsBetter
           output-file-path: benchmark-results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
