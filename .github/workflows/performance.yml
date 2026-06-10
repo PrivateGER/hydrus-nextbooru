@@ -60,7 +60,7 @@ jobs:
   # github-action-benchmark, which alerts and fails on >175% of baseline.
   # workflow_dispatch runs are ad-hoc and never written to the trend data.
   benchmarks:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:

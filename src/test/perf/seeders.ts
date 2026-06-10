@@ -104,8 +104,11 @@ export async function seedLargeDataset(
   for (let batch = 0; batch < posts; batch += BATCH_SIZE) {
     const batchSize = Math.min(BATCH_SIZE, posts - batch);
 
-    // Use bulk factory for posts
-    const postIds = await createPostsBulk(prisma, batchSize);
+    // Deterministic hashes: random-order and phash benchmarks depend on
+    // the Post.hash distribution, so it must reproduce across runs.
+    const postIds = await createPostsBulk(prisma, batchSize, {
+      hashSeed: `perf-${SEED}-${batch}`,
+    });
 
     // Build post-tag relations: Zipf-sampled with per-post dedupe.
     const postTagData: { postId: number; tagId: number }[] = [];

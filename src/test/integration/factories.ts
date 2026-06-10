@@ -135,15 +135,24 @@ export async function createPostsBulk(
     width: number;
     height: number;
     fileSize: number;
+    /**
+     * When set, post hashes derive from sha256(hashSeed || row number)
+     * instead of random(), making the hash set fully reproducible.
+     * Benchmarks that order or page by Post.hash need this for
+     * run-to-run comparability; the seed must be unique per call or the
+     * hash unique constraint rejects the insert.
+     */
+    hashSeed: string;
   }> = {}
 ): Promise<number[]> {
   const baseHydrusId = randomInt(1000000);
 
-  // Use raw SQL with RETURNING for single round-trip
+  // Use raw SQL with RETURNING for single round-trip. COALESCE keeps
+  // random() per-row (volatile) when no hashSeed is given.
   const posts = await prisma.$queryRawUnsafe<{ id: number }[]>(`
     INSERT INTO "Post" (hash, "hydrusFileId", "mimeType", extension, "fileSize", width, height, rating, "importedAt", "thumbnailStatus", "updatedAt")
     SELECT
-      encode(sha256(random()::text::bytea), 'hex'),
+      encode(sha256((COALESCE($9::text, random()::text) || '|' || generate_series::text)::bytea), 'hex'),
       $1 + generate_series,
       $2,
       $3,
@@ -164,7 +173,8 @@ export async function createPostsBulk(
     overrides.width ?? 800,
     overrides.height ?? 600,
     overrides.rating ?? Rating.UNRATED,
-    count
+    count,
+    overrides.hashSeed ?? null
   );
 
   return posts.map(p => p.id);
