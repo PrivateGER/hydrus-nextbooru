@@ -16,6 +16,26 @@ export interface RecommendedPost {
 
 type RecommendationClient = Pick<typeof prisma, "postRecommendation">;
 
+/**
+ * In-flight computation coalescing map (single-process only).
+ *
+ * On a stale-cache miss, multiple concurrent requests for the SAME postId would
+ * otherwise each run their own deleteMany+createMany. Even though each write is
+ * wrapped in a transaction, running several of them back-to-back means a later
+ * request can DELETE rows a concurrent reader is about to read, producing a
+ * transient EMPTY-result window.
+ *
+ * Keying an in-flight promise by postId guarantees exactly one computation runs
+ * at a time per postId; concurrent callers await the same promise. The entry is
+ * always removed in a finally so a failed (rejected) computation never poisons
+ * the key.
+ *
+ * This is a per-process Map: under a multi-worker / multi-replica deployment the
+ * coalescing does NOT span processes (see the Deployment / Concurrency note in
+ * CLAUDE.md). The DB writes remain transactional and safe regardless.
+ */
+const inFlightComputations = new Map<number, Promise<RecommendedPost[]>>();
+
 function clampRecommendationLimit(limit: number): number {
   if (!Number.isFinite(limit)) return 10;
   return Math.min(MAX_RECOMMENDATION_LIMIT, Math.max(1, Math.floor(limit)));
@@ -90,8 +110,21 @@ export async function getOrComputeRecommendations(
     }
   }
 
-  // Compute fresh recommendations
-  const fresh = await computeAndCacheRecommendations(postId, MAX_RECOMMENDATION_LIMIT);
+  // Compute fresh recommendations.
+  // Coalesce concurrent computations for the same postId onto a single
+  // in-flight promise so only one delete+insert runs, eliminating the
+  // transient empty-result window during recomputation.
+  let inFlight = inFlightComputations.get(postId);
+  if (!inFlight) {
+    inFlight = computeAndCacheRecommendations(postId, MAX_RECOMMENDATION_LIMIT).finally(() => {
+      // Always clean up, on success AND on error, so a failed computation
+      // does not poison this key forever.
+      inFlightComputations.delete(postId);
+    });
+    inFlightComputations.set(postId, inFlight);
+  }
+
+  const fresh = await inFlight;
   return fresh.slice(0, clampedLimit);
 }
 

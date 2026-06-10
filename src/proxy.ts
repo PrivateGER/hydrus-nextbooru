@@ -1,3 +1,12 @@
+// ACTIVE CODE — DO NOT DELETE.
+//
+// This is the Next.js 16 middleware entrypoint. Next.js 16 renamed the
+// convention from `middleware.ts` to `proxy.ts`: the framework auto-discovers a
+// root-level `src/proxy.ts` exporting a `proxy` function (+ optional `config`
+// with a `matcher`) and runs it on matching requests. It is NOT imported
+// anywhere by application code, which can make it look like dead/unused code —
+// it is not. Deleting or renaming this file silently disables admin-route
+// authentication.
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifySession } from "@/lib/auth/session";

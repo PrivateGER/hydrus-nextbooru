@@ -3,6 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * Simple in-memory rate limiter.
  * Sliding window with lazy cleanup.
+ *
+ * SINGLE-PROCESS ONLY: the `store` Map below lives in this process's memory, so
+ * limits are PER-PROCESS and are NOT shared across multiple workers/replicas.
+ * The app assumes a single Next.js process. See the "Deployment / Concurrency"
+ * section in CLAUDE.md before deploying multi-worker/multi-replica.
  */
 
 interface RateLimitEntry {
