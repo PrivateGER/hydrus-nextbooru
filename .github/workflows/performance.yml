@@ -1,17 +1,36 @@
-name: Performance Testing
+name: Performance
 
 on:
   push:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  schedule:
+    # Nightly benchmark run for trend tracking (medium dataset).
+    - cron: '17 3 * * *'
+    # Weekly large-dataset run: catches scale-dependent regressions the
+    # medium dataset is too small to surface. Tracked as its own trend
+    # series so the two dataset sizes never compare against each other.
+    - cron: '23 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Dataset size for timing benchmarks'
+        type: choice
+        options: [small, medium, large]
+        default: medium
 
 permissions:
   contents: read
+
 jobs:
-  perf:
+  # Deterministic performance guards: query-plan regression checks and
+  # query-count (N+1) budgets. These are CI-stable — they assert on plan
+  # structure and statement counts, never on wall-clock time.
+  guards:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -30,5 +49,78 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      - name: Run performance tests
-        run: npm run test:perf
+      - name: Run performance guards
+        run: npm run test:guards
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: true
+
+  # Wall-clock benchmarks. Thresholds are report-only on shared runners
+  # (assertPerformance does not enforce when CI is set); regressions are
+  # caught by trend comparison instead: nightly and master-push runs feed
+  # github-action-benchmark, which alerts and fails on >175% of baseline.
+  # workflow_dispatch runs are ad-hoc and never written to the trend data.
+  benchmarks:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      # Job-level permissions REPLACE the workflow-level set: grant push
+      # access for gh-pages trend data plus comment scopes for alerts.
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      PERF_DATASET_SIZE: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset || (github.event.schedule == '23 4 * * 0' && 'large' || 'medium') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '25'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+
+      # Large runs serialize test files: each perf file starts a Postgres
+      # container with tmpfs-backed storage, so eight parallel containers
+      # holding large datasets in RAM would exhaust the standard runner's
+      # memory (4 vCPU / 16 GB) and contend timings into noise.
+      - name: Run timing benchmarks
+        run: npm run test:perf ${{ env.PERF_DATASET_SIZE == 'large' && '-- --no-file-parallelism' || '' }}
+        env:
+          PERF_RESULTS_DIR: perf-results
+          TESTCONTAINERS_RYUK_DISABLED: true
+
+      - name: Merge benchmark results
+        run: jq -s 'add' perf-results/*.json > benchmark-results.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
+
+      - name: Track benchmark trends
+        if: github.event_name != 'workflow_dispatch'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          # Separate series per dataset size: identical benchmark names with
+          # different dataset scales must never share a baseline.
+          name: ${{ env.PERF_DATASET_SIZE == 'large' && 'API benchmarks (large)' || 'API benchmarks' }}
+          tool: customSmallerIsBetter
+          output-file-path: benchmark-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: bench
+          alert-threshold: '175%'
+          comment-on-alert: true
+          fail-on-alert: true
+          summary-always: true

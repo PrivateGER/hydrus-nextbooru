@@ -8,8 +8,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    // Unit suite only; integration/perf run via dedicated configs.
-    exclude: ['node_modules', '.next', 'src/test/perf/**', 'src/test/integration/**'],
+    // Unit suite only; integration/perf/guards run via dedicated configs.
+    // Pure helper tests in src/test/guards (*.test.ts) still run here.
+    exclude: ['node_modules', '.next', 'src/test/perf/**/*.perf.test.ts', 'src/test/integration/**', 'src/test/guards/**/*.guard.test.ts'],
     setupFiles: ['./src/test/setup.ts'],
     hookTimeout: 60000,
     coverage: {

@@ -2,6 +2,8 @@
  * Performance test helpers for timing and statistics
  */
 
+import { recordBenchmark } from './results';
+
 export interface Stats {
   min: number;
   max: number;
@@ -94,7 +96,8 @@ export async function benchmark(
 }
 
 /**
- * Run benchmark and return stats with formatted output
+ * Run benchmark and return stats with formatted output.
+ * Results are also buffered for machine-readable output (see results.ts).
  */
 export async function benchmarkWithStats(
   name: string,
@@ -107,23 +110,47 @@ export async function benchmarkWithStats(
   console.log(`\n${name}:`);
   console.table(formatStats(s));
 
+  recordBenchmark(name, s);
+
   return s;
 }
 
 /**
- * Assert that a percentile is below a threshold
+ * Decide whether wall-clock thresholds should fail the run.
+ *
+ * Shared CI runners have timing variance larger than the regressions we
+ * care about, so thresholds are report-only there; deterministic checks
+ * (the guard suite) carry the CI signal instead. Locally thresholds stay
+ * enforced. PERF_ASSERT=true/false overrides in either direction.
+ */
+export function shouldEnforcePerfThresholds(
+  env: { CI?: string; PERF_ASSERT?: string } = process.env
+): boolean {
+  if (env.PERF_ASSERT === 'true') return true;
+  if (env.PERF_ASSERT === 'false') return false;
+  return !env.CI || env.CI === 'false';
+}
+
+/**
+ * Assert that percentiles are below thresholds.
+ * Throws locally; logs a warning on CI (see shouldEnforcePerfThresholds).
  */
 export function assertPerformance(
   s: Stats,
   thresholds: { p50?: number; p95?: number; p99?: number }
 ): void {
-  if (thresholds.p50 !== undefined && s.p50 > thresholds.p50) {
-    throw new Error(`p50 (${s.p50.toFixed(2)}ms) exceeded threshold (${thresholds.p50}ms)`);
+  const violations: string[] = [];
+  for (const key of ['p50', 'p95', 'p99'] as const) {
+    const limit = thresholds[key];
+    if (limit !== undefined && s[key] > limit) {
+      violations.push(`${key} (${s[key].toFixed(2)}ms) exceeded threshold (${limit}ms)`);
+    }
   }
-  if (thresholds.p95 !== undefined && s.p95 > thresholds.p95) {
-    throw new Error(`p95 (${s.p95.toFixed(2)}ms) exceeded threshold (${thresholds.p95}ms)`);
+
+  if (violations.length === 0) return;
+
+  if (shouldEnforcePerfThresholds()) {
+    throw new Error(violations.join('; '));
   }
-  if (thresholds.p99 !== undefined && s.p99 > thresholds.p99) {
-    throw new Error(`p99 (${s.p99.toFixed(2)}ms) exceeded threshold (${thresholds.p99}ms)`);
-  }
+  console.warn(`[perf threshold exceeded — report only] ${violations.join('; ')}`);
 }

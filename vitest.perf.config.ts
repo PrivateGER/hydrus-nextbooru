@@ -18,6 +18,9 @@ export default defineConfig({
     // Shared defaults for container-backed suites.
     ...containerSuiteDefaults,
 
+    // Flush machine-readable benchmark results after each perf file.
+    setupFiles: [...containerSuiteDefaults.setupFiles, './src/test/perf/vitest-setup.ts'],
+
     // Verbose output to see timing results
     reporters: ['verbose'],
 

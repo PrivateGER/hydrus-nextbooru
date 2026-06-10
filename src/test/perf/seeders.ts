@@ -1,16 +1,36 @@
 /**
- * Large dataset seeders for performance tests
+ * Large dataset seeders for performance tests.
+ *
+ * All randomness is deterministic (seeded PRNG) so datasets — and
+ * therefore benchmark numbers — are reproducible across runs. Tag
+ * assignment follows a Zipf distribution: real booru tagging is
+ * power-law (a few tags on a large share of posts, a long tail of rare
+ * tags), and uniform sampling hides exactly the co-occurrence and
+ * AND-search behavior these benchmarks must exercise.
  */
 
 import { PrismaClient, TagCategory } from '@/generated/prisma/client';
 import { createPostsBulk, createTagsBulk, linkPostsToTagsBulk } from '../integration/factories';
+import { createRng, createZipfSampler } from './rng';
+import { unitVector, randomPhash, noteContent } from './synthetic';
 
-/**
- * Pick random items from an array
- */
-function pickRandom<T>(arr: T[], count: number): T[] {
-  const shuffled = [...arr].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+/** Fixed seed: change it and every dataset (and benchmark) shifts. */
+const SEED = 0xb04a11;
+
+/** Process-wide rng for query-time helpers (stable across runs, varied within). */
+const helperRng = createRng(SEED ^ 0x5eed);
+
+function fisherYates<T>(arr: T[], rng: () => number): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function pickRandom<T>(arr: T[], count: number, rng: () => number = helperRng): T[] {
+  return fisherYates(arr, rng).slice(0, count);
 }
 
 /**
@@ -25,6 +45,8 @@ export interface SeedConfig {
   tagsPerPost: number;
   /** Distribution of tags per category (should sum to 1) */
   categoryDistribution?: Record<TagCategory, number>;
+  /** Zipf exponent for tag popularity (1.0 ≈ classic power law) */
+  zipfExponent?: number;
 }
 
 const DEFAULT_CATEGORY_DISTRIBUTION: Record<TagCategory, number> = {
@@ -37,7 +59,8 @@ const DEFAULT_CATEGORY_DISTRIBUTION: Record<TagCategory, number> = {
 
 /**
  * Seed a large dataset for performance testing.
- * Creates tags and posts with realistic distribution.
+ * Creates tags and posts with a deterministic, Zipf-distributed
+ * tag-popularity profile.
  */
 export async function seedLargeDataset(
   prisma: PrismaClient,
@@ -48,9 +71,12 @@ export async function seedLargeDataset(
     uniqueTags = 10_000,
     tagsPerPost = 20,
     categoryDistribution = DEFAULT_CATEGORY_DISTRIBUTION,
+    zipfExponent = 1.0,
   } = config;
 
-  console.log(`Seeding dataset: ${posts} posts, ${uniqueTags} tags, ~${tagsPerPost} tags/post`);
+  const rng = createRng(SEED);
+
+  console.log(`Seeding dataset: ${posts} posts, ${uniqueTags} tags, ~${tagsPerPost} tags/post (zipf s=${zipfExponent})`);
   const startTime = performance.now();
 
   // Step 1: Create tags by category using bulk factory
@@ -66,6 +92,11 @@ export async function seedLargeDataset(
 
   console.log(`  Created ${allTags.length} tags in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
 
+  // Popularity rank is decoupled from creation order/category by a
+  // deterministic shuffle; rank 0 is the most popular tag.
+  const ranked = fisherYates(allTags, rng);
+  const sampleTagRank = createZipfSampler(ranked.length, zipfExponent, rng);
+
   // Step 2: Create posts in batches with tags using bulk factories
   const BATCH_SIZE = 5000;
   let createdPosts = 0;
@@ -73,17 +104,26 @@ export async function seedLargeDataset(
   for (let batch = 0; batch < posts; batch += BATCH_SIZE) {
     const batchSize = Math.min(BATCH_SIZE, posts - batch);
 
-    // Use bulk factory for posts
-    const postIds = await createPostsBulk(prisma, batchSize);
+    // Deterministic hashes: random-order and phash benchmarks depend on
+    // the Post.hash distribution, so it must reproduce across runs.
+    const postIds = await createPostsBulk(prisma, batchSize, {
+      hashSeed: `perf-${SEED}-${batch}`,
+    });
 
-    // Build post-tag relations
+    // Build post-tag relations: Zipf-sampled with per-post dedupe.
     const postTagData: { postId: number; tagId: number }[] = [];
     for (const postId of postIds) {
-      const tagCount = tagsPerPost + Math.floor(Math.random() * 10) - 5; // ±5 variance
-      const selectedTags = pickRandom(allTags, Math.max(1, tagCount));
+      const target = Math.max(1, tagsPerPost + Math.floor(rng() * 11) - 5); // ±5 variance
+      const chosen = new Set<number>();
+      // Popular ranks repeat often; cap attempts so the loop always ends.
+      let attempts = 0;
+      while (chosen.size < target && attempts < target * 5) {
+        chosen.add(ranked[sampleTagRank()].id);
+        attempts++;
+      }
 
-      for (const tag of selectedTags) {
-        postTagData.push({ postId, tagId: tag.id });
+      for (const tagId of chosen) {
+        postTagData.push({ postId, tagId });
       }
     }
 
@@ -134,6 +174,17 @@ export async function seedMediumDataset(prisma: PrismaClient): Promise<{ tagCoun
 }
 
 /**
+ * Seed an extra-large dataset for local soak testing. Not intended for CI.
+ */
+export async function seedXLargeDataset(prisma: PrismaClient): Promise<{ tagCount: number; postCount: number }> {
+  return seedLargeDataset(prisma, {
+    posts: 250_000,
+    uniqueTags: 50_000,
+    tagsPerPost: 20,
+  });
+}
+
+/**
  * Seed dataset based on PERF_DATASET_SIZE environment variable.
  * Defaults to 'medium' if not set.
  */
@@ -141,6 +192,8 @@ export async function seedDataset(prisma: PrismaClient): Promise<{ tagCount: num
   const size = process.env.PERF_DATASET_SIZE || 'medium';
 
   switch (size) {
+    case 'xlarge':
+      return seedXLargeDataset(prisma);
     case 'large':
       return seedLargeDataset(prisma);
     case 'small':
@@ -151,16 +204,136 @@ export async function seedDataset(prisma: PrismaClient): Promise<{ tagCount: num
   }
 }
 
+/** Embedding config used by perf seeding and vector-search benchmarks. */
+export const PERF_EMBEDDING_CONFIG = {
+  baseUrl: 'http://perf-embeddings.local',
+  model: 'perf-clip',
+  dimensions: 768,
+  imageMaxResolution: 512,
+} as const;
+
 /**
- * Get random existing tag names from the database
+ * Seed one COMPLETE embedding per post (deterministic unit vectors) for
+ * the perf embedding config. 768 dimensions matches one of the
+ * vchordrq-indexed dimension variants.
+ */
+export async function seedEmbeddings(
+  prisma: PrismaClient,
+  options: { config?: typeof PERF_EMBEDDING_CONFIG } = {}
+): Promise<{ embeddingCount: number }> {
+  const config = options.config ?? PERF_EMBEDDING_CONFIG;
+  const rng = createRng(SEED ^ 0xe33d);
+
+  const posts = await prisma.post.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
+
+  console.log(`Seeding ${posts.length} embeddings (${config.dimensions}d)...`);
+  const startTime = performance.now();
+
+  // ~200 vectors x 768 dims keeps each statement's parameter size sane.
+  const BATCH_SIZE = 200;
+  for (let i = 0; i < posts.length; i += BATCH_SIZE) {
+    const batch = posts.slice(i, i + BATCH_SIZE);
+    const ids = batch.map((p) => p.id);
+    const vectors = batch.map(() =>
+      `[${unitVector(config.dimensions, rng).map((x) => x.toFixed(6)).join(',')}]`
+    );
+
+    await prisma.$executeRaw`
+      INSERT INTO "PostEmbedding"
+        ("postId", "baseUrl", model, dimensions, "imageMaxResolution", embedding, status, "computedAt", "updatedAt")
+      SELECT pid, ${config.baseUrl}, ${config.model}, ${config.dimensions}, ${config.imageMaxResolution},
+             vec::vector, 'COMPLETE'::"EmbeddingStatus", NOW(), NOW()
+      FROM unnest(${ids}::int[], ${vectors}::text[]) AS t(pid, vec)
+    `;
+  }
+
+  console.log(`  Embeddings seeded in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
+  return { embeddingCount: posts.length };
+}
+
+/** Seed one PhashEntry per post with deterministic 64-bit hashes. */
+export async function seedPhashes(prisma: PrismaClient): Promise<{ phashCount: number }> {
+  const rng = createRng(SEED ^ 0x9a54);
+
+  const posts = await prisma.post.findMany({ select: { hash: true }, orderBy: { id: 'asc' } });
+
+  console.log(`Seeding ${posts.length} phash entries...`);
+  const startTime = performance.now();
+
+  const BATCH_SIZE = 5000;
+  for (let i = 0; i < posts.length; i += BATCH_SIZE) {
+    const batch = posts.slice(i, i + BATCH_SIZE);
+    const hashes = batch.map((p) => p.hash);
+    // BigInt params are passed as strings and cast server-side.
+    const phashes = batch.map(() => randomPhash(rng).toString());
+
+    await prisma.$executeRaw`
+      INSERT INTO "PhashEntry" (hash, phash)
+      SELECT h, p::bigint
+      FROM unnest(${hashes}::text[], ${phashes}::text[]) AS t(h, p)
+    `;
+  }
+
+  console.log(`  Phashes seeded in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
+  return { phashCount: posts.length };
+}
+
+/**
+ * Seed notes on a deterministic subset of posts (default ~30%) with
+ * synthetic multi-word content for full-text search benchmarks.
+ */
+export async function seedNotes(
+  prisma: PrismaClient,
+  options: { fraction?: number; wordsPerNote?: number } = {}
+): Promise<{ noteCount: number }> {
+  const { fraction = 0.3, wordsPerNote = 30 } = options;
+  const rng = createRng(SEED ^ 0x07e5);
+
+  const posts = await prisma.post.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
+  const step = Math.max(1, Math.round(1 / fraction));
+  const selected = posts.filter((_, idx) => idx % step === 0);
+
+  console.log(`Seeding ${selected.length} notes...`);
+  const startTime = performance.now();
+
+  const BATCH_SIZE = 2000;
+  for (let i = 0; i < selected.length; i += BATCH_SIZE) {
+    const batch = selected.slice(i, i + BATCH_SIZE);
+    const ids = batch.map((p) => p.id);
+    const contents = batch.map(() => noteContent(rng, wordsPerNote));
+
+    await prisma.$executeRaw`
+      INSERT INTO "Note" ("postId", name, content)
+      SELECT pid, 'perf-note', body
+      FROM unnest(${ids}::int[], ${contents}::text[]) AS t(pid, body)
+    `;
+  }
+
+  console.log(`  Notes seeded in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
+  return { noteCount: selected.length };
+}
+
+/**
+ * Get random existing tag names from the database.
+ *
+ * Pass maxPostCount to select mid-frequency tags: with Zipf-distributed
+ * seeding the most popular tags sit on a majority of posts, where a
+ * sequential scan can be the genuinely optimal plan — plan guards should
+ * target the representative mid-band instead.
  */
 export async function getRandomTagNames(
   prisma: PrismaClient,
   count: number,
-  minPostCount = 10
+  minPostCount = 10,
+  maxPostCount?: number
 ): Promise<string[]> {
   const tags = await prisma.tag.findMany({
-    where: { postCount: { gte: minPostCount } },
+    where: {
+      postCount: {
+        gte: minPostCount,
+        ...(maxPostCount !== undefined && { lte: maxPostCount }),
+      },
+    },
     select: { name: true },
     orderBy: { postCount: 'desc' },
     take: count * 3, // Get extra to have selection pool

@@ -3,6 +3,7 @@ import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { execSync } from 'child_process';
+import { instrumentPool } from '../guards/query-capture';
 
 type DockerApiError = Error & {
   statusCode?: number;
@@ -75,6 +76,9 @@ export async function setupTestDatabase(): Promise<{
     connectionString,
     max: 10,
   });
+
+  // No-op passthrough unless a guard test starts capture.
+  instrumentPool(pool);
 
   const adapter = new PrismaPg(pool);
   prisma = new PrismaClient({ adapter });
