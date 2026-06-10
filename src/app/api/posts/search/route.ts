@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchPosts } from "@/lib/search";
+import { searchPosts, sanitizePositiveInt, MAX_LIMIT } from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 
 const MAX_PAGE = 10000;
@@ -33,8 +33,11 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const tagsParam = searchParams.get("tags") || "";
   const notesQuery = searchParams.get("notes")?.trim() || "";
-  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(searchParams.get("page") || "1", 10)));
-  const limit = parseInt(searchParams.get("limit") || "48", 10);
+  // parseInt("abc") -> NaN and `NaN || N` -> N, so non-numeric/empty input falls
+  // back to the default. Math.floor + clamp keeps the result a finite positive
+  // integer before it reaches Prisma take/skip via searchPosts.
+  const page = sanitizePositiveInt(searchParams.get("page"), 1, MAX_PAGE);
+  const limit = sanitizePositiveInt(searchParams.get("limit"), 48, MAX_LIMIT);
 
   // Split tags and pass directly - searchPosts handles parsing negation
   const tags = tagsParam.split(",").map(t => t.trim()).filter(Boolean);

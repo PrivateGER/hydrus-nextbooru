@@ -7,6 +7,21 @@ import {
 } from "@/lib/embeddings/settings";
 import { toVectorLiteral, validateEmbeddingVector } from "@/lib/embeddings/vector";
 
+/**
+ * Build the `vector(N)` pgvector type fragment for raw SQL.
+ *
+ * Defense-in-depth: `dimensions` is interpolated into raw SQL via Prisma.raw,
+ * which performs no escaping. Even though every caller already validates the
+ * value upstream, assert here — at the construction site — that it is a
+ * positive integer so a future caller cannot introduce SQL injection.
+ */
+export function vectorType(dimensions: number): Prisma.Sql {
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new Error(`Invalid embedding dimensions for vector type: ${dimensions}`);
+  }
+  return Prisma.raw(`vector(${dimensions})`);
+}
+
 export interface EmbeddingStats {
   total: number;
   supported: number;
@@ -268,7 +283,7 @@ export async function searchPostsByEmbedding(options: {
 
   const embedding = validateEmbeddingVector(options.embedding, config.dimensions);
   const vector = toVectorLiteral(embedding);
-  const vectorType = Prisma.raw(`vector(${config.dimensions})`);
+  const vectorTypeSql = vectorType(config.dimensions);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
   const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
@@ -294,7 +309,7 @@ export async function searchPostsByEmbedding(options: {
         p.height,
         p.blurhash,
         p."mimeType",
-        (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
+        (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 AS distance
       FROM "PostEmbedding" pe
       JOIN "Post" p ON p.id = pe."postId"
       WHERE pe."baseUrl" = ${config.baseUrl}
@@ -303,8 +318,8 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
-      ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
+      ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${resultCap}
     `;
 
@@ -327,7 +342,7 @@ export async function searchPostsByEmbedding(options: {
         p.height,
         p.blurhash,
         p."mimeType",
-        (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 AS distance
+        (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 AS distance
       FROM "PostEmbedding" pe
       JOIN "Post" p ON p.id = pe."postId"
       WHERE pe."baseUrl" = ${config.baseUrl}
@@ -336,8 +351,8 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
-      ORDER BY pe.embedding::${vectorType} <=> ${vector}::${vectorType}
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
+      ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${limit} OFFSET ${skip}
     `,
     prisma.$queryRaw<{ count: bigint }[]>`
@@ -350,7 +365,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorType} <=> ${vector}::${vectorType})::float8 <= ${maxDistance})
+        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
     `,
   ]);
 
@@ -378,12 +393,12 @@ export async function findRelatedPostsByEmbedding(options: {
     throw new Error("Unsupported embedding dimensions for vector search");
   }
 
-  const vectorType = Prisma.raw(`vector(${config.dimensions})`);
+  const vectorTypeSql = vectorType(config.dimensions);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
   const maxDistanceFilter = maxDistance === null
     ? Prisma.empty
-    : Prisma.sql`AND (pe.embedding::${vectorType} <=> source.embedding)::float8 <= ${maxDistance}`;
+    : Prisma.sql`AND (pe.embedding::${vectorTypeSql} <=> source.embedding)::float8 <= ${maxDistance}`;
 
   type ResultRow = {
     id: number;
@@ -397,7 +412,7 @@ export async function findRelatedPostsByEmbedding(options: {
 
   const rows = await prisma.$queryRaw<ResultRow[]>`
     WITH source AS (
-      SELECT pe.embedding::${vectorType} AS embedding, p.id AS post_id
+      SELECT pe.embedding::${vectorTypeSql} AS embedding, p.id AS post_id
       FROM "Post" p
       JOIN "PostEmbedding" pe ON pe."postId" = p.id
       WHERE p.hash = ${hash}
@@ -421,7 +436,7 @@ export async function findRelatedPostsByEmbedding(options: {
     CROSS JOIN LATERAL (
       SELECT
         pe."postId",
-        (pe.embedding::${vectorType} <=> source.embedding)::float8 AS distance
+        (pe.embedding::${vectorTypeSql} <=> source.embedding)::float8 AS distance
       FROM "PostEmbedding" pe
       WHERE pe."baseUrl" = ${config.baseUrl}
         AND pe.model = ${config.model}
@@ -438,7 +453,7 @@ export async function findRelatedPostsByEmbedding(options: {
           WHERE source_group."postId" = source.post_id
             AND related_group."postId" = pe."postId"
         )
-      ORDER BY pe.embedding::${vectorType} <=> source.embedding
+      ORDER BY pe.embedding::${vectorTypeSql} <=> source.embedding
       LIMIT ${RELATED_EMBEDDING_CANDIDATE_LIMIT}
     ) nearest
     JOIN "Post" related ON related.id = nearest."postId"

@@ -41,7 +41,7 @@ import type { ApiRateLimitConfig } from "@/lib/rate-limit";
 /** Default number of results per page */
 const DEFAULT_LIMIT = 48;
 /** Maximum allowed results per page */
-const MAX_LIMIT = 100;
+export const MAX_LIMIT = 100;
 /** Maximum page number to prevent expensive offset queries */
 export const MAX_PAGE = 10000;
 /** Semantic search returns nearest neighbors, capped to avoid treating the whole embedding table as results. */
@@ -142,12 +142,27 @@ function normalizeSemanticMinScore(minScore: number | undefined): number | undef
   return Math.min(1, Math.max(-1, minScore));
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
+export function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
   if (value === undefined || !Number.isFinite(value)) {
     return fallback;
   }
 
   return Math.min(Math.max(1, Math.floor(value)), max);
+}
+
+/**
+ * Parse a raw query-string value (e.g. `?page=` / `?limit=`) into a finite,
+ * positive, clamped integer.
+ *
+ * parseInt returns NaN for non-numeric input (`"abc"`), an empty/missing value,
+ * and partially-numeric input is truncated (`"1e9"` -> `1`). `NaN || fallback`
+ * substitutes the default; the result is then floored and clamped to
+ * `[1, max]`. This guarantees a safe bounded value can never propagate into
+ * Prisma `take`/`skip`.
+ */
+export function sanitizePositiveInt(raw: string | null | undefined, fallback: number, max: number): number {
+  const parsed = parseInt(raw ?? "", 10) || fallback;
+  return normalizePositiveInteger(parsed, fallback, max);
 }
 
 /**
@@ -413,13 +428,16 @@ export async function searchPosts(
   page: number,
   options?: SearchPostsOptions
 ): Promise<TagSearchResult> {
-  // Validate and apply limits
-  const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
-  const validatedPage = Math.min(Math.max(1, page), MAX_PAGE);
+  // Validate and apply limits.
+  // normalizePositiveInteger coerces NaN/Infinity/non-finite values to the
+  // fallback so they can never reach Prisma take/skip.
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = normalizePositiveInteger(requestedPage, 1, MAX_PAGE);
   const skip = (validatedPage - 1) * limit;
 
   // Early return if page exceeds maximum
-  if (page > MAX_PAGE) {
+  if (requestedPage > MAX_PAGE) {
     return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
   }
 

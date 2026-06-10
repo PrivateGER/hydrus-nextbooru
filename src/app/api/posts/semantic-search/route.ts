@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  MAX_LIMIT,
   MAX_PAGE,
+  sanitizePositiveInt,
   searchSemanticPosts,
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
 } from "@/lib/search";
@@ -21,8 +23,10 @@ export async function GET(request: NextRequest) {
 
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q")?.trim() || "";
-  const page = Math.min(MAX_PAGE, Math.max(1, parseInt(searchParams.get("page") || "1", 10)));
-  const limit = parseInt(searchParams.get("limit") || "48", 10);
+  // Coerce non-numeric/empty/negative input to a safe bounded integer so NaN
+  // can never reach Prisma take/skip inside searchSemanticPosts.
+  const page = sanitizePositiveInt(searchParams.get("page"), 1, MAX_PAGE);
+  const limit = sanitizePositiveInt(searchParams.get("limit"), 48, MAX_LIMIT);
   const minScoreParam = searchParams.get("minScore");
   const minScore = minScoreParam === null ? undefined : Number.parseFloat(minScoreParam);
 

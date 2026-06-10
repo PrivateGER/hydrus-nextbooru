@@ -10,17 +10,32 @@ import { fileLog } from "@/lib/logger";
 // Valid filename pattern: {64-char hash}.{extension}
 const FILENAME_PATTERN = /^([a-f0-9]{64})(\.\w+)$/i;
 
+// A trustworthy file extension: leading dot + 1-10 word chars (alphanumeric/_).
+// Anything else (header-injection payloads, CRLF, quotes, overlong strings) is
+// rejected so it cannot reach the Content-Disposition response header.
+const SAFE_EXTENSION_PATTERN = /^\.\w{1,10}$/;
+
+/**
+ * Return the stored extension only if it is a short, well-formed `.ext` token;
+ * otherwise fall back to `.bin` so a malformed/hostile DB value can never be
+ * interpolated into a response header or download filename.
+ */
+export function safeExtension(extension: string | null | undefined): string {
+  return extension && SAFE_EXTENSION_PATTERN.test(extension) ? extension : ".bin";
+}
+
 function sanitizeFilename(str: string): string {
   return str
+    .replace(/[\x00-\x1f\x7f]/g, "") // Strip C0 control chars + DEL (header-safety; CRLF is also caught by \s below, but other control bytes would reach the header and trip Node's validator)
     .replace(/[<>:"/\\|?*]/g, "") // Remove invalid characters
-    .replace(/\s+/g, "_") // Replace spaces with underscores
+    .replace(/\s+/g, "_") // Replace spaces (and any remaining whitespace) with underscores
     .replace(/_+/g, "_") // Collapse multiple underscores
     .slice(0, 30); // Limit length
 }
 
 function buildDownloadFilename(
   hash: string,
-  extension: string,
+  safeExt: string,
   artistTag?: string,
   characterTag?: string,
   pageNum?: number
@@ -41,7 +56,9 @@ function buildDownloadFilename(
     parts.push(`p${pageNum}`);
   }
 
-  return `${parts.join("_")}.${extension}`;
+  // safeExt already includes its leading dot and has been validated by
+  // safeExtension(), so it is appended directly (not re-prefixed with ".").
+  return `${parts.join("_")}${safeExt}`;
 }
 
 /**
@@ -130,7 +147,11 @@ export async function GET(
   const groupWithPosition = post.groups.find((g) => g.group._count.posts > 1);
   const pageNum = groupWithPosition?.position;
 
-  const downloadFilename = buildDownloadFilename(hash, post.extension, artistTag, characterTag, pageNum);
+  // Validate the DB-stored extension before it reaches the Content-Disposition
+  // header. The on-disk path still uses the raw post.extension (the extension
+  // mismatch check above already proved it equals the validated requestedExt).
+  const downloadExt = safeExtension(post.extension);
+  const downloadFilename = buildDownloadFilename(hash, downloadExt, artistTag, characterTag, pageNum);
   const filePath = buildFilePath(hash, post.extension);
 
   try {

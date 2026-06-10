@@ -6,6 +6,7 @@ import {
   searchMetaTags,
   getMetaTagSqlCondition,
   separateMetaTags,
+  assertSafeMetaTagIdentifier,
 } from "./meta-tags";
 
 describe("isMetaTag", () => {
@@ -268,5 +269,34 @@ describe("meta-tags and meta-tags-shared sync", () => {
     for (const tag of testTags) {
       expect(isMetaTag(tag)).toBe(isMetaTagShared(tag));
     }
+  });
+});
+
+/**
+ * Guard for ITEM 4: the `meta_<tag>` SQL column alias is built with Prisma.raw
+ * (no escaping). The identifier guard must reject anything outside [A-Za-z0-9_].
+ */
+describe("assertSafeMetaTagIdentifier (raw SQL identifier guard)", () => {
+  it("accepts the real meta tag names", () => {
+    for (const def of getAllMetaTags()) {
+      expect(() => assertSafeMetaTagIdentifier(def.name)).not.toThrow();
+    }
+  });
+
+  it("accepts plain word-char identifiers", () => {
+    expect(() => assertSafeMetaTagIdentifier("video")).not.toThrow();
+    expect(() => assertSafeMetaTagIdentifier("high_res_1")).not.toThrow();
+  });
+
+  it("throws on a SQL-injection style identifier", () => {
+    expect(() => assertSafeMetaTagIdentifier("tag; DROP")).toThrow(/Unsafe meta tag identifier/);
+    expect(() => assertSafeMetaTagIdentifier('a" OR "1"="1')).toThrow(/Unsafe meta tag identifier/);
+  });
+
+  it("throws on whitespace, quotes, dashes, and empty input", () => {
+    expect(() => assertSafeMetaTagIdentifier("has space")).toThrow();
+    expect(() => assertSafeMetaTagIdentifier('quo"te')).toThrow();
+    expect(() => assertSafeMetaTagIdentifier("with-dash")).toThrow();
+    expect(() => assertSafeMetaTagIdentifier("")).toThrow();
   });
 });

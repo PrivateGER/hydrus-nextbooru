@@ -16,6 +16,8 @@ export interface HydrusClientConfig {
 
 const HYDRUS_REQUEST_MAX_RETRIES = 10;
 const HYDRUS_REQUEST_RETRY_BASE_DELAY_MS = 100;
+/** Cap any single retry sleep so exponential backoff can't grow without bound. */
+const HYDRUS_REQUEST_RETRY_MAX_DELAY_MS = 5000;
 
 function isRetryableHydrusError(error: unknown): boolean {
   if (error instanceof HydrusApiError) {
@@ -40,8 +42,9 @@ function isRetryableHydrusError(error: unknown): boolean {
   );
 }
 
-function getRetryDelayMs(attempt: number): number {
-  return HYDRUS_REQUEST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+export function getRetryDelayMs(attempt: number): number {
+  const delay = HYDRUS_REQUEST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  return Math.min(delay, HYDRUS_REQUEST_RETRY_MAX_DELAY_MS);
 }
 
 export class HydrusClient {
