@@ -42,8 +42,8 @@ describe('Performance: Notes search', () => {
   });
 
   it('completes a multi-word search under 300ms p95', async () => {
-    // Looser bound: multi-word queries pay for ts_headline over a high
-    // match rate (small synthetic vocabulary), which dominates the cost.
+    // Multi-word queries pay for ts_headline over a high match rate
+    // (small synthetic vocabulary), which dominates the cost.
     const s = await benchmarkWithStats(
       'Notes search (two words)',
       async () => {

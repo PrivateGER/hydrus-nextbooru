@@ -20,9 +20,9 @@ const RUNS = 3;
 
 /**
  * Build a deterministic Hydrus file set with unique 64-hex hashes and
- * Zipf-distributed tags so the full tag-mapping and relation pipeline is
- * exercised (the stock batch fixture has no tags and only 100 unique
- * hashes).
+ * Zipf-distributed tags. Tags are required to exercise the tag-mapping
+ * and relation pipeline; hash uniqueness is required so every file
+ * inserts as a distinct post.
  */
 function buildSyncFiles(count: number) {
   const rng = createRng(0x57c4);

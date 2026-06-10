@@ -4,7 +4,7 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integ
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { seedDataset, getRandomTagNames } from './seeders';
-import { benchmarkWithStats, assertPerformance, stats, formatStats } from './helpers';
+import { benchmarkWithStats, assertPerformance, shouldEnforcePerfThresholds, stats, formatStats } from './helpers';
 import type { PrismaClient } from '@/generated/prisma/client';
 
 // Dynamic import to ensure prisma injection works
@@ -111,7 +111,7 @@ describe('Performance: Tag Search API', () => {
 
       // All queries should complete reasonably fast
       for (const [query, s] of Object.entries(results)) {
-        expect(s.p95, `Query ${query} too slow`).toBeLessThan(100);
+        assertPerformance(s, { p95: 100 });
       }
     });
 
@@ -234,7 +234,9 @@ describe('Performance: Tag Search API', () => {
       // 5 tags should be less than 10x the time of 1 tag
       const ratio = results['5 tags'].p95 / results['1 tags'].p95;
       console.log(`\n5-tag / 1-tag ratio: ${ratio.toFixed(2)}x`);
-      expect(ratio).toBeLessThan(10);
+      if (shouldEnforcePerfThresholds()) {
+        expect(ratio).toBeLessThan(10);
+      }
     });
   });
 
@@ -286,7 +288,9 @@ describe('Performance: Tag Search API', () => {
       // Note: Application-level cache speedup may be minimal when DB query cache is warm.
       // This test primarily serves to track cache behavior over time.
       // The speedup should at least not be negative (warm shouldn't be slower).
-      expect(speedup).toBeGreaterThan(0.8);
+      if (shouldEnforcePerfThresholds()) {
+        expect(speedup).toBeGreaterThan(0.8);
+      }
     });
   });
 });

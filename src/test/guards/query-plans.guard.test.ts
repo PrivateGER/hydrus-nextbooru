@@ -115,8 +115,8 @@ describe('Query plan guards', () => {
     // Sized so index access is decisively optimal, not borderline: 10k tags
     // make selective trigram lookups beat scanning Tag, and 20k posts
     // (~240k PostTag rows) put co-occurrence joins firmly in index-scan
-    // territory. At 5k posts the planner legitimately flip-flopped between
-    // hash-join-over-seq-scan and index probes for co-occurrence.
+    // territory. With fewer rows the seq-scan/index cost crossover sits
+    // close enough that ANALYZE sampling noise can flip plans between runs.
     await seedLargeDataset(prisma, { posts: 20_000, uniqueTags: 10_000, tagsPerPost: 12 });
     await prisma.$executeRawUnsafe('ANALYZE');
 

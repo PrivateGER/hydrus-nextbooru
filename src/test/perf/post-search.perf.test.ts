@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { seedDataset, getRandomTagNames } from './seeders';
-import { benchmarkWithStats, assertPerformance, stats, formatStats } from './helpers';
+import { benchmarkWithStats, assertPerformance, shouldEnforcePerfThresholds, stats, formatStats } from './helpers';
 
 // Dynamic import to ensure prisma injection works
 let GET: typeof import('@/app/api/posts/search/route').GET;
@@ -170,7 +170,9 @@ describe('Performance: Post Search API', () => {
       // Verify it doesn't explode exponentially
       const ratio = results['5 tags'].p95 / results['1 tags'].p95;
       console.log(`\n5-tag / 1-tag ratio: ${ratio.toFixed(2)}x`);
-      expect(ratio).toBeLessThan(10);
+      if (shouldEnforcePerfThresholds()) {
+        expect(ratio).toBeLessThan(10);
+      }
     });
   });
 
@@ -204,7 +206,9 @@ describe('Performance: Post Search API', () => {
       // Page 20 shouldn't be more than 3x slower than page 1
       const ratio = results['page 20'].p95 / results['page 1'].p95;
       console.log(`\nPage 20 / Page 1 ratio: ${ratio.toFixed(2)}x`);
-      expect(ratio).toBeLessThan(3);
+      if (shouldEnforcePerfThresholds()) {
+        expect(ratio).toBeLessThan(3);
+      }
     });
   });
 
