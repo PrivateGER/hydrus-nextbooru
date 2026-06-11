@@ -56,8 +56,8 @@ vi.mock("@/lib/logger", () => {
   const noop = () => {};
   const stub = { debug: noop, info: noop, warn: noop, error: noop };
   return {
-    // The real openrouter/settings module is imported (for the SSRF
-    // validators), which transitively loads the db client and its logger.
+    // The real openrouter/settings module is imported (for the URL-format
+    // validator), which transitively loads the db client and its logger.
     // Provide stubs for every named logger so that chain resolves.
     createLogger: () => stub,
     logger: stub,
@@ -76,7 +76,7 @@ vi.mock("@/lib/logger", () => {
 });
 
 vi.mock("@/lib/openrouter", async () => {
-  // Use the real SSRF validators so the route's URL validation is exercised.
+  // Use the real URL-format validator so the route's validation is exercised.
   const actual = await vi.importActual<typeof import("@/lib/openrouter/settings")>(
     "@/lib/openrouter/settings"
   );
@@ -86,9 +86,8 @@ vi.mock("@/lib/openrouter", async () => {
     maskApiKey: mockMaskApiKey,
     SETTINGS_KEYS: settingsKeys,
     OpenRouterClient: MockOpenRouterClient,
-    validateLocalBaseUrl: actual.validateLocalBaseUrl,
-    validateOpenRouterBaseUrl: actual.validateOpenRouterBaseUrl,
-    UnsafeBaseUrlError: actual.UnsafeBaseUrlError,
+    validateBaseUrlFormat: actual.validateBaseUrlFormat,
+    InvalidBaseUrlError: actual.InvalidBaseUrlError,
   };
 });
 
@@ -260,41 +259,30 @@ describe("Admin settings route", () => {
     });
   });
 
-  it("rejects an SSRF-style local baseUrl (cloud metadata) with 400 and does not persist", async () => {
+  it("accepts a private-network local baseUrl (e.g. Tailscale) and persists it", async () => {
+    mockGetTranslationSettings.mockResolvedValueOnce(createSettings());
+
     const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(
       new NextRequest("http://localhost/api/admin/settings", {
         method: "PUT",
         body: JSON.stringify({
           provider: "local",
-          local: { baseUrl: "http://169.254.169.254/latest/meta-data/" },
-        }),
-      })
-    );
-    const data = await response.json();
-
-    expect(response.status).toBe(400);
-    expect(data.error).toMatch(/Invalid local base URL/);
-    expect(mockUpdateSettings).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-http scheme local baseUrl with 400", async () => {
-    const { PUT } = await import("@/app/api/admin/settings/route");
-    const response = await PUT(
-      new NextRequest("http://localhost/api/admin/settings", {
-        method: "PUT",
-        body: JSON.stringify({
-          provider: "local",
-          local: { baseUrl: "file:///etc/passwd" },
+          local: { baseUrl: "http://100.88.200.21:11434/v1" },
         }),
       })
     );
 
-    expect(response.status).toBe(400);
-    expect(mockUpdateSettings).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      [settingsKeys.PROVIDER]: "local",
+      [settingsKeys.LOCAL_BASE_URL]: "http://100.88.200.21:11434/v1",
+    });
   });
 
-  it("rejects an openrouter baseUrl pointing at loopback with 400", async () => {
+  it("accepts an openrouter baseUrl pointing at loopback and persists it", async () => {
+    mockGetTranslationSettings.mockResolvedValueOnce(createSettings());
+
     const { PUT } = await import("@/app/api/admin/settings/route");
     const response = await PUT(
       new NextRequest("http://localhost/api/admin/settings", {
@@ -305,9 +293,79 @@ describe("Admin settings route", () => {
         }),
       })
     );
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      [settingsKeys.PROVIDER]: "openrouter",
+      [settingsKeys.BASE_URL]: "http://127.0.0.1:8080/v1",
+    });
+  });
+
+  it("persists an empty baseUrl to clear the setting without validating it", async () => {
+    mockGetTranslationSettings.mockResolvedValueOnce(createSettings());
+
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      [settingsKeys.PROVIDER]: "local",
+      [settingsKeys.LOCAL_BASE_URL]: "",
+    });
+  });
+
+  it("rejects a malformed local baseUrl with 400 and does not persist", async () => {
+    const { PUT } = await import("@/app/api/admin/settings/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "not a url" },
+        }),
+      })
+    );
     const data = await response.json();
 
     expect(response.status).toBe(400);
+    expect(data.error).toMatch(/Invalid local base URL/);
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-http scheme baseUrl with 400", async () => {
+    const { PUT } = await import("@/app/api/admin/settings/route");
+
+    const localResponse = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "local",
+          local: { baseUrl: "file:///etc/passwd" },
+        }),
+      })
+    );
+    expect(localResponse.status).toBe(400);
+
+    const openrouterResponse = await PUT(
+      new NextRequest("http://localhost/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: "openrouter",
+          openrouter: { baseUrl: "ftp://example.com/v1" },
+        }),
+      })
+    );
+    const data = await openrouterResponse.json();
+
+    expect(openrouterResponse.status).toBe(400);
     expect(data.error).toMatch(/Invalid OpenRouter base URL/);
     expect(mockUpdateSettings).not.toHaveBeenCalled();
   });

@@ -9,10 +9,8 @@ export {
   maskApiKey,
   isCustomEndpoint,
   getEffectiveModel,
-  assertSafeBaseUrl,
-  validateLocalBaseUrl,
-  validateOpenRouterBaseUrl,
-  UnsafeBaseUrlError,
+  validateBaseUrlFormat,
+  InvalidBaseUrlError,
 } from "./settings";
 export {
   SETTINGS_KEYS,

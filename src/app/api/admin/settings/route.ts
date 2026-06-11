@@ -4,9 +4,8 @@ import {
   updateSettings,
   maskApiKey,
   SETTINGS_KEYS,
-  validateLocalBaseUrl,
-  validateOpenRouterBaseUrl,
-  UnsafeBaseUrlError,
+  validateBaseUrlFormat,
+  InvalidBaseUrlError,
 } from "@/lib/openrouter";
 import { OpenRouterClient } from "@/lib/openrouter";
 import { verifyAdminSession } from "@/lib/auth";
@@ -118,9 +117,9 @@ export async function PUT(request: NextRequest) {
         const baseUrl = body.openrouter.baseUrl.trim();
         if (baseUrl !== "") {
           try {
-            validateOpenRouterBaseUrl(baseUrl);
+            validateBaseUrlFormat(baseUrl);
           } catch (err) {
-            if (err instanceof UnsafeBaseUrlError) {
+            if (err instanceof InvalidBaseUrlError) {
               return NextResponse.json(
                 { error: `Invalid OpenRouter base URL: ${err.message}` },
                 { status: 400 }
@@ -144,13 +143,10 @@ export async function PUT(request: NextRequest) {
       if (body.local.baseUrl !== undefined) {
         const baseUrl = body.local.baseUrl.trim();
         if (baseUrl !== "") {
-          // Local provider may legitimately target a loopback LLM runtime, so
-          // loopback is permitted here; metadata/link-local/private ranges are
-          // still rejected.
           try {
-            validateLocalBaseUrl(baseUrl);
+            validateBaseUrlFormat(baseUrl);
           } catch (err) {
-            if (err instanceof UnsafeBaseUrlError) {
+            if (err instanceof InvalidBaseUrlError) {
               return NextResponse.json(
                 { error: `Invalid local base URL: ${err.message}` },
                 { status: 400 }
