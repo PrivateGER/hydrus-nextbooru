@@ -8,6 +8,7 @@ import { PostGrid } from "@/components/post-grid";
 
 import { Pagination } from "@/components/pagination";
 import { SearchBar } from "@/components/search-bar";
+import { RelatedTagsSidebar } from "@/components/related-tags-sidebar";
 import { SimilarSearch } from "@/components/similar-search";
 import { SemanticImageResults } from "@/components/semantic-image-results";
 import { NoteSearchResult } from "@/components/note-search-result";
@@ -29,10 +30,11 @@ export const metadata: Metadata = {
   description: "Search posts by tags",
 };
 
-// Cache search results for 5 minutes, keyed by search parameters
+// Cache search results for 5 minutes, keyed by search parameters.
+// Key is versioned: the cached shape changed when relatedTags was added.
 const getCachedPostSearch = unstable_cache(
-  async (tags: string[], page: number) => searchPosts(tags, page),
-  ["post-search"],
+  async (tags: string[], page: number) => searchPosts(tags, page, { includeRelatedTags: true }),
+  ["post-search-v2"],
   { revalidate: 300 }
 );
 
@@ -176,6 +178,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
   const notes = Array.from(groupedNotes.values());
 
+  const relatedTags = result && "relatedTags" in result ? result.relatedTags ?? [] : [];
   const totalCount = result?.totalCount ?? 0;
   const totalPages = result?.totalPages ?? 0;
   const queryTimeMs = result?.queryTimeMs ?? 0;
@@ -339,7 +342,12 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
       )}
 
       {!isNotesSearch && posts.length > 0 && (
-        <PostGrid posts={posts} />
+        <div className="flex flex-col gap-6 lg:flex-row">
+          <RelatedTagsSidebar relatedTags={relatedTags} currentTags={tags} />
+          <div className="min-w-0 flex-1">
+            <PostGrid posts={posts} />
+          </div>
+        </div>
       )}
 
       {totalPages > 1 && (
