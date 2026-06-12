@@ -16,6 +16,7 @@ import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
+import { dedupeFilmstripGroups } from "@/lib/filmstrip-groups";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
@@ -159,11 +160,14 @@ export default async function PostPage({ params }: PostPageProps) {
 
   const tags = post.tags.map((pt) => pt.tag);
 
-  // Get group info for related images
-  const groups = post.groups.map((pg) => ({
-    ...pg.group,
-    currentPosition: pg.position,
-  }));
+  // Get group info for related images. Groups holding the same posts (e.g. a
+  // Pixiv work and its synthetic TITLE collection) collapse to one filmstrip.
+  const groups = dedupeFilmstripGroups(
+    post.groups.map((pg) => ({
+      ...pg.group,
+      currentPosition: pg.position,
+    }))
+  );
 
   // Calculate prev/next posts from the first group with multiple posts
   let prevPostHash: string | undefined;
@@ -223,8 +227,9 @@ export default async function PostPage({ params }: PostPageProps) {
         nextPostHash={nextPostHash}
       />
 
-      {/* Sidebar - Tags (appears below content on mobile, left on desktop) */}
-      <div className="order-last lg:order-first">
+      {/* Sidebar - Tags (appears below content on mobile, left on desktop).
+          Sticky so the tag list stays usable while scrolling long pages. */}
+      <div className="order-last lg:order-first lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
         <TagSidebar tags={tags} />
       </div>
 
@@ -333,6 +338,15 @@ export default async function PostPage({ params }: PostPageProps) {
                     {group.translation?.translatedContent || group.title || group.sourceId}
                   </Link>
                 ) : null}
+                {group.collection?.title && (
+                  <Link
+                    href={`/groups/${group.collection.groupId}`}
+                    className="text-sm text-zinc-700 truncate max-w-xs hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white transition-colors"
+                    title={group.collection.title}
+                  >
+                    {group.collection.title}
+                  </Link>
+                )}
                 <Link
                   href={`/groups/${group.id}`}
                   className="text-sm text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
