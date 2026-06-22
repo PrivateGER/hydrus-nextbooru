@@ -286,16 +286,9 @@ function validCreatorSqlPredicate(nameExpression: Prisma.Sql): Prisma.Sql {
 }
 
 /**
- * Build an uncorrelated subquery returning the ids of groups that contain at
- * least one valid ARTIST tag whose name matches `pattern`.
- *
- * This is deliberately anchored on `Tag` (not the outer `Group`): driving the
- * match from the trigram-indexed `Tag.name` ILIKE lets Postgres resolve the
- * (small) set of matching artist tags first, then fan out to their groups.
- * Phrasing it as a correlated `EXISTS (... WHERE pg."groupId" = g.id)` instead
- * forces a per-group SubPlan that re-probes every eligible group's tags and
- * cannot use the trigram index — the source of the multi-second filtered-page
- * latency. Used via `g.id IN (...)` so it is evaluated once per query.
+ * Uncorrelated subquery of group ids that have a valid ARTIST tag matching
+ * `pattern`. Anchored on `Tag` so the name ILIKE uses the trigram index; used
+ * via `g.id IN (...)` to avoid a per-group correlated subplan.
  */
 function artistMatchGroupIds(pattern: string): Prisma.Sql {
   return Prisma.sql`

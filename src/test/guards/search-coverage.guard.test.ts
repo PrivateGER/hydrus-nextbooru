@@ -25,29 +25,15 @@ import {
 } from './plan-utils';
 
 /**
- * Query-plan guards for hot read paths that the original guard suite did not
- * cover: the groups listing filter, the posts-search notes filter, and the
- * selected-tag co-occurrence tree.
- *
- * Same technique as query-plans.guard.test.ts — capture the exact SQL each
- * path runs, re-EXPLAIN it with the original bind values, and assert the
- * structural property that matters:
- *   - groups creator filter must drive the artist-tag match from the
- *     Tag.name trigram index (the regression that made filtered group pages
- *     take seconds was a correlated subplan that could not use it);
- *   - the notes filter must reach "Note" through the contentTsv GIN index
- *     instead of recomputing to_tsvector() per row in a sequential scan;
- *   - the tag tree must resolve a selected tag's posts through the
- *     (tagId, postId) index.
- *
- * Dataset is sized (20k posts / 10k tags) so index access is decisively
- * optimal, matching the existing plan-guard rationale; ANALYZE is run after
- * seeding so the planner produces the same custom plans the app would.
+ * Plan guards for read paths the original suite missed: the groups creator
+ * filter, the posts-search notes filter, and the selected-tag tree. Same
+ * capture + EXPLAIN technique as query-plans.guard.test.ts; dataset sized so
+ * index access is decisively optimal.
  */
 
-/** A distinctive, low-frequency token planted in one note for the notes filter. */
+/** Low-frequency token planted in one note for the notes filter. */
 const NOTE_MARKER_TOKEN = 'zqxmarkernotetoken';
-/** A distinctive, low-frequency substring shared by the seeded artist tags. */
+/** Low-frequency substring shared by the seeded artist tags. */
 const ARTIST_MARKER = 'grpcreatormarker';
 
 let tagsTreeGET: typeof import('@/app/api/tags/tree/route').GET;
@@ -120,8 +106,7 @@ describe('Search coverage plan guards', () => {
 
     await seedLargeDataset(prisma, { posts: 20_000, uniqueTags: 10_000, tagsPerPost: 12 });
 
-    // Notes for the posts-search notes filter, plus one marker note carrying a
-    // token rare enough that a GIN index scan is unambiguously optimal.
+    // Notes plus one marker note with a token rare enough that GIN is optimal.
     await seedNotes(prisma);
     const markerPost = await createPost(prisma);
     await createNote(prisma, markerPost.id, {
@@ -129,9 +114,7 @@ describe('Search coverage plan guards', () => {
       content: `a planted ${NOTE_MARKER_TOKEN} for the notes filter guard`,
     });
 
-    // A few groups whose first post carries a trigram-selective ARTIST tag, so
-    // the groups creator filter has something to match and the planner can pick
-    // the Tag.name trigram index.
+    // Groups whose first post carries a trigram-selective ARTIST tag.
     for (let i = 0; i < 5; i++) {
       const artist = await createTag(prisma, `${ARTIST_MARKER}_${i}`, TagCategory.ARTIST);
       const group = await createGroup(prisma, SourceType.PIXIV, `creator-marker-group-${i}`);
@@ -161,9 +144,8 @@ describe('Search coverage plan guards', () => {
     const explained = await explainSelectsTouching(captured, 'Tag');
     expect(explained.length, 'no Tag-touching query captured — filter shape changed').toBeGreaterThan(0);
 
+    // A correlated EXISTS-under-OR (the pre-fix shape) can't use this index.
     const usedIndexes = explained.flatMap(({ explain }) => indexesUsed(explain));
-    // The pre-fix correlated EXISTS-under-OR could not use this index; a
-    // regression back to that shape drops it from the plan.
     expect(usedIndexes).toContain('Tag_name_trgm_idx');
   });
 
@@ -174,8 +156,7 @@ describe('Search coverage plan guards', () => {
       searchPosts([], 1, { notesQuery: NOTE_MARKER_TOKEN })
     );
 
-    // Recomputing to_tsvector(content/name) inline (the old bug) forces a
-    // sequential scan over Note; the stored *Tsv columns must be index-backed.
+    // Inline to_tsvector() (the old bug) would seq-scan Note here.
     expectNoSeqScanOn(await explainSelectsTouching(captured, 'Note'), ['Note']);
   });
 
