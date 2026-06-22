@@ -285,6 +285,30 @@ function validCreatorSqlPredicate(nameExpression: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`${nameExpression} !~ ${NUMERIC_CREATOR_SQL_PATTERN} AND ${nameExpression} !~* ${PIXIV_USER_SQL_PATTERN}`;
 }
 
+/**
+ * Build an uncorrelated subquery returning the ids of groups that contain at
+ * least one valid ARTIST tag whose name matches `pattern`.
+ *
+ * This is deliberately anchored on `Tag` (not the outer `Group`): driving the
+ * match from the trigram-indexed `Tag.name` ILIKE lets Postgres resolve the
+ * (small) set of matching artist tags first, then fan out to their groups.
+ * Phrasing it as a correlated `EXISTS (... WHERE pg."groupId" = g.id)` instead
+ * forces a per-group SubPlan that re-probes every eligible group's tags and
+ * cannot use the trigram index — the source of the multi-second filtered-page
+ * latency. Used via `g.id IN (...)` so it is evaluated once per query.
+ */
+function artistMatchGroupIds(pattern: string): Prisma.Sql {
+  return Prisma.sql`
+    SELECT artist_pg."groupId"
+    FROM "Tag" artist_t
+    JOIN "PostTag" artist_pt ON artist_pt."tagId" = artist_t.id
+    JOIN "PostGroup" artist_pg ON artist_pg."postId" = artist_pt."postId"
+    WHERE artist_t.category = 'ARTIST'::"TagCategory"
+      AND artist_t.name ILIKE ${pattern}
+      AND ${validCreatorSqlPredicate(Prisma.sql`artist_t.name`)}
+  `;
+}
+
 function buildGroupsWhereClause({
   typeFilter,
   query,
@@ -307,31 +331,13 @@ function buildGroupsWhereClause({
       g."sourceId" ILIKE ${pattern}
       OR g.title ILIKE ${pattern}
       OR ct."translatedContent" ILIKE ${pattern}
-      OR EXISTS (
-        SELECT 1
-        FROM "PostGroup" artist_pg
-        JOIN "PostTag" artist_pt ON artist_pt."postId" = artist_pg."postId"
-        JOIN "Tag" artist_t ON artist_t.id = artist_pt."tagId"
-        WHERE artist_pg."groupId" = g.id
-          AND artist_t.category = 'ARTIST'::"TagCategory"
-          AND ${validCreatorSqlPredicate(Prisma.sql`artist_t.name`)}
-          AND artist_t.name ILIKE ${pattern}
-      )
+      OR g.id IN (${artistMatchGroupIds(pattern)})
     )`);
   }
 
   if (normalizedCreatorFilter) {
     const pattern = containsPattern(normalizedCreatorFilter);
-    conditions.push(Prisma.sql`EXISTS (
-      SELECT 1
-      FROM "PostGroup" creator_pg
-      JOIN "PostTag" creator_pt ON creator_pt."postId" = creator_pg."postId"
-      JOIN "Tag" creator_t ON creator_t.id = creator_pt."tagId"
-      WHERE creator_pg."groupId" = g.id
-        AND creator_t.category = 'ARTIST'::"TagCategory"
-        AND ${validCreatorSqlPredicate(Prisma.sql`creator_t.name`)}
-        AND creator_t.name ILIKE ${pattern}
-    )`);
+    conditions.push(Prisma.sql`g.id IN (${artistMatchGroupIds(pattern)})`);
   }
 
   return conditions.length > 0
