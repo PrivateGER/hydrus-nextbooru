@@ -19,6 +19,7 @@ import {
   searchSemanticPosts,
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
   type SemanticSearchResult,
+  type RelatedTag,
 } from "@/lib/search";
 import { checkRateLimit, getClientIPFromHeaders } from "@/lib/rate-limit";
 import { ResolvedWildcard } from "@/lib/wildcard";
@@ -178,7 +179,10 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
   }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
   const notes = Array.from(groupedNotes.values());
 
-  const relatedTags = result && "relatedTags" in result ? result.relatedTags ?? [] : [];
+  const relatedTags: RelatedTag[] =
+    result && "relatedTags" in result && Array.isArray(result.relatedTags)
+      ? result.relatedTags
+      : [];
   const totalCount = result?.totalCount ?? 0;
   const totalPages = result?.totalPages ?? 0;
   const queryTimeMs = result?.queryTimeMs ?? 0;

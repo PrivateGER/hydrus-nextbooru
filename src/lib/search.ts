@@ -560,8 +560,8 @@ export async function searchPosts(
     const matchingNotes = await prisma.$queryRaw<{ postId: number }[]>`
       SELECT DISTINCT "postId"
       FROM "Note"
-      WHERE to_tsvector('simple', content) @@ websearch_to_tsquery('simple', ${notesQuery})
-         OR to_tsvector('simple', name) @@ websearch_to_tsquery('simple', ${notesQuery})
+      WHERE "contentTsv" @@ websearch_to_tsquery('simple', ${notesQuery})
+         OR "nameTsv" @@ websearch_to_tsquery('simple', ${notesQuery})
     `;
     const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
 
