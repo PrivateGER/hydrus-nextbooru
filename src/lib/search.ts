@@ -10,6 +10,7 @@
 
 import DOMPurify from "isomorphic-dompurify";
 import { prisma } from "@/lib/db";
+import { Prisma, TagCategory } from "@/generated/prisma/client";
 import {
   isWildcardPattern,
   validateWildcardPattern,
@@ -102,11 +103,25 @@ interface BaseSearchResult {
   error?: string;
 }
 
+/**
+ * A tag co-occurring with the current page of search results.
+ * `count` is the number of posts on the page that carry the tag,
+ * not the tag's global post count.
+ */
+export interface RelatedTag {
+  id: number;
+  name: string;
+  category: TagCategory;
+  count: number;
+}
+
 /** Result of searching posts by tags */
 export interface TagSearchResult extends BaseSearchResult {
   posts: PostResult[];
   /** Wildcard patterns that were expanded, with their matched tags */
   resolvedWildcards: ResolvedWildcard[];
+  /** Present only when requested via `includeRelatedTags` */
+  relatedTags?: RelatedTag[];
 }
 
 /** Result of searching notes by content */
@@ -125,6 +140,8 @@ export interface SearchPostsOptions {
   limit?: number;
   /** Search query for note content (min 2 chars, uses fulltext search) */
   notesQuery?: string;
+  /** Compute tags co-occurring with the returned page of posts (drill-down sidebar) */
+  includeRelatedTags?: boolean;
 }
 
 export interface SearchSemanticPostsOptions {
@@ -591,13 +608,58 @@ export async function searchPosts(
     prisma.post.count({ where }),
   ]);
 
+  const relatedTags = options?.includeRelatedTags
+    ? await getRelatedTags(
+        posts.map((p) => p.id),
+        [...regular.include, ...regular.exclude]
+      )
+    : undefined;
+
   return {
     posts,
     totalPages: Math.ceil(totalCount / limit),
     totalCount,
     queryTimeMs: performance.now() - startTime,
     resolvedWildcards,
+    ...(relatedTags !== undefined && { relatedTags }),
   };
+}
+
+/** Cap on co-occurring tags returned for the search drill-down sidebar */
+const RELATED_TAGS_LIMIT = 30;
+
+/**
+ * Tags carried by the given posts, ordered by how many of the posts have them.
+ *
+ * This deliberately samples the current page rather than aggregating the full
+ * result set: cost stays O(page size) regardless of how many posts matched,
+ * and "related to what you are looking at" is the more useful semantic for
+ * query refinement.
+ */
+async function getRelatedTags(
+  postIds: number[],
+  excludedTagNames: string[]
+): Promise<RelatedTag[]> {
+  if (postIds.length === 0) {
+    return [];
+  }
+
+  const excludedLower = excludedTagNames.map((name) => name.toLowerCase());
+  const exclusionClause =
+    excludedLower.length > 0
+      ? Prisma.sql`AND LOWER(t.name) NOT IN (${Prisma.join(excludedLower)})`
+      : Prisma.empty;
+
+  return prisma.$queryRaw<RelatedTag[]>`
+    SELECT t.id, t.name, t.category::text as category, COUNT(*)::int as count
+    FROM "PostTag" pt
+    JOIN "Tag" t ON t.id = pt."tagId"
+    WHERE pt."postId" IN (${Prisma.join(postIds)})
+      ${exclusionClause}
+    GROUP BY t.id, t.name, t.category
+    ORDER BY count DESC, t.name ASC
+    LIMIT ${RELATED_TAGS_LIMIT}
+  `;
 }
 
 /**
