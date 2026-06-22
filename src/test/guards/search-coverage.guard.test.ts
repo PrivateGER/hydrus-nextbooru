@@ -201,7 +201,7 @@ describe('Search coverage plan guards', () => {
     await teardownTestDatabase();
   });
 
-  it('groups creator filter drives the artist match from the Tag name trigram index', async () => {
+  it('groups creator filter resolves the artist set from a Tag predicate index', async () => {
     const captured = await captureQueries(() =>
       searchGroups({ creatorFilter: ARTIST_MARKER, order: 'oldest' }, getTestPrisma())
     );
@@ -209,9 +209,15 @@ describe('Search coverage plan guards', () => {
     const explained = await explainSelectsTouching(captured, 'Tag');
     expect(explained.length, 'no Tag-touching query captured — filter shape changed').toBeGreaterThan(0);
 
-    // A correlated EXISTS-under-OR (the pre-fix shape) can't use this index.
+    // The uncorrelated `g.id IN (...)` builds the artist set from Tag's own
+    // predicates (name trigram or category). The pre-fix correlated
+    // EXISTS-under-OR reaches Tag per-group via its PK, using neither.
     const usedIndexes = explained.flatMap(({ explain }) => indexesUsed(explain));
-    expect(usedIndexes).toContain('Tag_name_trgm_idx');
+    const tagPredicateIndexes = ['Tag_name_trgm_idx', 'Tag_category_idx'];
+    expect(
+      usedIndexes.some((idx) => tagPredicateIndexes.includes(idx)),
+      `expected a Tag predicate index (${tagPredicateIndexes.join(' or ')}), got: ${usedIndexes.join(', ')}`
+    ).toBe(true);
   });
 
   it('posts-search notes filter reaches Note through the tsvector index', async () => {
