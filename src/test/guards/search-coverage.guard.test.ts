@@ -10,7 +10,7 @@ import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { seedLargeDataset, seedNotes, getRandomTagNames } from '../perf/seeders';
 import { createPost, createNote, createGroup, createPostInGroup, createTag } from '../integration/factories';
-import { SourceType, TagCategory } from '@/generated/prisma/client';
+import { PrismaClient, SourceType, TagCategory } from '@/generated/prisma/client';
 import {
   startQueryCapture,
   stopQueryCapture,
@@ -40,10 +40,67 @@ let tagsTreeGET: typeof import('@/app/api/tags/tree/route').GET;
 let searchPosts: typeof import('@/lib/search').searchPosts;
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 
+/** Build a bare NextRequest for a route GET handler. */
 function apiRequest(url: string): NextRequest {
   return new NextRequest(url);
 }
 
+/**
+ * Create `count` two-post groups from existing seeded posts so PostGroup is
+ * large enough to be representative. The member-stats trigger is disabled for
+ * the bulk insert and the cached memberCount/memberHash are backfilled after.
+ */
+async function seedFillerGroups(prisma: PrismaClient, count: number): Promise<void> {
+  const pool = await prisma.post.findMany({
+    select: { id: true },
+    orderBy: { id: 'asc' },
+    take: count * 2,
+  });
+  if (pool.length < count * 2) {
+    throw new Error(`need ${count * 2} posts to seed ${count} groups, have ${pool.length}`);
+  }
+
+  await prisma.group.createMany({
+    data: Array.from({ length: count }, (_, i) => ({
+      sourceType: SourceType.PIXIV,
+      sourceId: `filler-group-${i}`,
+    })),
+  });
+  const groups = await prisma.group.findMany({
+    where: { sourceId: { startsWith: 'filler-group-' } },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+
+  const postGroups = groups.flatMap((g, i) => [
+    { postId: pool[i * 2].id, groupId: g.id, position: 0 },
+    { postId: pool[i * 2 + 1].id, groupId: g.id, position: 1 },
+  ]);
+
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE "PostGroup" DISABLE TRIGGER "PostGroup_refresh_group_member_stats"'
+  );
+  await prisma.postGroup.createMany({ data: postGroups });
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE "PostGroup" ENABLE TRIGGER "PostGroup_refresh_group_member_stats"'
+  );
+
+  // Backfill the cached membership stats the disabled trigger would have set.
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Group" g
+    SET "memberCount" = s.member_count, "memberHash" = s.member_hash
+    FROM (
+      SELECT "groupId" AS id,
+             COUNT(*)::int AS member_count,
+             MD5(STRING_AGG("postId"::text, ',' ORDER BY "postId")) AS member_hash
+      FROM "PostGroup"
+      GROUP BY "groupId"
+    ) s
+    WHERE g.id = s.id
+  `);
+}
+
+/** Run `fn` with SQL capture active and return the statements it executed. */
 async function captureQueries(fn: () => Promise<unknown>): Promise<CapturedQuery[]> {
   startQueryCapture();
   try {
@@ -87,6 +144,7 @@ async function explainSelectsTouching(
   return explained;
 }
 
+/** Assert none of the explained queries sequentially scans `relations`. */
 function expectNoSeqScanOn(explained: ExplainedQuery[], relations: string[]): void {
   expect(explained.length, 'no queries captured — path likely errored').toBeGreaterThan(0);
 
@@ -106,20 +164,27 @@ describe('Search coverage plan guards', () => {
 
     await seedLargeDataset(prisma, { posts: 20_000, uniqueTags: 10_000, tagsPerPost: 12 });
 
-    // Notes plus one marker note with a token rare enough that GIN is optimal.
-    await seedNotes(prisma);
-    const markerPost = await createPost(prisma);
+    // A note on every post plus one marker note carrying a 1-row token, so a GIN
+    // bitmap scan is decisively cheaper than a sequential scan over "Note".
+    await seedNotes(prisma, { fraction: 1 });
+    const markerPost = await createPost(prisma, { hydrusFileId: 49_000_000 });
     await createNote(prisma, markerPost.id, {
       name: 'marker note',
       content: `a planted ${NOTE_MARKER_TOKEN} for the notes filter guard`,
     });
 
-    // Groups whose first post carries a trigram-selective ARTIST tag.
+    // Enlarge PostGroup so the groups creator filter is driven from the Tag.name
+    // trigram index, not a near-empty PostGroup (seedLargeDataset makes no groups).
+    await seedFillerGroups(prisma, 5_000);
+
+    // Groups whose first post carries a trigram-selective ARTIST tag for the
+    // creator filter to match. Fixed hydrusFileIds stay clear of the bulk-seeded
+    // range ([0, ~1.02M]) so they cannot collide.
     for (let i = 0; i < 5; i++) {
       const artist = await createTag(prisma, `${ARTIST_MARKER}_${i}`, TagCategory.ARTIST);
       const group = await createGroup(prisma, SourceType.PIXIV, `creator-marker-group-${i}`);
-      const first = await createPostInGroup(prisma, group, 0);
-      await createPostInGroup(prisma, group, 1);
+      const first = await createPostInGroup(prisma, group, 0, { hydrusFileId: 49_100_000 + i * 2 });
+      await createPostInGroup(prisma, group, 1, { hydrusFileId: 49_100_000 + i * 2 + 1 });
       await prisma.postTag.create({ data: { postId: first.id, tagId: artist.id } });
     }
 
