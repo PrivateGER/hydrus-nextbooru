@@ -40,7 +40,6 @@ let tagsTreeGET: typeof import('@/app/api/tags/tree/route').GET;
 let searchPosts: typeof import('@/lib/search').searchPosts;
 let searchGroups: typeof import('@/lib/groups').searchGroups;
 
-/** Build a bare NextRequest for a route GET handler. */
 function apiRequest(url: string): NextRequest {
   return new NextRequest(url);
 }
@@ -100,7 +99,6 @@ async function seedFillerGroups(prisma: PrismaClient, count: number): Promise<vo
   `);
 }
 
-/** Run `fn` with SQL capture active and return the statements it executed. */
 async function captureQueries(fn: () => Promise<unknown>): Promise<CapturedQuery[]> {
   startQueryCapture();
   try {
@@ -144,7 +142,6 @@ async function explainSelectsTouching(
   return explained;
 }
 
-/** Assert none of the explained queries sequentially scans `relations`. */
 function expectNoSeqScanOn(explained: ExplainedQuery[], relations: string[]): void {
   expect(explained.length, 'no queries captured — path likely errored').toBeGreaterThan(0);
 
@@ -209,9 +206,8 @@ describe('Search coverage plan guards', () => {
     const explained = await explainSelectsTouching(captured, 'Tag');
     expect(explained.length, 'no Tag-touching query captured — filter shape changed').toBeGreaterThan(0);
 
-    // The uncorrelated `g.id IN (...)` builds the artist set from Tag's own
-    // predicates (name trigram or category). The pre-fix correlated
-    // EXISTS-under-OR reaches Tag per-group via its PK, using neither.
+    // The pre-fix correlated EXISTS-under-OR reaches Tag per-group via its PK,
+    // using neither predicate index.
     const usedIndexes = explained.flatMap(({ explain }) => indexesUsed(explain));
     const tagPredicateIndexes = ['Tag_name_trgm_idx', 'Tag_category_idx'];
     expect(
