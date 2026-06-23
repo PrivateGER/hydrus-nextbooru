@@ -145,28 +145,30 @@ export async function createPostsBulk(
     hashSeed: string;
   }> = {}
 ): Promise<number[]> {
-  const baseHydrusId = randomInt(1000000);
-
   // Use raw SQL with RETURNING for single round-trip. COALESCE keeps
   // random() per-row (volatile) when no hashSeed is given.
+  //
+  // hydrusFileId continues past the current table max so successive batches
+  // (and successive calls) never overlap. A previous random base in
+  // [0, 1_000_000) let two batches land within BATCH_SIZE of each other and
+  // violate the hydrusFileId unique constraint (flaky seeding failures).
   const posts = await prisma.$queryRawUnsafe<{ id: number }[]>(`
     INSERT INTO "Post" (hash, "hydrusFileId", "mimeType", extension, "fileSize", width, height, rating, "importedAt", "thumbnailStatus", "updatedAt")
     SELECT
-      encode(sha256((COALESCE($9::text, random()::text) || '|' || generate_series::text)::bytea), 'hex'),
-      $1 + generate_series,
+      encode(sha256((COALESCE($8::text, random()::text) || '|' || generate_series::text)::bytea), 'hex'),
+      (SELECT COALESCE(MAX("hydrusFileId"), 0) FROM "Post") + 1 + generate_series,
+      $1,
       $2,
       $3,
       $4,
       $5,
-      $6,
-      $7::"Rating",
+      $6::"Rating",
       NOW(),
       'PENDING'::"ThumbnailStatus",
       NOW()
-    FROM generate_series(0, $8 - 1)
+    FROM generate_series(0, $7 - 1)
     RETURNING id
   `,
-    baseHydrusId,
     overrides.mimeType ?? 'image/png',
     overrides.extension ?? '.png',
     overrides.fileSize ?? 1024,

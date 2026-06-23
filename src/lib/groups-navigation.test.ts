@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildGroupsSearchUrl, createGroupsSeed } from "./groups-navigation";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildGroupsSearchUrl, createGroupsSeed } from "@/lib/groups-navigation";
 
 const seed = () => "deadbeef";
 
@@ -7,6 +7,10 @@ function parse(url: string) {
   const [path, qs] = url.split("?");
   return { path, params: new URLSearchParams(qs ?? "") };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("buildGroupsSearchUrl", () => {
   it("adds order=random and a seed when navigating from a seedless URL", () => {
@@ -67,7 +71,18 @@ describe("buildGroupsSearchUrl", () => {
     expect(parse(url).params.get("seed")).toBe("ro123");
   });
 
+  it("uses the default seed generator when none is injected", () => {
+    const url = buildGroupsSearchUrl(new URLSearchParams(""), { query: "", creator: "x" });
+    expect(parse(url).params.get("seed")).toMatch(/^[0-9a-f]{8}$/);
+  });
+
   it("createGroupsSeed produces 8 hex characters", () => {
+    expect(createGroupsSeed()).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("createGroupsSeed falls back to Math.random outside a secure context", () => {
+    // No crypto.getRandomValues (e.g. app served over plain HTTP).
+    vi.stubGlobal("crypto", {});
     expect(createGroupsSeed()).toMatch(/^[0-9a-f]{8}$/);
   });
 });
