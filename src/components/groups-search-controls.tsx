@@ -12,6 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { MagnifyingGlassIcon, UserIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { TagCategory } from "@/generated/prisma/enums";
 import { isValidCreatorName } from "@/lib/creator-names";
+import { buildGroupsSearchUrl } from "@/lib/groups-navigation";
 import {
   SuggestionsDropdown,
   type TagSuggestion,
@@ -92,26 +93,7 @@ export function GroupsSearchControls({
   }, [creator, showCreatorSuggestions]);
 
   const pushGroupsUrl = useCallback((next: { query: string; creator: string }) => {
-    const params = new URLSearchParams(searchParams.toString());
-    const trimmedQuery = next.query.trim();
-    const trimmedCreator = next.creator.trim();
-
-    if (trimmedQuery) {
-      params.set("q", trimmedQuery);
-    } else {
-      params.delete("q");
-    }
-
-    if (trimmedCreator) {
-      params.set("creator", trimmedCreator);
-    } else {
-      params.delete("creator");
-    }
-
-    params.delete("page");
-
-    const queryString = params.toString();
-    router.push(`/groups${queryString ? `?${queryString}` : ""}`);
+    router.push(buildGroupsSearchUrl(searchParams, next));
   }, [router, searchParams]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
