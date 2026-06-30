@@ -227,9 +227,7 @@ export default async function PostPage({ params }: PostPageProps) {
         nextPostHash={nextPostHash}
       />
 
-      {/* Sidebar - Tags (appears below content on mobile, left on desktop).
-          Sticky so the tag list stays usable while scrolling long pages. */}
-      <div className="order-last lg:order-first lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+      <div className="order-last lg:order-first">
         <TagSidebar tags={tags} />
       </div>
 
