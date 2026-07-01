@@ -89,4 +89,17 @@ describe("SearchPage", () => {
     expect(mocks.searchNotes).not.toHaveBeenCalled();
     expect(mocks.searchPosts).not.toHaveBeenCalled();
   });
+
+  it("renders semantic-post mode without running text search work from stale params", async () => {
+    await renderSearchPageContent({
+      mode: "semantic-post",
+      postHash: VALID_HASH,
+      semantic: "leftover text query",
+    });
+
+    expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+    expect(mocks.searchSemanticPosts).not.toHaveBeenCalled();
+    expect(mocks.searchNotes).not.toHaveBeenCalled();
+    expect(mocks.searchPosts).not.toHaveBeenCalled();
+  });
 });

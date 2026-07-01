@@ -15,8 +15,17 @@ interface SemanticImageResult {
   score?: number;
 }
 
+/**
+ * Where the query vector comes from:
+ * - `upload`: an uploaded query image, embedded and cached under its byte hash.
+ * - `post`: an existing post, reusing its already-indexed image embedding.
+ */
+export type SemanticImageSource =
+  | { kind: "upload"; hash: string }
+  | { kind: "post"; hash: string };
+
 interface SemanticImageResultsProps {
-  imageHash: string;
+  source: SemanticImageSource;
   page: number;
 }
 
@@ -26,20 +35,37 @@ interface ResultsState {
   totalPages: number;
 }
 
+const SOURCE_COPY = {
+  upload: {
+    heading: "uploaded image",
+    apiPath: "/api/posts/semantic-search/image",
+    expiredTitle: "This image search has expired",
+    expiredHint: "Switch to Semantic mode and drop or paste the image again to search.",
+  },
+  post: {
+    heading: "this image",
+    apiPath: "/api/posts/semantic-search/post",
+    expiredTitle: "No image embedding for this post",
+    expiredHint: "Generate image embeddings in Admin to search from existing posts.",
+  },
+} as const;
+
 /**
  * Client island that renders image-based semantic search results.
  *
- * Driven entirely by the URL: it fetches the ranked matches for a cached query
- * image (`imageHash`) at the given `page`. Pagination reuses the cached vector,
- * so paging never re-uploads or re-embeds. A 404 means the cached embedding is
- * gone (e.g. the embedding model changed) and the user must upload again.
+ * Driven entirely by the URL: it fetches the ranked matches for a query vector —
+ * either an uploaded image (cached by byte hash) or an existing post (its stored
+ * embedding) — at the given `page`. Pagination reuses the same vector, so paging
+ * never re-uploads or re-embeds. A 404 means the vector is unavailable (the
+ * cached upload expired, or the post was never embedded under the current model).
  */
-export function SemanticImageResults({ imageHash, page }: SemanticImageResultsProps) {
+export function SemanticImageResults({ source, page }: SemanticImageResultsProps) {
   const [state, setState] = useState<ResultsState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const copy = SOURCE_COPY[source.kind];
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -51,10 +77,10 @@ export function SemanticImageResults({ imageHash, page }: SemanticImageResultsPr
       setError(null);
       setExpired(false);
 
-      const params = new URLSearchParams({ hash: imageHash, page: String(page) });
+      const params = new URLSearchParams({ hash: source.hash, page: String(page) });
 
       try {
-        const response = await fetch(`/api/posts/semantic-search/image?${params}`, {
+        const response = await fetch(`${copy.apiPath}?${params}`, {
           signal: controller.signal,
         });
         const data = await response.json();
@@ -79,7 +105,7 @@ export function SemanticImageResults({ imageHash, page }: SemanticImageResultsPr
     run();
 
     return () => controller.abort();
-  }, [imageHash, page]);
+  }, [source.kind, source.hash, page, copy.apiPath]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -87,7 +113,7 @@ export function SemanticImageResults({ imageHash, page }: SemanticImageResultsPr
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">
-          Semantic: <span className="text-purple-400">uploaded image</span>
+          Semantic: <span className="text-purple-400">{copy.heading}</span>
         </h1>
         {state && (
           <span className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -98,10 +124,8 @@ export function SemanticImageResults({ imageHash, page }: SemanticImageResultsPr
 
       {expired && (
         <div className="rounded-lg bg-white border border-zinc-200 p-8 text-center dark:bg-zinc-800 dark:border-transparent">
-          <p className="text-lg text-zinc-500 dark:text-zinc-400">This image search has expired</p>
-          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">
-            Switch to Semantic mode and drop or paste the image again to search.
-          </p>
+          <p className="text-lg text-zinc-500 dark:text-zinc-400">{copy.expiredTitle}</p>
+          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">{copy.expiredHint}</p>
         </div>
       )}
 

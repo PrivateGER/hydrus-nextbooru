@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
     getCachedImageQueryEmbedding: vi.fn(),
     upsertImageQueryEmbedding: vi.fn(),
     searchPostsByEmbedding: vi.fn(),
+    getPostEmbeddingVector: vi.fn(),
     createImageEmbedding: vi.fn(),
   };
 
@@ -46,7 +47,11 @@ vi.mock("@/lib/embeddings/image", () => ({
 
 vi.mock("@/lib/embeddings/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/embeddings/store")>();
-  return { ...actual, searchPostsByEmbedding: mocks.searchPostsByEmbedding };
+  return {
+    ...actual,
+    searchPostsByEmbedding: mocks.searchPostsByEmbedding,
+    getPostEmbeddingVector: mocks.getPostEmbeddingVector,
+  };
 });
 
 vi.mock("@/lib/embeddings/image-query-cache", async (importOriginal) => {
@@ -58,7 +63,11 @@ vi.mock("@/lib/embeddings/image-query-cache", async (importOriginal) => {
   };
 });
 
-import { prepareImageQueryEmbedding, searchSemanticPostsByImageHash } from "@/lib/search";
+import {
+  prepareImageQueryEmbedding,
+  searchSemanticPostsByImageHash,
+  searchSemanticPostsByPostHash,
+} from "@/lib/search";
 import { hashImageBytes } from "@/lib/embeddings/image-query-cache";
 
 const config = {
@@ -90,6 +99,7 @@ beforeEach(() => {
   mocks.upsertImageQueryEmbedding.mockImplementation(async ({ imageHash, embedding }) => ({ imageHash, embedding }));
   mocks.createImageEmbedding.mockResolvedValue({ embedding: [1, 0, 0] });
   mocks.searchPostsByEmbedding.mockResolvedValue({ posts: [], totalCount: 0 });
+  mocks.getPostEmbeddingVector.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -199,6 +209,49 @@ describe("searchSemanticPostsByImageHash", () => {
 
     expect(result.posts).toEqual([]);
     expect(mocks.getCachedImageQueryEmbedding).not.toHaveBeenCalled();
+    expect(mocks.searchPostsByEmbedding).not.toHaveBeenCalled();
+  });
+});
+
+describe("searchSemanticPostsByPostHash", () => {
+  const postHash = "b".repeat(64);
+
+  it("returns notFound when the post has no embedding for the current config", async () => {
+    mocks.getPostEmbeddingVector.mockResolvedValueOnce(null);
+
+    const result = await searchSemanticPostsByPostHash(postHash, 1);
+
+    expect(result.notFound).toBe(true);
+    expect(result.posts).toEqual([]);
+    expect(mocks.searchPostsByEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("ranks neighbors against the post's stored vector, excluding the post itself", async () => {
+    mocks.getPostEmbeddingVector.mockResolvedValueOnce({ postId: 42, embedding: [1, 0, 0] });
+    mocks.searchPostsByEmbedding.mockResolvedValueOnce({
+      posts: [{ id: 7, hash: "a".repeat(64), width: 1, height: 1, blurhash: null, mimeType: "image/png", distance: 0.1, score: 0.9 }],
+      totalCount: 1,
+    });
+
+    const result = await searchSemanticPostsByPostHash(postHash, 2, { limit: 10 });
+
+    expect(result.notFound).toBeUndefined();
+    expect(result.totalCount).toBe(1);
+    expect(result.totalPages).toBe(1);
+    expect(result.posts).toHaveLength(1);
+    expect(mocks.getPostEmbeddingVector).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: postHash })
+    );
+    expect(mocks.searchPostsByEmbedding).toHaveBeenCalledWith(
+      expect.objectContaining({ embedding: [1, 0, 0], skip: 10, limit: 10, excludePostId: 42 })
+    );
+  });
+
+  it("returns an empty result past the maximum page without querying", async () => {
+    const result = await searchSemanticPostsByPostHash(postHash, 100000);
+
+    expect(result.posts).toEqual([]);
+    expect(mocks.getPostEmbeddingVector).not.toHaveBeenCalled();
     expect(mocks.searchPostsByEmbedding).not.toHaveBeenCalled();
   });
 });

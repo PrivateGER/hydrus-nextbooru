@@ -5,7 +5,11 @@ import {
   type EmbeddingConfig,
   isSupportedEmbeddingDimensions,
 } from "@/lib/embeddings/settings";
-import { toVectorLiteral, validateEmbeddingVector } from "@/lib/embeddings/vector";
+import {
+  parseVectorLiteral,
+  toVectorLiteral,
+  validateEmbeddingVector,
+} from "@/lib/embeddings/vector";
 
 /**
  * Build the `vector(N)` pgvector type fragment for raw SQL.
@@ -275,6 +279,8 @@ export async function searchPostsByEmbedding(options: {
   limit: number;
   minScore?: number;
   resultCap?: number;
+  /** Exclude this post from the results (e.g. the source image when searching from an existing post). */
+  excludePostId?: number;
 }): Promise<{ posts: SemanticPostResult[]; totalCount: number }> {
   const { config, skip, limit } = options;
   if (!isSupportedEmbeddingDimensions(config.dimensions)) {
@@ -289,6 +295,10 @@ export async function searchPostsByEmbedding(options: {
   const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
     ? null
     : Math.min(Math.max(1, Math.floor(options.resultCap)), 1000);
+  const excludePostFilter =
+    options.excludePostId === undefined || !Number.isInteger(options.excludePostId)
+      ? Prisma.empty
+      : Prisma.sql`AND pe."postId" <> ${options.excludePostId}`;
 
   type ResultRow = {
     id: number;
@@ -318,6 +328,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
+        ${excludePostFilter}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${resultCap}
@@ -351,6 +362,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
+        ${excludePostFilter}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${limit} OFFSET ${skip}
@@ -365,6 +377,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
+        ${excludePostFilter}
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
     `,
   ]);
@@ -376,6 +389,46 @@ export async function searchPostsByEmbedding(options: {
       score: 1 - Number(row.distance),
     })),
     totalCount: Number(counts[0]?.count ?? 0n),
+  };
+}
+
+/**
+ * Read an existing post's stored image embedding for the active config.
+ *
+ * Returns the post's numeric id (so the caller can exclude it from a neighbor
+ * search) and its embedding vector, or `null` when the post has no COMPLETE
+ * embedding under the current (baseUrl, model, dimensions, imageMaxResolution)
+ * config — e.g. it was never embedded, or an admin switched models since.
+ */
+export async function getPostEmbeddingVector(options: {
+  hash: string;
+  config: EmbeddingConfig;
+}): Promise<{ postId: number; embedding: number[] } | null> {
+  const { hash, config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const rows = await prisma.$queryRaw<{ postId: number; embedding: string }[]>`
+    SELECT pe."postId", pe.embedding::text AS embedding
+    FROM "PostEmbedding" pe
+    JOIN "Post" p ON p.id = pe."postId"
+    WHERE p.hash = ${hash}
+      AND pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+      AND pe.embedding IS NOT NULL
+    LIMIT 1
+  `;
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    postId: Number(row.postId),
+    embedding: validateEmbeddingVector(parseVectorLiteral(row.embedding), config.dimensions),
   };
 }
 

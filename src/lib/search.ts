@@ -25,7 +25,7 @@ import {
   isEmbeddingProviderConfigured,
   toEmbeddingConfig,
 } from "@/lib/embeddings/settings";
-import { searchPostsByEmbedding } from "@/lib/embeddings/store";
+import { getPostEmbeddingVector, searchPostsByEmbedding } from "@/lib/embeddings/store";
 import { preprocessImageBufferForEmbedding } from "@/lib/embeddings/image";
 import {
   getCachedSemanticQueryEmbedding,
@@ -911,6 +911,80 @@ export async function searchSemanticPostsByImageHash(
     };
   } catch (error) {
     console.error("Image semantic search error:", error);
+    const message =
+      error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
+        ? error.message
+        : "Failed to search image embeddings";
+    return {
+      posts: [],
+      totalCount: 0,
+      totalPages: 0,
+      queryTimeMs: performance.now() - startTime,
+      error: message,
+    };
+  }
+}
+
+/**
+ * Search image embeddings using an existing post's already-indexed vector.
+ *
+ * Reuses the embedding computed when the post was synced/embedded — no upload,
+ * no query round-trip — so any post with a COMPLETE embedding under the active
+ * config can seed the same ranked, paginated view as an uploaded query image.
+ * The source post is excluded from its own results (it would otherwise rank
+ * first at distance 0). If the post has no embedding for the current config
+ * (never embedded, or the model changed), `notFound` is returned so the caller
+ * can explain why there are no results.
+ */
+export async function searchSemanticPostsByPostHash(
+  postHash: string,
+  page: number,
+  options?: SearchSemanticPostsOptions
+): Promise<SemanticImageSearchResult> {
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const minScore = normalizeSemanticMinScore(options?.minScore);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = Math.min(Math.max(1, requestedPage), MAX_PAGE);
+  if (requestedPage > MAX_PAGE) {
+    return { posts: [], totalCount: 0, totalPages: 0, queryTimeMs: 0 };
+  }
+
+  const skip = (validatedPage - 1) * limit;
+  const startTime = performance.now();
+
+  try {
+    const settings = await getEmbeddingOpenRouterSettings();
+    const embeddingConfig = toEmbeddingConfig(settings);
+    const source = await getPostEmbeddingVector({ hash: postHash, config: embeddingConfig });
+
+    if (!source) {
+      return {
+        posts: [],
+        totalCount: 0,
+        totalPages: 0,
+        queryTimeMs: performance.now() - startTime,
+        notFound: true,
+      };
+    }
+
+    const result = await searchPostsByEmbedding({
+      config: embeddingConfig,
+      embedding: source.embedding,
+      skip,
+      limit,
+      minScore,
+      resultCap: SEMANTIC_RESULT_CAP,
+      excludePostId: source.postId,
+    });
+
+    return {
+      posts: result.posts,
+      totalCount: result.totalCount,
+      totalPages: Math.ceil(result.totalCount / limit),
+      queryTimeMs: performance.now() - startTime,
+    };
+  } catch (error) {
+    console.error("Post semantic search error:", error);
     const message =
       error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
         ? error.message

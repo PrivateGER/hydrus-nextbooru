@@ -63,6 +63,7 @@ interface SearchPageParams {
   mode?: string;
   minScore?: string;
   imgHash?: string;
+  postHash?: string;
 }
 
 interface SearchPageProps {
@@ -132,7 +133,23 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
         <div className="flex justify-center">
           <SearchBar initialMode="semantic" />
         </div>
-        <SemanticImageResults imageHash={imageHash} page={page} />
+        <SemanticImageResults source={{ kind: "upload", hash: imageHash }} page={page} />
+      </div>
+    );
+  }
+
+  // Post-based semantic search: reuse an existing post's already-indexed image
+  // embedding to open the same ranked view — entered from the "Semantically
+  // Related" menu, no upload required.
+  const postHash = (params.postHash || "").trim().toLowerCase();
+  const isPostSemanticMode = params.mode === "semantic-post" && /^[a-f0-9]{64}$/.test(postHash);
+  if (isPostSemanticMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center">
+          <SearchBar initialMode="semantic" />
+        </div>
+        <SemanticImageResults source={{ kind: "post", hash: postHash }} page={page} />
       </div>
     );
   }

@@ -2,13 +2,15 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { CircleStackIcon, SparklesIcon } from "@heroicons/react/24/outline";
+import { CircleStackIcon, MagnifyingGlassIcon, SparklesIcon } from "@heroicons/react/24/outline";
 import { ThumbnailCard } from "../thumbnail-card";
 import { Filmstrip } from "../filmstrip";
 import type { RecommendedPost } from "@/lib/recommendations";
 import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
 
 interface RelatedPostsClientProps {
+  /** SHA-256 of the current post; seeds the full semantic view when opened. */
+  hash: string;
   recommendations: RecommendedPost[];
   semanticPosts?: EmbeddedRelatedPost[];
 }
@@ -86,7 +88,7 @@ function subscribeRelatedPostsMode(onStoreChange: () => void) {
  * Client component that displays recommended posts with enhanced visuals.
  * Features: scroll indicators, larger thumbnails, header icon.
  */
-export function RelatedPostsClient({ recommendations, semanticPosts = [] }: RelatedPostsClientProps) {
+export function RelatedPostsClient({ hash, recommendations, semanticPosts = [] }: RelatedPostsClientProps) {
   const hasSimilarPosts = recommendations.length > 0;
   const hasSemanticPosts = semanticPosts.length > 0;
   const fallbackMode = hasSimilarPosts ? "similar" : "semantic";
@@ -133,40 +135,54 @@ export function RelatedPostsClient({ recommendations, semanticPosts = [] }: Rela
           </span>
         </div>
 
-        {hasSimilarPosts && hasSemanticPosts && (
-          <div className="flex rounded-lg bg-zinc-200 p-1 dark:bg-zinc-900" role="tablist" aria-label="Related post mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeMode === "similar"}
-              onClick={() => selectMode("similar")}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                activeMode === "similar"
-                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
-                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              }`}
-              title="Show tag-based similar posts"
+        <div className="flex items-center gap-2">
+          {hasSimilarPosts && hasSemanticPosts && (
+            <div className="flex rounded-lg bg-zinc-200 p-1 dark:bg-zinc-900" role="tablist" aria-label="Related post mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeMode === "similar"}
+                onClick={() => selectMode("similar")}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
+                  activeMode === "similar"
+                    ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                }`}
+                title="Show tag-based similar posts"
+              >
+                <SparklesIcon className="h-4 w-4" />
+                Similar
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeMode === "semantic"}
+                onClick={() => selectMode("semantic")}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
+                  activeMode === "semantic"
+                    ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                    : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                }`}
+                title="Show embedding-based semantically related posts"
+              >
+                <CircleStackIcon className="h-4 w-4" />
+                Semantic
+              </button>
+            </div>
+          )}
+
+          {/* Open the full, paginated semantic view seeded by this post's vector. */}
+          {activeMode === "semantic" && (
+            <Link
+              href={`/search?mode=semantic-post&postHash=${hash}`}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-purple-600 transition-colors hover:bg-purple-500/10 dark:text-purple-400"
+              title="Open the full semantic search for this image"
             >
-              <SparklesIcon className="h-4 w-4" />
-              Similar
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeMode === "semantic"}
-              onClick={() => selectMode("semantic")}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                activeMode === "semantic"
-                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
-                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              }`}
-              title="Show embedding-based semantically related posts"
-            >
-              <CircleStackIcon className="h-4 w-4" />
-              Semantic
-            </button>
-          </div>
-        )}
+              <MagnifyingGlassIcon className="h-4 w-4" />
+              View all
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Filmstrip with scroll indicators */}
