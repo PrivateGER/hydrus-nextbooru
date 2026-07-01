@@ -254,4 +254,15 @@ describe("searchSemanticPostsByPostHash", () => {
     expect(mocks.getPostEmbeddingVector).not.toHaveBeenCalled();
     expect(mocks.searchPostsByEmbedding).not.toHaveBeenCalled();
   });
+
+  it("surfaces an error result (not notFound) when the vector lookup throws", async () => {
+    mocks.getPostEmbeddingVector.mockRejectedValueOnce(new mocks.OpenRouterApiError("upstream down"));
+
+    const result = await searchSemanticPostsByPostHash(postHash, 1);
+
+    expect(result.error).toBe("upstream down");
+    expect(result.notFound).toBeUndefined();
+    expect(result.posts).toEqual([]);
+    expect(mocks.searchPostsByEmbedding).not.toHaveBeenCalled();
+  });
 });
