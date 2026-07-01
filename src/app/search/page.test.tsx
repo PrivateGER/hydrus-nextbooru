@@ -67,6 +67,20 @@ async function renderSearchPageContent(params: Record<string, string>) {
   return Content(contentElement.props);
 }
 
+/** Walk a rendered element tree and return the first `source` prop found (SemanticImageResults). */
+function findSemanticSource(node: unknown): unknown {
+  if (!node || typeof node !== "object") return undefined;
+  const element = node as { props?: { source?: unknown; children?: unknown } };
+  if (element.props?.source) return element.props.source;
+  const children = element.props?.children;
+  const list = Array.isArray(children) ? children : [children];
+  for (const child of list) {
+    const found = findSemanticSource(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getClientIPFromHeaders.mockReturnValue("127.0.0.1");
@@ -78,7 +92,7 @@ beforeEach(() => {
 
 describe("SearchPage", () => {
   it("renders semantic-image mode without running text search work from stale params", async () => {
-    await renderSearchPageContent({
+    const element = await renderSearchPageContent({
       mode: "semantic-image",
       imgHash: VALID_HASH,
       semantic: "leftover text query",
@@ -88,10 +102,11 @@ describe("SearchPage", () => {
     expect(mocks.searchSemanticPosts).not.toHaveBeenCalled();
     expect(mocks.searchNotes).not.toHaveBeenCalled();
     expect(mocks.searchPosts).not.toHaveBeenCalled();
+    expect(findSemanticSource(element)).toEqual({ kind: "upload", hash: VALID_HASH });
   });
 
   it("renders semantic-post mode without running text search work from stale params", async () => {
-    await renderSearchPageContent({
+    const element = await renderSearchPageContent({
       mode: "semantic-post",
       postHash: VALID_HASH,
       semantic: "leftover text query",
@@ -101,5 +116,6 @@ describe("SearchPage", () => {
     expect(mocks.searchSemanticPosts).not.toHaveBeenCalled();
     expect(mocks.searchNotes).not.toHaveBeenCalled();
     expect(mocks.searchPosts).not.toHaveBeenCalled();
+    expect(findSemanticSource(element)).toEqual({ kind: "post", hash: VALID_HASH });
   });
 });

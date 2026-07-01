@@ -295,10 +295,12 @@ export async function searchPostsByEmbedding(options: {
   const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
     ? null
     : Math.min(Math.max(1, Math.floor(options.resultCap)), 1000);
-  const excludePostFilter =
-    options.excludePostId === undefined || !Number.isInteger(options.excludePostId)
-      ? Prisma.empty
-      : Prisma.sql`AND pe."postId" <> ${options.excludePostId}`;
+  // Mirror the nullable-parameter pattern used for maxDistance below rather than
+  // splicing a Prisma.sql fragment into $queryRaw: a NULL id disables the filter.
+  const excludePostId =
+    options.excludePostId !== undefined && Number.isInteger(options.excludePostId)
+      ? options.excludePostId
+      : null;
 
   type ResultRow = {
     id: number;
@@ -328,7 +330,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        ${excludePostFilter}
+        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${resultCap}
@@ -362,7 +364,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        ${excludePostFilter}
+        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
       ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
       LIMIT ${limit} OFFSET ${skip}
@@ -377,7 +379,7 @@ export async function searchPostsByEmbedding(options: {
         AND pe."imageMaxResolution" = ${config.imageMaxResolution}
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
-        ${excludePostFilter}
+        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
         AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
     `,
   ]);
