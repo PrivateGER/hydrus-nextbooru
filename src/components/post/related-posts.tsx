@@ -42,7 +42,13 @@ export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
     return null;
   }
 
-  return <RelatedPostsClient recommendations={recommendations} semanticPosts={semanticPosts} />;
+  return (
+    <RelatedPostsClient
+      hash={hash}
+      recommendations={recommendations}
+      semanticPosts={semanticPosts}
+    />
+  );
 }
 
 /**
