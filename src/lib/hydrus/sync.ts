@@ -232,12 +232,17 @@ export async function bulkEnsureGroups(
   }
 
   await prisma.$transaction(async (tx) => {
-    // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
+    // Atomic bulk insert. The conflict update only fires when it would
+    // actually change the title (backfill), so unchanged groups produce no
+    // dead row versions or GIN index churn on re-sync.
     await tx.$executeRaw`
       INSERT INTO "Group" ("sourceType", "sourceId", "title")
       SELECT u."sourceType"::"SourceType", u."sourceId", u.title
       FROM unnest(${sourceTypes}::text[], ${sourceIds}::text[], ${titles}::text[]) AS u("sourceType", "sourceId", title)
-      ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")
+      ON CONFLICT ("sourceType", "sourceId") DO UPDATE
+      SET "title" = EXCLUDED."title"
+      WHERE EXCLUDED."title" IS NOT NULL
+        AND "Group"."title" IS DISTINCT FROM EXCLUDED."title"
     `;
 
     // Fetch IDs in the same transaction - guaranteed to see our inserts
@@ -455,26 +460,79 @@ async function processFileSafe(
   const isMediaFile = metadata.mime.startsWith("image/") || metadata.mime.startsWith("video/");
   const thumbnailStatus = isMediaFile ? ThumbnailStatus.PENDING : ThumbnailStatus.UNSUPPORTED;
 
+  const postCreateData = {
+    hydrusFileId: metadata.file_id,
+    hash: metadata.hash,
+    mimeType: metadata.mime,
+    extension: metadata.ext,
+    fileSize: metadata.size,
+    width: metadata.width,
+    height: metadata.height,
+    duration: metadata.duration,
+    hasAudio: metadata.has_audio ?? false,
+    blurhash: metadata.blurhash,
+    sourceUrls,
+    importedAt,
+    thumbnailStatus,
+  };
+  const noteEntries = Object.entries(metadata.notes || {});
+
+  // Fast path: the batch existence check says the post is new, so there are
+  // no relations to diff and no cached recommendations to invalidate.
+  // `create` (not upsert) makes the hint self-verifying: if an external
+  // writer created the post since the check, the unique violation aborts the
+  // transaction and we fall through to the diff path below.
+  if (isNew) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const post = await tx.post.create({ data: postCreateData });
+
+        if (tagIds.length > 0) {
+          await tx.postTag.createMany({
+            data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
+            skipDuplicates: true,
+          });
+        }
+        if (groupData.length > 0) {
+          await tx.postGroup.createMany({
+            data: groupData.map((g) => ({
+              postId: post.id,
+              groupId: g.groupId,
+              position: g.position,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        if (noteEntries.length > 0) {
+          await tx.note.createMany({
+            data: noteEntries.map(([name, content]) => ({
+              postId: post.id,
+              name,
+              content,
+            })),
+          });
+        }
+      }, {
+        timeout: 60000,
+        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      });
+
+      await computePhashSafe(metadata);
+      return;
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+      syncLog.debug({ hash: metadata.hash }, "New-post hint was stale; falling back to diff path");
+    }
+  }
+
   // Single transaction for post + relations (no tag/group creation races)
   await prisma.$transaction(async (tx) => {
     // Upsert post
     const post = await tx.post.upsert({
       where: { hash: metadata.hash },
-      create: {
-        hydrusFileId: metadata.file_id,
-        hash: metadata.hash,
-        mimeType: metadata.mime,
-        extension: metadata.ext,
-        fileSize: metadata.size,
-        width: metadata.width,
-        height: metadata.height,
-        duration: metadata.duration,
-        hasAudio: metadata.has_audio ?? false,
-        blurhash: metadata.blurhash,
-        sourceUrls,
-        importedAt,
-        thumbnailStatus,
-      },
+      create: postCreateData,
       update: {
         mimeType: metadata.mime,
         extension: metadata.ext,
@@ -488,42 +546,6 @@ async function processFileSafe(
         syncedAt: new Date(),
       },
     });
-
-    const noteEntries = Object.entries(metadata.notes || {});
-
-    if (isNew) {
-      // Fast path: the post did not exist before this batch, so there are no
-      // relations to diff or delete and no cached recommendations to
-      // invalidate. skipDuplicates keeps this idempotent should the existence
-      // hint ever be stale (e.g. an external writer racing the sync).
-      if (tagIds.length > 0) {
-        await tx.postTag.createMany({
-          data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
-          skipDuplicates: true,
-        });
-      }
-      if (groupData.length > 0) {
-        await tx.postGroup.createMany({
-          data: groupData.map((g) => ({
-            postId: post.id,
-            groupId: g.groupId,
-            position: g.position,
-          })),
-          skipDuplicates: true,
-        });
-      }
-      if (noteEntries.length > 0) {
-        await tx.note.createMany({
-          data: noteEntries.map(([name, content]) => ({
-            postId: post.id,
-            name,
-            content,
-          })),
-          skipDuplicates: true,
-        });
-      }
-      return;
-    }
 
     // Update tags only if changed
     const existingTagIds = (await tx.postTag.findMany({
@@ -582,7 +604,7 @@ async function processFileSafe(
       select: { name: true, content: true },
     });
 
-    const noteKey = (n: { name: string; content: string }) => `${n.name}:${n.content}`;
+    const noteKey = (n: { name: string; content: string }) => JSON.stringify([n.name, n.content]);
     const existingNoteKeys = new Set(existingNotes.map(noteKey));
     const newNoteKeys = new Set(noteEntries.map(([name, content]) => noteKey({ name, content })));
     const notesChanged = existingNoteKeys.size !== newNoteKeys.size ||
@@ -605,24 +627,34 @@ async function processFileSafe(
     isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
   });
 
-  // Compute phash for supported image types (inline, non-fatal)
-  if (PHASH_SUPPORTED_MIMES.has(metadata.mime)) {
-    try {
-      const filePath = buildFilePath(metadata.hash, metadata.ext);
-      const phash = await computePhash(filePath);
-      if (phash !== null) {
-        await prisma.phashEntry.upsert({
-          where: { hash: metadata.hash },
-          create: { hash: metadata.hash, phash },
-          update: { phash, computedAt: new Date() },
-        });
-      }
-    } catch (err) {
-      syncLog.warn(
-        { hash: metadata.hash, error: err instanceof Error ? err.message : String(err) },
-        "Failed to compute phash during sync"
-      );
+  await computePhashSafe(metadata);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+/** Compute and store the phash for supported image types (non-fatal). */
+async function computePhashSafe(metadata: HydrusFileMetadata): Promise<void> {
+  if (!PHASH_SUPPORTED_MIMES.has(metadata.mime)) {
+    return;
+  }
+
+  try {
+    const filePath = buildFilePath(metadata.hash, metadata.ext);
+    const phash = await computePhash(filePath);
+    if (phash !== null) {
+      await prisma.phashEntry.upsert({
+        where: { hash: metadata.hash },
+        create: { hash: metadata.hash, phash },
+        update: { phash, computedAt: new Date() },
+      });
     }
+  } catch (err) {
+    syncLog.warn(
+      { hash: metadata.hash, error: err instanceof Error ? err.message : String(err) },
+      "Failed to compute phash during sync"
+    );
   }
 }
 
@@ -636,12 +668,14 @@ const CLEANUP_SCAN_PAGE_SIZE = 5000;
 
 /**
  * Delete posts that no longer exist in Hydrus.
- * Streams DB posts in keyset-paginated pages (instead of materializing the
- * whole table) and accumulates only the ids scheduled for deletion.
+ * Streams DB posts in keyset-paginated pages and deletes each page's stale
+ * ids before fetching the next, so memory stays bounded by the page size
+ * even when most of the library was removed. Deleting behind the cursor
+ * cannot skip rows: the scan only moves forward by id.
  * Returns the count of deleted posts.
  */
 async function deleteRemovedPosts(hydrusHashes: Set<string>): Promise<number> {
-  const idsToDelete: number[] = [];
+  let totalDeleted = 0;
   let cursor = 0;
 
   for (;;) {
@@ -654,30 +688,27 @@ async function deleteRemovedPosts(hydrusHashes: Set<string>): Promise<number> {
     if (page.length === 0) break;
 
     cursor = page[page.length - 1].id;
+    const idsToDelete: number[] = [];
     for (const post of page) {
       if (!hydrusHashes.has(post.hash)) {
         idsToDelete.push(post.id);
       }
     }
 
+    for (let i = 0; i < idsToDelete.length; i += DELETION_BATCH_SIZE) {
+      const batch = idsToDelete.slice(i, i + DELETION_BATCH_SIZE);
+      const result = await prisma.post.deleteMany({
+        where: { id: { in: batch } },
+      });
+      totalDeleted += result.count;
+    }
+
     if (page.length < CLEANUP_SCAN_PAGE_SIZE) break;
   }
 
-  if (idsToDelete.length === 0) {
-    return 0;
+  if (totalDeleted > 0) {
+    syncLog.info({ deletedCount: totalDeleted }, 'Deleted posts removed from Hydrus');
   }
-
-  // Delete in batches to avoid query size limits
-  let totalDeleted = 0;
-  for (let i = 0; i < idsToDelete.length; i += DELETION_BATCH_SIZE) {
-    const batch = idsToDelete.slice(i, i + DELETION_BATCH_SIZE);
-    const result = await prisma.post.deleteMany({
-      where: { id: { in: batch } },
-    });
-    totalDeleted += result.count;
-  }
-
-  syncLog.info({ deletedCount: totalDeleted }, 'Deleted posts removed from Hydrus');
   return totalDeleted;
 }
 

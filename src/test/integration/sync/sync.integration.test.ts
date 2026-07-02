@@ -440,11 +440,16 @@ describe('syncFromHydrus (Integration)', () => {
         expect(names.has(tag)).toBe(true);
       }
 
-      // Relations must resolve through the same escaped names.
+      // Relations must resolve through the same escaped names: the exact
+      // nasty names must be attached to the post, not merely counted.
       const post = await prisma.post.findUnique({
         where: { hash: 'a'.repeat(64) },
-        include: { tags: true },
+        include: { tags: { include: { tag: true } } },
       });
+      const postTagNames = new Set(post?.tags.map((pt) => pt.tag.name));
+      for (const tag of nastyTags) {
+        expect(postTagNames.has(tag)).toBe(true);
+      }
       expect(post?.tags).toHaveLength(nastyTags.length);
     });
   });

@@ -364,8 +364,11 @@ export async function seedGroups(
   }
 
   const INSERT_BATCH = 5000;
+  // Scope everything below to the rows THIS run inserted, so composing or
+  // re-running the seeder never mutates unrelated group fixtures.
+  const groupRows: Array<{ id: number; title: string | null }> = [];
   for (let i = 0; i < groupCount; i += INSERT_BATCH) {
-    await prisma.$executeRaw`
+    const inserted = await prisma.$queryRaw<Array<{ id: number; title: string | null }>>`
       INSERT INTO "Group" ("sourceType", "sourceId", title)
       SELECT u."sourceType"::"SourceType", u."sourceId", u.title
       FROM unnest(
@@ -373,12 +376,10 @@ export async function seedGroups(
         ${sourceIds.slice(i, i + INSERT_BATCH)}::text[],
         ${titles.slice(i, i + INSERT_BATCH)}::text[]
       ) AS u("sourceType", "sourceId", title)
+      RETURNING id, title
     `;
+    groupRows.push(...inserted);
   }
-
-  const groupRows = await prisma.$queryRaw<Array<{ id: number; title: string | null }>>`
-    SELECT id, title FROM "Group" ORDER BY id ASC
-  `;
 
   // Memberships: sliding windows over the shuffled post pool, 2-8 members
   // (~5% single-member groups stay ineligible for merged listings).
@@ -415,6 +416,7 @@ export async function seedGroups(
     }
   }, { timeout: 120_000 });
 
+  const insertedIds = groupRows.map((g) => g.id);
   await prisma.$executeRaw`
     UPDATE "Group" g
     SET
@@ -431,6 +433,7 @@ export async function seedGroups(
         END AS member_hash
       FROM "Group" g
       LEFT JOIN "PostGroup" pg ON pg."groupId" = g.id
+      WHERE g.id = ANY(${insertedIds}::int[])
       GROUP BY g.id
     ) stats
     WHERE g.id = stats.id
