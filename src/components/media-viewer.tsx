@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 
 interface MediaViewerProps {
@@ -88,7 +88,22 @@ function MediaViewerContent({
   const fullRef = useRef<HTMLImageElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Pause video on navigation (handles bfcache, tab switches, and unmount)
+  // cacheComponents wraps routes in React Activity, which hides inactive pages
+  // with display:none rather than unmounting them. display:none does NOT stop
+  // video playback. useLayoutEffect cleanup runs synchronously before Activity
+  // commits the CSS hide, which is the only hook that fires in time to stop audio.
+  // (useEffect cleanup fires after paint — too late when Activity is involved.)
+  useLayoutEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    return () => {
+      video.pause();
+    };
+  }, []);
+
+  // Play on mount / Activity restore, and register navigation event listeners
+  // that pause immediately when the user initiates navigation (before React
+  // commits the new tree and the layoutEffect cleanup fires).
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -99,22 +114,62 @@ function MediaViewerContent({
       // Autoplay blocked by browser policy (user hasn't interacted yet)
     });
 
-    // pagehide fires BEFORE page enters bfcache - critical for back button
+    // pagehide fires BEFORE page enters bfcache - critical for hard navigation
     const handlePageHide = () => video.pause();
 
-    // visibilitychange catches tab switches and some navigations
+    // visibilitychange catches tab switches
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
         video.pause();
       }
     };
 
+    // popstate fires when the browser back/forward button is pressed — this is
+    // the start of navigation, before React begins reconciliation
+    const handlePopState = () => video.pause();
+
+    // Capture-phase click listener: fires before Next.js processes the anchor
+    // click, so the video pauses the moment the user initiates link navigation
+    const handleClick = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (!anchor || anchor.target) return;
+      try {
+        const url = new URL(anchor.href, window.location.href);
+        if (url.origin === window.location.origin) {
+          video.pause();
+        }
+      } catch {
+        // Unparseable href — not a navigation we need to handle
+      }
+    };
+
+    // Capture-phase keydown: mirrors the keys in KeyboardNavigation so the video
+    // pauses the moment a keyboard-driven navigation is initiated
+    const NAV_KEYS = new Set(["ArrowLeft", "ArrowRight", "a", "d", "Escape"]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!NAV_KEYS.has(e.key)) return;
+      const t = e.target as HTMLElement;
+      if (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        t.isContentEditable ||
+        t instanceof HTMLVideoElement
+      ) return;
+      video.pause();
+    };
+
     window.addEventListener("pagehide", handlePageHide);
     document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("popstate", handlePopState);
+    document.addEventListener("click", handleClick, true);
+    document.addEventListener("keydown", handleKeyDown, true);
 
     return () => {
       window.removeEventListener("pagehide", handlePageHide);
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("popstate", handlePopState);
+      document.removeEventListener("click", handleClick, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
       video.pause();
     };
   }, [hash]);
