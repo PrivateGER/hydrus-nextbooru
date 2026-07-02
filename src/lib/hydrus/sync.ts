@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { HydrusClient } from "./client";
-import type { HydrusFileMetadata } from "./types";
+import type { HydrusFileMetadata, HydrusSearchResponse } from "./types";
 import { parseTag, normalizeTagForStorage } from "./tag-mapper";
 import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
@@ -9,7 +9,7 @@ import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
 import { invalidateAllRecommendations, invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
-import { withSpan, addSpanEvent, setSpanAttributes } from "@/lib/tracing";
+import { withSpan, addSpanEvent } from "@/lib/tracing";
 import { computePhash, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { IncompleteLookupError, assertLookupComplete } from "./lookup-validation";
@@ -18,19 +18,13 @@ export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
 const MAX_RETRIES = 3; // Max retries for transient failures
 
-// PostgreSQL caps bind parameters at 65,535 per statement. Chunk bulk
-// INSERT/SELECT so we never exceed that limit regardless of batch size.
-const PG_MAX_BIND_PARAMS = 65535;
-// We pass params via the spread form `$executeRawUnsafe(sql, ...params)`. V8
-// caps the number of arguments in a spread/apply call at ~65,535, so spreading
-// ~65k params throws "Maximum call stack size exceeded". Stay comfortably below
-// BOTH the PG bind limit and the JS arg limit by capping bind params per
-// statement well under PG_MAX_BIND_PARAMS.
-const MAX_PARAMS_PER_STATEMENT = Math.min(30000, PG_MAX_BIND_PARAMS);
-// Tags use 2 bind params per entry (name, category).
-export const TAG_CHUNK_SIZE = Math.floor(MAX_PARAMS_PER_STATEMENT / 2); // 15000
-// Groups use 3 bind params per entry (sourceType, sourceId, title).
-export const GROUP_CHUNK_SIZE = Math.floor(MAX_PARAMS_PER_STATEMENT / 3); // 10000
+// How many errors to keep on SyncProgress before collapsing the rest into a
+// single summary entry. Keeps a pathological sync (every file failing) from
+// accumulating an unbounded error array.
+const MAX_TRACKED_ERRORS = 200;
+// Minimum interval between SyncState progress writes (crash-recovery/UI
+// polling state); the in-process onProgress callback still fires per chunk.
+const PROGRESS_WRITE_INTERVAL_MS = 1000;
 
 /**
  * Lookup maps populated before parallel processing to avoid race conditions
@@ -67,25 +61,74 @@ export interface SyncOptions {
 // BULK OPERATIONS - Eliminate race conditions via batch pre-population
 // =============================================================================
 
-/**
- * Pre-extract all unique tags from a batch of files.
- * Returns a Map of "CATEGORY:name" -> { name, category }
- */
-function collectTagsFromBatch(files: HydrusFileMetadata[]): Map<string, { name: string; category: TagCategory }> {
-  const allTags = new Map<string, { name: string; category: TagCategory }>();
+/** Pre-resolved references for one file: normalized tag keys + group refs. */
+interface ParsedFileRefs {
+  tagKeys: string[]; // deduped "CATEGORY:name" keys, in extraction order
+  groupRefs: { key: string; position: number }[]; // "SOURCETYPE:sourceId" keys
+}
 
-  for (const file of files) {
-    const tags = extractTags(file);
-    for (const tag of tags) {
+interface BatchParseResult {
+  uniqueTags: Map<string, { name: string; category: TagCategory }>;
+  uniqueGroups: Map<string, GroupData>;
+  fileRefs: ParsedFileRefs[]; // parallel to the input files array
+}
+
+/**
+ * Parse every file in the batch exactly once: extract + normalize tags and
+ * groups, dedupe them into the batch-wide unique maps used for bulk
+ * pre-population, and record per-file key lists so the per-file processing
+ * phase never has to re-parse metadata.
+ */
+function parseBatch(files: HydrusFileMetadata[]): BatchParseResult {
+  const uniqueTags = new Map<string, { name: string; category: TagCategory }>();
+  const uniqueGroups = new Map<string, GroupData>();
+  const fileRefs: ParsedFileRefs[] = new Array(files.length);
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+
+    // Tags: dedupe per file by normalized key (insertion order preserved)
+    const tagKeys: string[] = [];
+    const seenKeys = new Set<string>();
+    for (const tag of extractTags(file)) {
       const normalized = normalizeTagForStorage(tag);
       const key = `${normalized.category}:${normalized.name.toLowerCase()}`;
-      if (!allTags.has(key)) {
-        allTags.set(key, normalized);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      tagKeys.push(key);
+      if (!uniqueTags.has(key)) {
+        uniqueTags.set(key, normalized);
       }
     }
+
+    const groupRefs: { key: string; position: number }[] = [];
+
+    // URL-based groups
+    for (const source of parseSourceUrls(file.known_urls || [])) {
+      const key = `${source.sourceType}:${source.sourceId}`;
+      if (!uniqueGroups.has(key)) {
+        uniqueGroups.set(key, { sourceType: source.sourceType as SourceType, sourceId: source.sourceId });
+      }
+      groupRefs.push({ key, position: extractPositionFromUrl(source.originalUrl) });
+    }
+
+    // Title-based groups (from title: tags)
+    for (const titleGroup of extractTitleGroups(file)) {
+      const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
+      if (!uniqueGroups.has(key)) {
+        uniqueGroups.set(key, {
+          sourceType: titleGroup.sourceType,
+          sourceId: titleGroup.sourceId,
+          title: titleGroup.normalizedTitle,
+        });
+      }
+      groupRefs.push({ key, position: titleGroup.position });
+    }
+
+    fileRefs[i] = { tagKeys, groupRefs };
   }
 
-  return allTags;
+  return { uniqueTags, uniqueGroups, fileRefs };
 }
 
 /** Group data collected during batch processing */
@@ -95,44 +138,16 @@ interface GroupData {
   title?: string; // Human-readable title (for TITLE groups)
 }
 
-/**
- * Pre-extract all unique groups from a batch of files.
- * Includes both URL-based groups and title-based groups.
- * Returns a Map of "SOURCETYPE:sourceId" -> { sourceType, sourceId, title? }
- */
-function collectGroupsFromBatch(files: HydrusFileMetadata[]): Map<string, GroupData> {
-  const allGroups = new Map<string, GroupData>();
-
-  for (const file of files) {
-    // URL-based groups
-    const sources = parseSourceUrls(file.known_urls || []);
-    for (const source of sources) {
-      const key = `${source.sourceType}:${source.sourceId}`;
-      if (!allGroups.has(key)) {
-        allGroups.set(key, { sourceType: source.sourceType as SourceType, sourceId: source.sourceId });
-      }
-    }
-
-    // Title-based groups (from title: tags)
-    const titleGroups = extractTitleGroups(file);
-    for (const titleGroup of titleGroups) {
-      const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
-      if (!allGroups.has(key)) {
-        allGroups.set(key, {
-          sourceType: titleGroup.sourceType,
-          sourceId: titleGroup.sourceId,
-          title: titleGroup.normalizedTitle,
-        });
-      }
-    }
-  }
-
-  return allGroups;
-}
 
 /**
  * Bulk insert tags using INSERT ... ON CONFLICT DO NOTHING.
  * Wrapped in a transaction to ensure INSERT and SELECT are atomic.
+ *
+ * The whole set is bound as two PostgreSQL array parameters and expanded with
+ * unnest(), so the bind count is constant regardless of size: no 65,535
+ * bind-param limit, no generated placeholder SQL, no argument spreading, and
+ * no Prisma OR-tree with thousands of conditions.
+ *
  * Returns a Map of "CATEGORY:name" -> id
  */
 export async function bulkEnsureTags(
@@ -141,50 +156,47 @@ export async function bulkEnsureTags(
   const result = new Map<string, number>();
   if (tags.size === 0) return result;
 
-  const tagArray = [...tags.values()];
-
-  // Validate enum values before building query
-  const validCategories = new Set(Object.values(TagCategory));
-  const invalidTags = tagArray.filter(t => !validCategories.has(t.category));
-  if (invalidTags.length > 0) {
-    throw new Error(`Invalid tag categories: ${invalidTags.map(t => t.category).join(', ')}`);
+  const names: string[] = [];
+  const categories: string[] = [];
+  const invalidCategories: string[] = [];
+  const validCategories = new Set<string>(Object.values(TagCategory));
+  for (const tag of tags.values()) {
+    if (!validCategories.has(tag.category)) {
+      invalidCategories.push(tag.category);
+      continue;
+    }
+    names.push(tag.name);
+    categories.push(tag.category);
+  }
+  if (invalidCategories.length > 0) {
+    throw new Error(`Invalid tag categories: ${invalidCategories.join(', ')}`);
   }
 
-  // Wrap INSERT and SELECT in a transaction to prevent race conditions.
-  // Chunk both the INSERT and the resolving SELECT so we never exceed
-  // PostgreSQL's 65,535 bind-parameter limit (2 params per tag).
   await prisma.$transaction(async (tx) => {
-    for (let i = 0; i < tagArray.length; i += TAG_CHUNK_SIZE) {
-      const chunk = tagArray.slice(i, i + TAG_CHUNK_SIZE);
+    // Atomic bulk insert - ON CONFLICT DO NOTHING handles duplicates
+    await tx.$executeRaw`
+      INSERT INTO "Tag" (name, category)
+      SELECT u.name, u.category::"TagCategory"
+      FROM unnest(${names}::text[], ${categories}::text[]) AS u(name, category)
+      ON CONFLICT (name, category) DO NOTHING
+    `;
 
-      // Build values for INSERT (placeholder indices reset per chunk)
-      const values = chunk.map((t, j) => `($${j * 2 + 1}, $${j * 2 + 2}::"TagCategory")`).join(', ');
-      const params = chunk.flatMap(t => [t.name, t.category]);
+    // Fetch IDs in the same transaction - guaranteed to see our inserts
+    const rows = await tx.$queryRaw<{ id: number; name: string; category: TagCategory }[]>`
+      SELECT t.id, t.name, t.category
+      FROM "Tag" t
+      JOIN unnest(${names}::text[], ${categories}::text[]) AS u(name, category)
+        ON t.name = u.name AND t.category = u.category::"TagCategory"
+    `;
 
-      // Atomic bulk insert - ON CONFLICT DO NOTHING handles duplicates
-      await tx.$executeRawUnsafe(
-        `INSERT INTO "Tag" (name, category) VALUES ${values} ON CONFLICT (name, category) DO NOTHING`,
-        ...params
-      );
-
-      // Fetch IDs for this chunk in same transaction - guaranteed to see our inserts
-      const existingTags = await tx.tag.findMany({
-        where: {
-          OR: chunk.map(t => ({ name: t.name, category: t.category }))
-        },
-        select: { id: true, name: true, category: true }
-      });
-
-      for (const tag of existingTags) {
-        const key = `${tag.category}:${tag.name.toLowerCase()}`;
-        result.set(key, tag.id);
-      }
+    for (const tag of rows) {
+      result.set(`${tag.category}:${tag.name.toLowerCase()}`, tag.id);
     }
   }, {
     timeout: 30000, // 30s for large tag sets
   });
 
-  syncLog.debug({ tagCount: tagArray.length, resolvedCount: result.size }, 'Bulk tag insert completed');
+  syncLog.debug({ tagCount: names.length, resolvedCount: result.size }, 'Bulk tag insert completed');
 
   return result;
 }
@@ -192,6 +204,7 @@ export async function bulkEnsureTags(
 /**
  * Bulk insert groups using INSERT ... ON CONFLICT DO UPDATE (for title).
  * Wrapped in a transaction to ensure INSERT and SELECT are atomic.
+ * Binds the whole set as array parameters (see bulkEnsureTags).
  * Returns a Map of "SOURCETYPE:sourceId" -> id
  */
 export async function bulkEnsureGroups(
@@ -200,51 +213,49 @@ export async function bulkEnsureGroups(
   const result = new Map<string, number>();
   if (groups.size === 0) return result;
 
-  const groupArray = [...groups.values()];
-
-  // Validate enum values before building query
-  const validSourceTypes = new Set(Object.values(SourceType));
-  const invalidGroups = groupArray.filter(g => !validSourceTypes.has(g.sourceType));
-  if (invalidGroups.length > 0) {
-    throw new Error(`Invalid source types: ${invalidGroups.map(g => g.sourceType).join(', ')}`);
+  const sourceTypes: string[] = [];
+  const sourceIds: string[] = [];
+  const titles: (string | null)[] = [];
+  const invalidTypes: string[] = [];
+  const validSourceTypes = new Set<string>(Object.values(SourceType));
+  for (const group of groups.values()) {
+    if (!validSourceTypes.has(group.sourceType)) {
+      invalidTypes.push(group.sourceType);
+      continue;
+    }
+    sourceTypes.push(group.sourceType);
+    sourceIds.push(group.sourceId);
+    titles.push(group.title ?? null);
+  }
+  if (invalidTypes.length > 0) {
+    throw new Error(`Invalid source types: ${invalidTypes.join(', ')}`);
   }
 
-  // Wrap INSERT and SELECT in a transaction to prevent race conditions.
-  // Chunk both the INSERT and the resolving SELECT so we never exceed
-  // PostgreSQL's 65,535 bind-parameter limit (3 params per group).
   await prisma.$transaction(async (tx) => {
-    for (let i = 0; i < groupArray.length; i += GROUP_CHUNK_SIZE) {
-      const chunk = groupArray.slice(i, i + GROUP_CHUNK_SIZE);
+    // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
+    await tx.$executeRaw`
+      INSERT INTO "Group" ("sourceType", "sourceId", "title")
+      SELECT u."sourceType"::"SourceType", u."sourceId", u.title
+      FROM unnest(${sourceTypes}::text[], ${sourceIds}::text[], ${titles}::text[]) AS u("sourceType", "sourceId", title)
+      ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")
+    `;
 
-      // Build values for INSERT with title (placeholder indices reset per chunk)
-      const values = chunk.map((g, j) => `($${j * 3 + 1}::"SourceType", $${j * 3 + 2}, $${j * 3 + 3})`).join(', ');
-      const params = chunk.flatMap(g => [g.sourceType, g.sourceId, g.title ?? null]);
+    // Fetch IDs in the same transaction - guaranteed to see our inserts
+    const rows = await tx.$queryRaw<{ id: number; sourceType: SourceType; sourceId: string }[]>`
+      SELECT g.id, g."sourceType", g."sourceId"
+      FROM "Group" g
+      JOIN unnest(${sourceTypes}::text[], ${sourceIds}::text[]) AS u("sourceType", "sourceId")
+        ON g."sourceType" = u."sourceType"::"SourceType" AND g."sourceId" = u."sourceId"
+    `;
 
-      // Atomic bulk insert - ON CONFLICT updates title if provided (allows backfilling)
-      await tx.$executeRawUnsafe(
-        `INSERT INTO "Group" ("sourceType", "sourceId", "title") VALUES ${values}
-         ON CONFLICT ("sourceType", "sourceId") DO UPDATE SET "title" = COALESCE(EXCLUDED."title", "Group"."title")`,
-        ...params
-      );
-
-      // Fetch IDs for this chunk in same transaction - guaranteed to see our inserts
-      const existingGroups = await tx.group.findMany({
-        where: {
-          OR: chunk.map(g => ({ sourceType: g.sourceType, sourceId: g.sourceId }))
-        },
-        select: { id: true, sourceType: true, sourceId: true }
-      });
-
-      for (const group of existingGroups) {
-        const key = `${group.sourceType}:${group.sourceId}`;
-        result.set(key, group.id);
-      }
+    for (const group of rows) {
+      result.set(`${group.sourceType}:${group.sourceId}`, group.id);
     }
   }, {
     timeout: 30000, // 30s for large group sets
   });
 
-  syncLog.debug({ groupCount: groupArray.length, resolvedCount: result.size }, 'Bulk group insert completed');
+  syncLog.debug({ groupCount: sourceTypes.length, resolvedCount: result.size }, 'Bulk group insert completed');
 
   return result;
 }
@@ -257,7 +268,8 @@ export async function bulkEnsureGroups(
 async function processBatchWithPrepopulation(
   files: HydrusFileMetadata[],
   progress: SyncProgress,
-  onProgress: (progress: SyncProgress) => void
+  onProgress: (progress: SyncProgress) => void,
+  persistProgress: (progress: SyncProgress) => Promise<void>
 ): Promise<void> {
   return withSpan("sync.processBatch", async (batchSpan) => {
     batchSpan.setAttributes({
@@ -265,22 +277,29 @@ async function processBatchWithPrepopulation(
       "sync.batch_file_count": files.length,
     });
 
-    // Phase 1: Collect and pre-populate all unique tags
-    const uniqueTags = collectTagsFromBatch(files);
+    // Phase 1: Parse every file once, then pre-populate all unique tags/groups
+    const { uniqueTags, uniqueGroups, fileRefs } = parseBatch(files);
+
     const tagIds = await withSpan("sync.bulkEnsureTags", async () => {
       return bulkEnsureTags(uniqueTags);
     }, { "sync.unique_tag_count": uniqueTags.size });
 
-    // Phase 1b: Collect and pre-populate all unique groups
-    const uniqueGroups = collectGroupsFromBatch(files);
     const groupIds = await withSpan("sync.bulkEnsureGroups", async () => {
       return bulkEnsureGroups(uniqueGroups);
     }, { "sync.unique_group_count": uniqueGroups.size });
 
     const lookups: BatchLookups = { tagIds, groupIds };
 
-    // Validate that the bulk lookups resolved every entry. After chunking
-    // (above), a complete lookup is the norm. If something is still missing,
+    // One existence check for the whole batch: brand-new posts skip the
+    // per-file relation diffing entirely (they have nothing to diff against).
+    const existingPosts = await prisma.post.findMany({
+      where: { hash: { in: files.map((f) => f.hash) } },
+      select: { hash: true },
+    });
+    const existingHashes = new Set(existingPosts.map((p) => p.hash));
+
+    // Validate that the bulk lookups resolved every entry. A complete lookup
+    // is the norm. If something is still missing,
     // DO NOT discard the whole batch: degrade to per-file processing using the
     // partial maps. The per-file path (processFileSafe) throws per-file on any
     // missing tag/group ID, and those throws are isolated by the downstream
@@ -313,7 +332,9 @@ async function processBatchWithPrepopulation(
     for (let j = 0; j < files.length; j += CONCURRENT_FILES) {
       const chunk = files.slice(j, j + CONCURRENT_FILES);
       const results = await Promise.allSettled(
-        chunk.map((file) => processFileWithLookups(file, lookups))
+        chunk.map((file, k) =>
+          processFileWithLookups(file, fileRefs[j + k], lookups, !existingHashes.has(file.hash))
+        )
       );
 
       for (let k = 0; k < results.length; k++) {
@@ -322,19 +343,15 @@ async function processBatchWithPrepopulation(
           progress.processedFiles++;
         } else {
           const errorMsg = `Error processing file ${chunk[k].hash}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
-          progress.errors.push(errorMsg);
+          recordSyncError(progress, errorMsg);
           syncLog.error({ hash: chunk[k].hash, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }, 'Error processing file in batch');
         }
       }
 
       onProgress(progress);
 
-      // Update database progress periodically
-      await updateSyncState({
-        status: "running",
-        processedFiles: progress.processedFiles,
-        currentBatch: progress.currentBatch,
-      });
+      // Persist progress for crash recovery / status polling (throttled)
+      await persistProgress(progress);
     }
 
     batchSpan.setAttribute("sync.batch_processed_files", files.length);
@@ -347,11 +364,13 @@ async function processBatchWithPrepopulation(
  */
 async function processFileWithLookups(
   metadata: HydrusFileMetadata,
+  refs: ParsedFileRefs,
   lookups: BatchLookups,
+  isNew: boolean,
   retryCount = 0
 ): Promise<void> {
   try {
-    await processFileSafe(metadata, lookups);
+    await processFileSafe(metadata, refs, lookups, isNew);
   } catch (error) {
     // Retry on transient failures (serialization failures, deadlocks)
     const isRetryable = error instanceof Error && (
@@ -367,7 +386,7 @@ async function processFileWithLookups(
       const delay = 50 * Math.pow(2, retryCount);
       syncLog.debug({ hash: metadata.hash, retryCount: retryCount + 1, delayMs: delay }, 'Retrying file processing after transient failure');
       await new Promise(resolve => setTimeout(resolve, delay));
-      return processFileWithLookups(metadata, lookups, retryCount + 1);
+      return processFileWithLookups(metadata, refs, lookups, isNew, retryCount + 1);
     }
 
     throw error;
@@ -376,11 +395,15 @@ async function processFileWithLookups(
 
 /**
  * Process a single file (safe version using pre-populated lookups).
- * All tags and groups are guaranteed to exist.
+ * All tags and groups were parsed once at batch level (ParsedFileRefs) and
+ * are guaranteed to exist in the lookups. `isNew` (from the batch existence
+ * check) selects a create-only fast path with no relation diffing.
  */
 async function processFileSafe(
   metadata: HydrusFileMetadata,
-  lookups: BatchLookups
+  refs: ParsedFileRefs,
+  lookups: BatchLookups,
+  isNew: boolean
 ): Promise<void> {
   // Get import time from file services
   let importedAt = new Date();
@@ -392,21 +415,10 @@ async function processFileSafe(
     }
   }
 
-  // Extract and normalize tags
-  const tags = extractTags(metadata);
-  const normalizedTags = new Map<string, { name: string; category: TagCategory }>();
-  for (const tag of tags) {
-    const normalized = normalizeTagForStorage(tag);
-    const key = `${normalized.category}:${normalized.name.toLowerCase()}`;
-    if (!normalizedTags.has(key)) {
-      normalizedTags.set(key, normalized);
-    }
-  }
-
-  // Lookup tag IDs from pre-populated map (no database calls needed)
+  // Resolve tag IDs from the pre-populated map (no database calls, no re-parse)
   const tagIds: number[] = [];
   const missingTags: string[] = [];
-  for (const [key] of normalizedTags) {
+  for (const key of refs.tagKeys) {
     const tagId = lookups.tagIds.get(key);
     if (tagId !== undefined) {
       tagIds.push(tagId);
@@ -420,32 +432,15 @@ async function processFileSafe(
     throw new Error(`Missing ${missingTags.length} tag IDs from pre-populated lookup for ${metadata.hash}`);
   }
 
-  // Parse source URLs and lookup group IDs
-  const sourceUrls = metadata.known_urls || [];
-  const parsedSources = parseSourceUrls(sourceUrls);
+  // Resolve group IDs (URL-based and title-based refs, in extraction order)
   const groupData: { groupId: number; position: number }[] = [];
   const missingGroups: string[] = [];
-
-  for (const source of parsedSources) {
-    const key = `${source.sourceType}:${source.sourceId}`;
-    const groupId = lookups.groupIds.get(key);
+  for (const ref of refs.groupRefs) {
+    const groupId = lookups.groupIds.get(ref.key);
     if (groupId !== undefined) {
-      const position = extractPositionFromUrl(source.originalUrl);
-      groupData.push({ groupId, position });
+      groupData.push({ groupId, position: ref.position });
     } else {
-      missingGroups.push(key);
-    }
-  }
-
-  // Add title-based groups
-  const titleGroups = extractTitleGroups(metadata);
-  for (const titleGroup of titleGroups) {
-    const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
-    const groupId = lookups.groupIds.get(key);
-    if (groupId !== undefined) {
-      groupData.push({ groupId, position: titleGroup.position });
-    } else {
-      missingGroups.push(key);
+      missingGroups.push(ref.key);
     }
   }
 
@@ -453,6 +448,8 @@ async function processFileSafe(
     syncLog.error({ hash: metadata.hash, missingCount: missingGroups.length, groups: missingGroups }, 'Missing group IDs from lookup');
     throw new Error(`Missing ${missingGroups.length} group IDs from pre-populated lookup for ${metadata.hash}`);
   }
+
+  const sourceUrls = metadata.known_urls || [];
 
   // Determine thumbnail status based on mime type
   const isMediaFile = metadata.mime.startsWith("image/") || metadata.mime.startsWith("video/");
@@ -491,6 +488,42 @@ async function processFileSafe(
         syncedAt: new Date(),
       },
     });
+
+    const noteEntries = Object.entries(metadata.notes || {});
+
+    if (isNew) {
+      // Fast path: the post did not exist before this batch, so there are no
+      // relations to diff or delete and no cached recommendations to
+      // invalidate. skipDuplicates keeps this idempotent should the existence
+      // hint ever be stale (e.g. an external writer racing the sync).
+      if (tagIds.length > 0) {
+        await tx.postTag.createMany({
+          data: tagIds.map((tagId) => ({ postId: post.id, tagId })),
+          skipDuplicates: true,
+        });
+      }
+      if (groupData.length > 0) {
+        await tx.postGroup.createMany({
+          data: groupData.map((g) => ({
+            postId: post.id,
+            groupId: g.groupId,
+            position: g.position,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      if (noteEntries.length > 0) {
+        await tx.note.createMany({
+          data: noteEntries.map(([name, content]) => ({
+            postId: post.id,
+            name,
+            content,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      return;
+    }
 
     // Update tags only if changed
     const existingTagIds = (await tx.postTag.findMany({
@@ -549,9 +582,6 @@ async function processFileSafe(
       select: { name: true, content: true },
     });
 
-    const notes = metadata.notes || {};
-    const noteEntries = Object.entries(notes);
-
     const noteKey = (n: { name: string; content: string }) => `${n.name}:${n.content}`;
     const existingNoteKeys = new Set(existingNotes.map(noteKey));
     const newNoteKeys = new Set(noteEntries.map(([name, content]) => noteKey({ name, content })));
@@ -601,33 +631,48 @@ async function processFileSafe(
 // =============================================================================
 
 const DELETION_BATCH_SIZE = 1000;
+// Page size for the keyset-paginated cleanup scan over Post.
+const CLEANUP_SCAN_PAGE_SIZE = 5000;
 
 /**
  * Delete posts that no longer exist in Hydrus.
- * Compares Hydrus search results with database posts.
+ * Streams DB posts in keyset-paginated pages (instead of materializing the
+ * whole table) and accumulates only the ids scheduled for deletion.
  * Returns the count of deleted posts.
  */
 async function deleteRemovedPosts(hydrusHashes: Set<string>): Promise<number> {
-  // Get all post hashes from database
-  const dbPosts = await prisma.post.findMany({
-    select: { hash: true },
-  });
+  const idsToDelete: number[] = [];
+  let cursor = 0;
 
-  // Find posts that exist in DB but not in Hydrus
-  const hashesToDelete = dbPosts
-    .filter(post => !hydrusHashes.has(post.hash))
-    .map(post => post.hash);
+  for (;;) {
+    const page = await prisma.post.findMany({
+      where: { id: { gt: cursor } },
+      orderBy: { id: "asc" },
+      select: { id: true, hash: true },
+      take: CLEANUP_SCAN_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
 
-  if (hashesToDelete.length === 0) {
+    cursor = page[page.length - 1].id;
+    for (const post of page) {
+      if (!hydrusHashes.has(post.hash)) {
+        idsToDelete.push(post.id);
+      }
+    }
+
+    if (page.length < CLEANUP_SCAN_PAGE_SIZE) break;
+  }
+
+  if (idsToDelete.length === 0) {
     return 0;
   }
 
   // Delete in batches to avoid query size limits
   let totalDeleted = 0;
-  for (let i = 0; i < hashesToDelete.length; i += DELETION_BATCH_SIZE) {
-    const batch = hashesToDelete.slice(i, i + DELETION_BATCH_SIZE);
+  for (let i = 0; i < idsToDelete.length; i += DELETION_BATCH_SIZE) {
+    const batch = idsToDelete.slice(i, i + DELETION_BATCH_SIZE);
     const result = await prisma.post.deleteMany({
-      where: { hash: { in: batch } },
+      where: { id: { in: batch } },
     });
     totalDeleted += result.count;
   }
@@ -671,6 +716,37 @@ async function deleteOrphanedGroups(): Promise<number> {
     syncLog.info({ deletedCount: result.count }, 'Deleted orphaned groups');
   }
   return result.count;
+}
+
+/**
+ * Record an error on the progress object, capping the array so a pathological
+ * sync (e.g. every file failing) cannot grow it without bound.
+ */
+function recordSyncError(progress: SyncProgress, message: string): void {
+  if (progress.errors.length < MAX_TRACKED_ERRORS) {
+    progress.errors.push(message);
+  } else if (progress.errors.length === MAX_TRACKED_ERRORS) {
+    progress.errors.push(`Further errors omitted after the first ${MAX_TRACKED_ERRORS}`);
+  }
+}
+
+/**
+ * Time-throttled SyncState writer for progress updates. The DB row only feeds
+ * crash recovery and status polling, so ~1 write/second is plenty; the
+ * in-process onProgress callback still fires for every chunk.
+ */
+function createProgressPersister(): (progress: SyncProgress) => Promise<void> {
+  let lastWriteMs = 0;
+  return async (progress: SyncProgress) => {
+    const now = Date.now();
+    if (now - lastWriteMs < PROGRESS_WRITE_INTERVAL_MS) return;
+    lastWriteMs = now;
+    await updateSyncState({
+      status: "running",
+      processedFiles: progress.processedFiles,
+      currentBatch: progress.currentBatch,
+    });
+  };
 }
 
 // =============================================================================
@@ -721,13 +797,17 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     progress.phase = "searching";
     onProgress(progress);
 
-    const searchResult = await client.searchFiles({
+    // Hold only what outlives the search: the file id list (batch iteration)
+    // and the hash set (cleanup diff). Drop the response object itself so the
+    // raw hashes array is not retained for the whole sync on top of the Set.
+    let searchResult: HydrusSearchResponse | null = await client.searchFiles({
       tags: searchTags,
       returnHashes: true,
     });
 
     const fileIds = searchResult.file_ids;
     const hydrusHashes = new Set(searchResult.hashes || []);
+    searchResult = null;
     progress.totalFiles = fileIds.length;
     progress.totalBatches = Math.ceil(fileIds.length / batchSize);
 
@@ -750,6 +830,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     // Fetch batch N+1 while processing batch N to overlap network I/O with processing
     progress.phase = "fetching";
 
+    const persistProgress = createProgressPersister();
+
     if (fileIds.length > 0) {
       // Start fetching first batch
       // Attach .catch() to prevent unhandled rejection if it fails before we await it
@@ -766,6 +848,13 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
         // Check for cancellation at start of each batch
         if (await isSyncCancelled()) {
           progress.phase = "complete";
+          // Flush final counts past the write throttle; updateSyncState
+          // preserves the "cancelled" status for "running" updates.
+          await updateSyncState({
+            status: "running",
+            processedFiles: progress.processedFiles,
+            currentBatch: progress.currentBatch,
+          });
           onProgress(progress);
           return progress;
         }
@@ -798,13 +887,14 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
           await processBatchWithPrepopulation(
             metadataResult.metadata,
             progress,
-            onProgress
+            onProgress,
+            persistProgress
           );
 
           progress.phase = "fetching";
         } catch (err) {
           const errorMsg = `Error processing batch ${progress.currentBatch}: ${err instanceof Error ? err.message : String(err)}`;
-          progress.errors.push(errorMsg);
+          recordSyncError(progress, errorMsg);
           progress.failedBatches = (progress.failedBatches ?? 0) + 1;
           syncLog.error({ batch: progress.currentBatch, error: err instanceof Error ? err.message : String(err) }, 'Error processing batch');
 
@@ -837,6 +927,12 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     // Check for cancellation before cleanup
     if (await isSyncCancelled()) {
       progress.phase = "complete";
+      // Flush final counts past the write throttle (see batch-loop exit).
+      await updateSyncState({
+        status: "running",
+        processedFiles: progress.processedFiles,
+        currentBatch: progress.currentBatch,
+      });
       onProgress(progress);
       return progress;
     }
@@ -880,7 +976,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
         }
       } catch (err) {
         const errorMsg = `Cleanup error: ${err instanceof Error ? err.message : String(err)}`;
-        progress.errors.push(errorMsg);
+        recordSyncError(progress, errorMsg);
         syncLog.error({ error: err instanceof Error ? err.message : String(err) }, 'Error during cleanup phase');
         // Continue with sync completion even if cleanup fails
       }

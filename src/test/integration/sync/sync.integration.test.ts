@@ -408,6 +408,45 @@ describe('syncFromHydrus (Integration)', () => {
       expect(sharedTag?.postCount).toBe(3);
       expect(uniqueTag?.postCount).toBe(1);
     });
+
+    it('should store tags whose names stress PostgreSQL array-literal escaping', async () => {
+      const prisma = getTestPrisma();
+
+      // The bulk tag insert binds names as a text[] parameter (unnest). These
+      // names exercise the array-literal escaping rules: quotes, backslashes,
+      // commas, braces, and the literal word NULL.
+      const nastyTags = [
+        'tag with "double quotes"',
+        'back\\slash',
+        'comma, separated',
+        '{curly braces}',
+        'null',
+        "single 'quotes'",
+      ];
+
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(nastyTags, { file_id: 1, hash: 'a'.repeat(64) }),
+      ]);
+
+      const result = await syncFromHydrus();
+
+      expect(result.phase).toBe('complete');
+      expect(result.processedFiles).toBe(1);
+      expect(result.errors).toHaveLength(0);
+
+      const tags = await prisma.tag.findMany({ select: { name: true } });
+      const names = new Set(tags.map((t) => t.name));
+      for (const tag of nastyTags) {
+        expect(names.has(tag)).toBe(true);
+      }
+
+      // Relations must resolve through the same escaped names.
+      const post = await prisma.post.findUnique({
+        where: { hash: 'a'.repeat(64) },
+        include: { tags: true },
+      });
+      expect(post?.tags).toHaveLength(nastyTags.length);
+    });
   });
 
   describe('deletion cleanup', () => {
