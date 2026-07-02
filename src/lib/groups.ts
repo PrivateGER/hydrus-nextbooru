@@ -287,8 +287,7 @@ function validCreatorSqlPredicate(nameExpression: Prisma.Sql): Prisma.Sql {
 
 /**
  * Uncorrelated subquery of group ids that have a valid ARTIST tag matching
- * `pattern`. Anchored on `Tag` so the name ILIKE uses the trigram index; used
- * via `g.id IN (...)` to avoid a per-group correlated subplan.
+ * `pattern`. Anchored on `Tag` so the name ILIKE uses the trigram index.
  */
 function artistMatchGroupIds(pattern: string): Prisma.Sql {
   return Prisma.sql`
@@ -302,40 +301,81 @@ function artistMatchGroupIds(pattern: string): Prisma.Sql {
   `;
 }
 
-function buildGroupsWhereClause({
-  typeFilter,
-  query,
-  creatorFilter,
-}: Pick<GroupsSearchParams, "typeFilter" | "query" | "creatorFilter">): Prisma.Sql {
+/**
+ * Pre-resolved text/creator filter matches. A filtered request evaluates the
+ * where clause in up to five queries (stats, count, page hashes, hash wrap,
+ * group hydration); resolving the expensive match sets ONCE per request and
+ * passing them as id arrays keeps those queries to cheap `id = ANY(...)`
+ * probes instead of re-running ILIKE scans and the artist tag fan-out join.
+ * `undefined` = filter not active; an empty array matches nothing.
+ */
+interface ResolvedGroupFilters {
+  queryMatchIds?: number[];
+  creatorMatchIds?: number[];
+}
+
+async function resolveGroupFilterIds(
+  prisma: PrismaClient,
+  { query, creatorFilter }: Pick<GroupsSearchParams, "query" | "creatorFilter">
+): Promise<ResolvedGroupFilters> {
+  const normalizedQuery = normalizeTextFilter(query);
+  const normalizedCreatorFilter = normalizeTextFilter(creatorFilter);
+  const queryPattern = normalizedQuery ? containsPattern(normalizedQuery) : undefined;
+  const creatorPattern = normalizedCreatorFilter ? containsPattern(normalizedCreatorFilter) : undefined;
+
+  const queryIdsPromise = queryPattern
+    ? prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT tg.id
+        FROM "Group" tg
+        WHERE tg."sourceId" ILIKE ${queryPattern}
+           OR tg.title ILIKE ${queryPattern}
+        UNION
+        SELECT tg2.id
+        FROM "Group" tg2
+        JOIN "ContentTranslation" tct ON tg2."titleHash" = tct."contentHash"
+        WHERE tct."translatedContent" ILIKE ${queryPattern}
+        UNION
+        ${artistMatchGroupIds(queryPattern)}
+      `
+    : Promise.resolve(undefined);
+
+  const creatorIdsPromise = creatorPattern
+    ? prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT DISTINCT match."groupId" AS id
+        FROM (${artistMatchGroupIds(creatorPattern)}) AS match
+      `
+    : Promise.resolve(undefined);
+
+  const [queryRows, creatorRows] = await Promise.all([queryIdsPromise, creatorIdsPromise]);
+
+  return {
+    queryMatchIds: queryRows?.map((row) => row.id),
+    creatorMatchIds: creatorRows?.map((row) => row.id),
+  };
+}
+
+function buildGroupsWhereClause(
+  typeFilter: SourceType | undefined,
+  resolved: ResolvedGroupFilters
+): Prisma.Sql {
   const conditions: Prisma.Sql[] = [
     Prisma.sql`g."memberCount" >= 2`,
     Prisma.sql`g."memberHash" IS NOT NULL`,
   ];
-  const normalizedQuery = normalizeTextFilter(query);
-  const normalizedCreatorFilter = normalizeTextFilter(creatorFilter);
 
   if (typeFilter) {
     conditions.push(Prisma.sql`g."sourceType" = ${typeFilter}::"SourceType"`);
   }
 
-  if (normalizedQuery) {
-    const pattern = containsPattern(normalizedQuery);
-    conditions.push(Prisma.sql`(
-      g."sourceId" ILIKE ${pattern}
-      OR g.title ILIKE ${pattern}
-      OR ct."translatedContent" ILIKE ${pattern}
-      OR g.id IN (${artistMatchGroupIds(pattern)})
-    )`);
+  if (resolved.queryMatchIds !== undefined) {
+    conditions.push(Prisma.sql`g.id = ANY(${resolved.queryMatchIds}::int[])`);
   }
 
-  if (normalizedCreatorFilter) {
-    const pattern = containsPattern(normalizedCreatorFilter);
-    conditions.push(Prisma.sql`g.id IN (${artistMatchGroupIds(pattern)})`);
+  if (resolved.creatorMatchIds !== undefined) {
+    conditions.push(Prisma.sql`g.id = ANY(${resolved.creatorMatchIds}::int[])`);
   }
 
-  return conditions.length > 0
-    ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
-    : Prisma.empty;
+  return Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`;
 }
 
 /**
@@ -363,16 +403,25 @@ export async function searchGroups(
     largest: Prisma.sql`ORDER BY max_post_count DESC, min_group_id DESC`,
     random: Prisma.sql`ORDER BY content_hash ASC`,
   }[order];
-  const whereClause = buildGroupsWhereClause({ typeFilter, query, creatorFilter });
   const isFiltered = Boolean(
     typeFilter || normalizeTextFilter(query) || normalizeTextFilter(creatorFilter)
   );
+  // Kick off the filter-independent stats query BEFORE awaiting the filter
+  // resolver so the two overlap; every remaining query needs the resolved
+  // where clause.
   const listStatsPromise: Promise<GroupListStats> = isFiltered
     ? getGroupListStats(prisma)
     : getGroupTypeCounts(prisma).then((typeCounts) => ({
         typeCounts,
         mergedTotal: 0,
       }));
+  // Mark as observed: if the filter resolver below throws, this in-flight
+  // promise would otherwise reject unhandled and can kill the process. The
+  // real result (and rejection) is still consumed by Promise.all further
+  // down, which subscribes to the original promise.
+  listStatsPromise.catch(() => {});
+  const resolvedFilters = await resolveGroupFilterIds(prisma, { query, creatorFilter });
+  const whereClause = buildGroupsWhereClause(typeFilter, resolvedFilters);
 
   const filteredCountPromise = order === "random"
     ? countMergedGroups(prisma, whereClause)

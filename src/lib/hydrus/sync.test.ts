@@ -28,55 +28,63 @@ import {
   bulkEnsureTags,
   bulkEnsureGroups,
   acquireSyncLock,
-  TAG_CHUNK_SIZE,
-  GROUP_CHUNK_SIZE,
 } from "./sync";
 import { TagCategory, SourceType } from "@/generated/prisma/client";
 
 /**
- * Build a transaction stub whose `tx` simulates the database: every entry
- * referenced in a chunk's `findMany` OR-clause is "resolved" to a sequential id.
- * Also records, per INSERT, how many bind params were passed so tests can assert
- * the 65,535 limit is never breached.
+ * Build a transaction stub whose `tx` simulates the database for the
+ * unnest-based bulk ensures: the INSERT ($executeRaw) records its bind
+ * params, and the resolving SELECT ($queryRaw) "returns" one row per entry
+ * of the bound arrays with a sequential id. `rowsFromParams` maps the
+ * SELECT's bind arrays to result rows (tags and groups differ in shape).
  */
-function makeTxStub() {
-  let nextId = 1;
-  const insertParamCounts: number[] = [];
+function makeTxStub(rowsFromParams: (params: unknown[], nextId: () => number) => unknown[]) {
+  let id = 0;
+  const nextId = () => ++id;
+  const insertBindParams: unknown[][] = [];
 
   const tx = {
-    $executeRawUnsafe: vi.fn(async (_sql: string, ...params: unknown[]) => {
-      insertParamCounts.push(params.length);
-      return params.length;
+    $executeRaw: vi.fn(async (_strings: TemplateStringsArray, ...params: unknown[]) => {
+      insertBindParams.push(params);
+      return 0;
     }),
-    tag: {
-      findMany: vi.fn(async ({ where }: { where: { OR: Array<{ name: string; category: TagCategory }> } }) => {
-        return where.OR.map((entry) => ({ id: nextId++, name: entry.name, category: entry.category }));
-      }),
-    },
-    group: {
-      findMany: vi.fn(async ({ where }: { where: { OR: Array<{ sourceType: SourceType; sourceId: string }> } }) => {
-        return where.OR.map((entry) => ({ id: nextId++, sourceType: entry.sourceType, sourceId: entry.sourceId }));
-      }),
-    },
+    $queryRaw: vi.fn(async (_strings: TemplateStringsArray, ...params: unknown[]) => {
+      return rowsFromParams(params, nextId);
+    }),
   };
 
   mockTransaction.mockImplementation(async (fn: (t: typeof tx) => Promise<void>) => {
     await fn(tx);
   });
 
-  return { tx, insertParamCounts };
+  return { tx, insertBindParams };
+}
+
+function makeTagTxStub() {
+  return makeTxStub((params, nextId) => {
+    const [names, categories] = params as [string[], string[]];
+    return names.map((name, i) => ({ id: nextId(), name, category: categories[i] }));
+  });
+}
+
+function makeGroupTxStub() {
+  return makeTxStub((params, nextId) => {
+    const [sourceTypes, sourceIds] = params as [string[], string[]];
+    return sourceTypes.map((sourceType, i) => ({ id: nextId(), sourceType, sourceId: sourceIds[i] }));
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("bulkEnsureTags chunking (Item 1)", () => {
-  it("resolves a tag set larger than TAG_CHUNK_SIZE without throwing", async () => {
-    const { tx, insertParamCounts } = makeTxStub();
+describe("bulkEnsureTags array binding", () => {
+  it("resolves a large tag set with one INSERT and one SELECT, binding arrays instead of per-row params", async () => {
+    const { tx, insertBindParams } = makeTagTxStub();
 
-    // One more than a single chunk -> forces at least two chunks.
-    const count = TAG_CHUNK_SIZE + 1000;
+    // Well past the old 15,000-per-chunk limit: with array binds there is no
+    // chunking, so the statement count must stay constant.
+    const count = 20_000;
     const tags = new Map<string, { name: string; category: TagCategory }>();
     for (let i = 0; i < count; i++) {
       tags.set(`GENERAL:tag${i}`, { name: `tag${i}`, category: TagCategory.GENERAL });
@@ -87,29 +95,43 @@ describe("bulkEnsureTags chunking (Item 1)", () => {
     // Every tag must be resolved to an id.
     expect(result.size).toBe(count);
     for (let i = 0; i < count; i++) {
-      expect(result.get(`GENERAL:tag${i.toString().toLowerCase()}`)).toBeTypeOf("number");
+      expect(result.get(`GENERAL:tag${i}`)).toBeTypeOf("number");
     }
 
-    // Insert was split into multiple statements, none exceeding the bind limit.
-    expect(insertParamCounts.length).toBeGreaterThanOrEqual(2);
-    for (const c of insertParamCounts) {
-      expect(c).toBeLessThanOrEqual(65535);
-      expect(c).toBeLessThanOrEqual(TAG_CHUNK_SIZE * 2);
-    }
+    // Exactly one INSERT and one SELECT regardless of input size.
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
 
-    // findMany was chunked the same way (once per insert chunk).
-    expect(tx.tag.findMany).toHaveBeenCalledTimes(insertParamCounts.length);
+    // The INSERT binds two parallel arrays (names, categories) - a constant
+    // bind count of 2, not 2 * count.
+    expect(insertBindParams[0]).toHaveLength(2);
+    const [names, categories] = insertBindParams[0] as [string[], string[]];
+    expect(names).toHaveLength(count);
+    expect(categories).toHaveLength(count);
+  });
+
+  it("keys resolved ids by lowercased tag name", async () => {
+    makeTagTxStub();
+
+    const tags = new Map<string, { name: string; category: TagCategory }>([
+      ["ARTIST:mixedcase", { name: "MixedCase", category: TagCategory.ARTIST }],
+    ]);
+
+    const result = await bulkEnsureTags(tags);
+
+    expect(result.get("ARTIST:mixedcase")).toBeTypeOf("number");
+    expect(result.has("ARTIST:MixedCase")).toBe(false);
   });
 
   it("returns an empty map for an empty input without touching the DB", async () => {
-    makeTxStub();
+    makeTagTxStub();
     const result = await bulkEnsureTags(new Map());
     expect(result.size).toBe(0);
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 
   it("rejects invalid tag categories (adversarial input)", async () => {
-    makeTxStub();
+    makeTagTxStub();
     const tags = new Map<string, { name: string; category: TagCategory }>([
       ["BOGUS:x", { name: "x", category: "BOGUS" as TagCategory }],
     ]);
@@ -118,11 +140,12 @@ describe("bulkEnsureTags chunking (Item 1)", () => {
   });
 });
 
-describe("bulkEnsureGroups chunking (Item 1)", () => {
-  it("resolves a group set larger than GROUP_CHUNK_SIZE without throwing", async () => {
-    const { tx, insertParamCounts } = makeTxStub();
+describe("bulkEnsureGroups array binding", () => {
+  it("resolves a large group set with one INSERT and one SELECT, binding arrays instead of per-row params", async () => {
+    const { tx, insertBindParams } = makeGroupTxStub();
 
-    const count = GROUP_CHUNK_SIZE + 500;
+    // Well past the old 10,000-per-chunk limit.
+    const count = 12_000;
     const groups = new Map<string, { sourceType: SourceType; sourceId: string; title?: string }>();
     for (let i = 0; i < count; i++) {
       groups.set(`PIXIV:${i}`, { sourceType: SourceType.PIXIV, sourceId: String(i) });
@@ -131,14 +154,42 @@ describe("bulkEnsureGroups chunking (Item 1)", () => {
     const result = await bulkEnsureGroups(groups);
 
     expect(result.size).toBe(count);
-
-    // 3 params per group; chunks must stay within the bind limit.
-    expect(insertParamCounts.length).toBeGreaterThanOrEqual(2);
-    for (const c of insertParamCounts) {
-      expect(c).toBeLessThanOrEqual(65535);
-      expect(c).toBeLessThanOrEqual(GROUP_CHUNK_SIZE * 3);
+    for (let i = 0; i < count; i++) {
+      expect(result.get(`PIXIV:${i}`)).toBeTypeOf("number");
     }
-    expect(tx.group.findMany).toHaveBeenCalledTimes(insertParamCounts.length);
+
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+
+    // The INSERT binds three parallel arrays (sourceTypes, sourceIds, titles).
+    expect(insertBindParams[0]).toHaveLength(3);
+    const [sourceTypes, sourceIds, titles] = insertBindParams[0] as [string[], string[], (string | null)[]];
+    expect(sourceTypes).toHaveLength(count);
+    expect(sourceIds).toHaveLength(count);
+    expect(titles).toHaveLength(count);
+  });
+
+  it("binds missing titles as null so existing titles are preserved via COALESCE", async () => {
+    const { insertBindParams } = makeGroupTxStub();
+
+    const groups = new Map<string, { sourceType: SourceType; sourceId: string; title?: string }>([
+      ["PIXIV:1", { sourceType: SourceType.PIXIV, sourceId: "1" }],
+      ["TITLE:abc", { sourceType: SourceType.TITLE, sourceId: "abc", title: "My Title" }],
+    ]);
+
+    await bulkEnsureGroups(groups);
+
+    const [, , titles] = insertBindParams[0] as [string[], string[], (string | null)[]];
+    expect(titles).toEqual([null, "My Title"]);
+  });
+
+  it("rejects invalid source types (adversarial input)", async () => {
+    makeGroupTxStub();
+    const groups = new Map<string, { sourceType: SourceType; sourceId: string; title?: string }>([
+      ["BOGUS:1", { sourceType: "BOGUS" as SourceType, sourceId: "1" }],
+    ]);
+    await expect(bulkEnsureGroups(groups)).rejects.toThrow(/Invalid source types/);
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 });
 

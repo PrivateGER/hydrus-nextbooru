@@ -401,7 +401,11 @@ describe('Groups Module (Integration)', () => {
         expect(result.groups).toHaveLength(2);
         expect(result.filteredCount).toBe(3);
         expect(result.mergedTotal).toBe(3);
-        expect(getRawQueryCount()).toBeLessThanOrEqual(4);
+        // Budget: filter-id resolver + list stats + page query + previews +
+        // artist tags. The resolver is one standalone query that replaces
+        // per-query re-evaluation of the artist-match subquery; anything
+        // beyond 5 means a redundant merged-total recount crept back in.
+        expect(getRawQueryCount()).toBeLessThanOrEqual(5);
       });
     });
 

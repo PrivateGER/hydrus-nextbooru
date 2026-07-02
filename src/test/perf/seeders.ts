@@ -10,6 +10,7 @@
  */
 
 import { PrismaClient, TagCategory } from '@/generated/prisma/client';
+import { createHash } from 'crypto';
 import { createPostsBulk, createTagsBulk, linkPostsToTagsBulk } from '../integration/factories';
 import { createRng, createZipfSampler } from './rng';
 import { unitVector, randomPhash, noteContent } from './synthetic';
@@ -19,6 +20,11 @@ const SEED = 0xb04a11;
 
 /** Process-wide rng for query-time helpers (stable across runs, varied within). */
 const helperRng = createRng(SEED ^ 0x5eed);
+
+/** Matches PostgreSQL's encode(digest(content, 'sha256'), 'hex'). */
+function sha256Hex(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
 
 function fisherYates<T>(arr: T[], rng: () => number): T[] {
   const out = [...arr];
@@ -311,6 +317,152 @@ export async function seedNotes(
 
   console.log(`  Notes seeded in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
   return { noteCount: selected.length };
+}
+
+/**
+ * Seed groups (PIXIV/TWITTER/TITLE mix) with PostGroup memberships and
+ * translations on a subset of titled groups, for the groups-search
+ * benchmarks. Membership inserts run with triggers disabled (the per-row
+ * member-stats trigger would make bulk seeding O(n^2)); memberCount and
+ * memberHash are refreshed with one aggregate UPDATE at the end, matching
+ * the trigger's definition.
+ */
+export async function seedGroups(
+  prisma: PrismaClient,
+  options: { groups?: number } = {}
+): Promise<{ groupCount: number; membershipCount: number; translationCount: number }> {
+  const rng = createRng(SEED ^ 0x9309);
+
+  const posts = await prisma.post.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
+  const postIds = fisherYates(posts.map((p) => p.id), rng);
+  const groupCount = options.groups ?? Math.max(50, Math.floor(postIds.length / 2));
+
+  console.log(`Seeding ${groupCount} groups...`);
+  const startTime = performance.now();
+
+  const sourceTypes: string[] = new Array(groupCount);
+  const sourceIds: string[] = new Array(groupCount);
+  const titles: (string | null)[] = new Array(groupCount);
+
+  for (let i = 0; i < groupCount; i++) {
+    const r = rng();
+    if (r < 0.55) {
+      sourceTypes[i] = 'PIXIV';
+      sourceIds[i] = String(10_000_000 + i);
+      titles[i] = null;
+    } else if (r < 0.75) {
+      sourceTypes[i] = 'TWITTER';
+      sourceIds[i] = String(20_000_000 + i);
+      titles[i] = null;
+    } else {
+      // Mirrors sync's TITLE scheme: sourceId = lower(title).
+      const title = `${noteContent(rng, 3 + Math.floor(rng() * 3))} ${i}`;
+      sourceTypes[i] = 'TITLE';
+      sourceIds[i] = title.toLowerCase();
+      titles[i] = title;
+    }
+  }
+
+  const INSERT_BATCH = 5000;
+  // Scope everything below to the rows THIS run inserted, so composing or
+  // re-running the seeder never mutates unrelated group fixtures.
+  const groupRows: Array<{ id: number; title: string | null }> = [];
+  for (let i = 0; i < groupCount; i += INSERT_BATCH) {
+    const inserted = await prisma.$queryRaw<Array<{ id: number; title: string | null }>>`
+      INSERT INTO "Group" ("sourceType", "sourceId", title)
+      SELECT u."sourceType"::"SourceType", u."sourceId", u.title
+      FROM unnest(
+        ${sourceTypes.slice(i, i + INSERT_BATCH)}::text[],
+        ${sourceIds.slice(i, i + INSERT_BATCH)}::text[],
+        ${titles.slice(i, i + INSERT_BATCH)}::text[]
+      ) AS u("sourceType", "sourceId", title)
+      RETURNING id, title
+    `;
+    groupRows.push(...inserted);
+  }
+
+  // Memberships: sliding windows over the shuffled post pool, 2-8 members
+  // (~5% single-member groups stay ineligible for merged listings).
+  const memberGroupIds: number[] = [];
+  const memberPostIds: number[] = [];
+  const memberPositions: number[] = [];
+  let cursor = 0;
+  for (const group of groupRows) {
+    const size = rng() < 0.05 ? 1 : 2 + Math.floor(rng() * 7);
+    for (let m = 0; m < size; m++) {
+      memberGroupIds.push(group.id);
+      memberPostIds.push(postIds[(cursor + m) % postIds.length]);
+      memberPositions.push(m);
+    }
+    cursor = (cursor + size) % postIds.length;
+  }
+
+  // One transaction so SET LOCAL applies to every membership insert: the
+  // per-row trigger (and FK checks) are skipped for speed; stats are
+  // recomputed below exactly as the trigger would.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+    for (let i = 0; i < memberGroupIds.length; i += INSERT_BATCH) {
+      await tx.$executeRaw`
+        INSERT INTO "PostGroup" ("groupId", "postId", position)
+        SELECT gid, pid, pos
+        FROM unnest(
+          ${memberGroupIds.slice(i, i + INSERT_BATCH)}::int[],
+          ${memberPostIds.slice(i, i + INSERT_BATCH)}::int[],
+          ${memberPositions.slice(i, i + INSERT_BATCH)}::int[]
+        ) AS t(gid, pid, pos)
+        ON CONFLICT DO NOTHING
+      `;
+    }
+  }, { timeout: 120_000 });
+
+  const insertedIds = groupRows.map((g) => g.id);
+  await prisma.$executeRaw`
+    UPDATE "Group" g
+    SET
+      "memberCount" = stats.member_count,
+      "memberHash" = stats.member_hash
+    FROM (
+      SELECT
+        g.id,
+        COUNT(pg."postId")::INTEGER AS member_count,
+        CASE
+          WHEN COUNT(pg."postId") > 0
+            THEN MD5(STRING_AGG(pg."postId"::text, ',' ORDER BY pg."postId"))
+          ELSE NULL
+        END AS member_hash
+      FROM "Group" g
+      LEFT JOIN "PostGroup" pg ON pg."groupId" = g.id
+      WHERE g.id = ANY(${insertedIds}::int[])
+      GROUP BY g.id
+    ) stats
+    WHERE g.id = stats.id
+  `;
+
+  // Translations for ~30% of titled groups; contentHash must equal the
+  // generated Group.titleHash (sha256 of the title's UTF-8 bytes).
+  const titled = groupRows.filter((g) => g.title !== null);
+  const translated = titled.filter(() => rng() < 0.3);
+  const hashes = translated.map((g) => sha256Hex(g.title as string));
+  const translations = translated.map((g) => `translated ${g.title} ${noteContent(rng, 2)}`);
+  for (let i = 0; i < translated.length; i += INSERT_BATCH) {
+    await prisma.$executeRaw`
+      INSERT INTO "ContentTranslation" ("contentHash", "translatedContent", "sourceLanguage", "targetLanguage")
+      SELECT hash, body, 'ja', 'en'
+      FROM unnest(
+        ${hashes.slice(i, i + INSERT_BATCH)}::text[],
+        ${translations.slice(i, i + INSERT_BATCH)}::text[]
+      ) AS t(hash, body)
+      ON CONFLICT DO NOTHING
+    `;
+  }
+
+  console.log(`  Groups seeded in ${((performance.now() - startTime) / 1000).toFixed(1)}s`);
+  return {
+    groupCount,
+    membershipCount: memberGroupIds.length,
+    translationCount: translated.length,
+  };
 }
 
 /**
