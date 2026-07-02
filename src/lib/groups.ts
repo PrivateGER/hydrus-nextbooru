@@ -415,6 +415,11 @@ export async function searchGroups(
         typeCounts,
         mergedTotal: 0,
       }));
+  // Mark as observed: if the filter resolver below throws, this in-flight
+  // promise would otherwise reject unhandled and can kill the process. The
+  // real result (and rejection) is still consumed by Promise.all further
+  // down, which subscribes to the original promise.
+  listStatsPromise.catch(() => {});
   const resolvedFilters = await resolveGroupFilterIds(prisma, { query, creatorFilter });
   const whereClause = buildGroupsWhereClause(typeFilter, resolvedFilters);
 
