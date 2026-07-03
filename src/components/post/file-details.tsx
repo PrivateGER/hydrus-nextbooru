@@ -1,6 +1,7 @@
 "use client";
 
 import { DownloadButton } from "@/components/download-button";
+import { FavoriteButton } from "@/components/favorite-button";
 
 interface FileDetailsProps {
   hash: string;
@@ -13,6 +14,7 @@ interface FileDetailsProps {
   hasAudio: boolean;
   importedAt: Date;
   downloadFilename: string;
+  favorited: boolean;
 }
 
 function formatFileSize(bytes: number): string {
@@ -39,6 +41,7 @@ export function FileDetails({
   hasAudio,
   importedAt,
   downloadFilename,
+  favorited,
 }: FileDetailsProps) {
   return (
     <details className="group rounded-lg bg-zinc-200 dark:bg-zinc-800">
@@ -53,6 +56,7 @@ export function FileDetails({
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
         <span className="flex-1">File Details</span>
+        <FavoriteButton hash={hash} initialFavorited={favorited} />
         <DownloadButton hash={hash} extension={extension} filename={downloadFilename} />
       </summary>
       <dl className="grid grid-cols-2 gap-2 px-4 pb-4 text-sm sm:grid-cols-3">

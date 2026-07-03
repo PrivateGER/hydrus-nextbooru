@@ -6,6 +6,12 @@
  */
 
 /**
+ * Canonical name of the user "favorite" meta tag. Single source of the
+ * literal so the meta-tag set and {@link isFavoriteTag} cannot drift.
+ */
+export const FAVORITE_TAG_NAME = "favorite";
+
+/**
  * List of all meta tag names.
  * Keep this in sync with the full definitions in meta-tags.ts
  */
@@ -17,6 +23,7 @@ const META_TAG_NAMES = new Set([
   "square",
   "highres",
   "lowres",
+  FAVORITE_TAG_NAME,
 ]);
 
 /**
@@ -28,4 +35,15 @@ const META_TAG_NAMES = new Set([
  */
 export function isMetaTag(tagName: string): boolean {
   return META_TAG_NAMES.has(tagName.toLowerCase());
+}
+
+/**
+ * Whether a search token targets the favorite meta tag, ignoring an optional
+ * leading "-" (exclusion) and case. Matches "favorite", "-favorite",
+ * "FAVORITE", "-FAVORITE".
+ */
+export function isFavoriteTag(tag: string): boolean {
+  const normalized = tag.trim().toLowerCase();
+  const bare = normalized.startsWith("-") ? normalized.slice(1) : normalized;
+  return bare === FAVORITE_TAG_NAME;
 }

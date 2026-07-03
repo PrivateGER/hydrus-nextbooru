@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { PhotoIcon } from "@heroicons/react/24/outline";
+import { PhotoIcon, HeartIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { HeartIcon as HeartSolidIcon } from "@heroicons/react/24/solid";
 import { BlurhashImage } from "./blurhash-image";
+import { useFavoriteToggle } from "@/hooks/use-favorite-toggle";
 
 export type LayoutMode = "masonry" | "grid";
 
@@ -14,12 +16,16 @@ interface PostCardProps {
   blurhash: string | null;
   mimeType: string;
   layout?: LayoutMode;
+  /** Heart overlay state; omit to hide the overlay entirely (e.g. filmstrips). */
+  favorited?: boolean;
+  /** Feed-only "not interested" control; fires only after the dismissal PUT succeeds. */
+  onDismiss?: (hash: string) => void;
 }
 
 // Timeout before showing error (starts when image enters viewport)
 const LOAD_TIMEOUT_MS = 15000;
 
-export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry" }: PostCardProps) {
+export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry", favorited, onDismiss }: PostCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
@@ -28,6 +34,26 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
   const loadedRef = useRef(false); // Track loaded state for timeout callback
+
+  const { favorited: fav, pending: favPending, toggle: toggleFavorite } = useFavoriteToggle(hash, favorited ?? false);
+  const [dismissPending, setDismissPending] = useState(false);
+
+  const handleDismiss = async (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (dismissPending) return;
+    setDismissPending(true);
+    try {
+      const response = await fetch(`/api/posts/${hash}/dismissal`, { method: "PUT" });
+      // Only remove the card once the server has recorded the dismissal; on
+      // failure keep it (no rollback needed — the card was never removed).
+      if (response.ok) onDismiss?.(hash);
+    } catch {
+      // Network error: keep the card.
+    } finally {
+      if (mountedRef.current) setDismissPending(false);
+    }
+  };
 
   const isVideo = mimeType.startsWith("video/");
   const isAnimated = mimeType === "image/gif" || mimeType === "image/apng";
@@ -271,6 +297,35 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         <div className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
           {isVideo ? "VIDEO" : "GIF"}
         </div>
+      )}
+
+      {/* Favorite heart overlay */}
+      {favorited !== undefined && (
+        <button
+          onClick={toggleFavorite}
+          disabled={favPending}
+          aria-pressed={fav}
+          title={fav ? "Remove from favorites" : "Add to favorites"}
+          aria-label={fav ? "Remove from favorites" : "Add to favorites"}
+          className={`absolute right-2 top-2 rounded-full bg-black/60 p-1.5 transition-opacity hover:bg-black/80 focus-visible:opacity-100 ${
+            fav ? "opacity-100 text-pink-400" : "text-white opacity-0 group-hover:opacity-100"
+          }`}
+        >
+          {fav ? <HeartSolidIcon className="h-4 w-4" /> : <HeartIcon className="h-4 w-4" />}
+        </button>
+      )}
+
+      {/* Feed "not interested" overlay */}
+      {onDismiss && (
+        <button
+          onClick={handleDismiss}
+          disabled={dismissPending}
+          title="Not interested"
+          aria-label="Not interested"
+          className="absolute left-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition-opacity hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <XMarkIcon className="h-4 w-4" />
+        </button>
       )}
     </Link>
   );

@@ -18,6 +18,7 @@ import {
 } from "@/lib/stats";
 import { POSTS_PER_PAGE } from "@/lib/pagination";
 import { getPostsByHashRotation } from "@/lib/random-order";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 type SortOption = "newest" | "oldest" | "random";
 
@@ -55,7 +56,7 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
     ]);
 
     return {
-      posts,
+      posts: await mergeFavoritedState(posts),
       totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
       totalCount,
     };
@@ -83,7 +84,7 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
   ]);
 
   return {
-    posts,
+    posts: await mergeFavoritedState(posts),
     totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
     totalCount,
   };

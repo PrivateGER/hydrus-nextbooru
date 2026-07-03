@@ -87,6 +87,7 @@ async function getPost(hash: string) {
   const post = await prisma.post.findUnique({
     where: { hash },
     include: {
+      favorite: { select: { postId: true } },
       tags: {
         include: {
           tag: true,
@@ -304,6 +305,7 @@ export default async function PostPage({ params }: PostPageProps) {
           hasAudio={post.hasAudio}
           importedAt={post.importedAt}
           downloadFilename={downloadFilename}
+          favorited={post.favorite !== null}
         />
 
         {/* Related images from groups - horizontal filmstrip */}

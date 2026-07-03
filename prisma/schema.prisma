@@ -112,6 +112,8 @@ model Post {
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
   phashEntry      PhashEntry?
   embeddings      PostEmbedding[]
+  favorite        Favorite?
+  feedDismissal   FeedDismissal?
 
   @@index([rating])
   @@index([importedAt])
@@ -344,4 +346,24 @@ model PostRecommendation {
   @@index([postId])
   @@index([recommendedId])
   @@index([postId, computedAt(sort: Desc)])
+}
+
+// ============================================
+// FAVORITES (single-user preference signal)
+// ============================================
+
+model Favorite {
+  postId      Int      @id
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  favoritedAt DateTime @default(now())
+
+  @@index([favoritedAt(sort: Desc)])
+}
+
+// Posts hidden from the "For You" feed ("not interested").
+// Mutually exclusive with Favorite — enforced in src/lib/favorites.ts.
+model FeedDismissal {
+  postId      Int      @id
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  dismissedAt DateTime @default(now())
 }

@@ -50,6 +50,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         },
         orderBy: { position: "asc" },
       },
+      favorite: { select: { postId: true } },
     },
   });
 
@@ -148,5 +149,6 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         download: `/api/download/${post.hash}${post.extension}`,
       },
     },
+    favorited: post.favorite !== null,
   });
 }

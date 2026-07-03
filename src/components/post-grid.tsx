@@ -9,15 +9,17 @@ interface Post {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  favorited?: boolean;
 }
 
 interface PostGridProps {
   posts: Post[];
+  onDismiss?: (hash: string) => void;
 }
 
 const LAYOUT_STORAGE_KEY = "booru-layout-mode";
 
-export function PostGrid({ posts }: PostGridProps) {
+export function PostGrid({ posts, onDismiss }: PostGridProps) {
   const [layout, setLayout] = useState<LayoutMode>("masonry");
 
   useEffect(() => {
@@ -118,6 +120,8 @@ export function PostGrid({ posts }: PostGridProps) {
             blurhash={post.blurhash}
             mimeType={post.mimeType}
             layout={layout}
+            favorited={post.favorited}
+            onDismiss={onDismiss}
           />
         ))}
       </div>

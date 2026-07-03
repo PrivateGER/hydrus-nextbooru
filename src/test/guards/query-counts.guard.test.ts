@@ -14,6 +14,17 @@ import {
   stopQueryCapture,
   countableStatements,
 } from './query-capture';
+// Route handlers are imported statically: @/lib/db's `prisma` is a per-access
+// Proxy that resolves the injected test client, and these route modules do no
+// top-level DB work, so importing them before setupTestDatabase() runs is safe
+// — the pool is instrumented during setup, before any test executes.
+import { GET as postsSearchGET } from '@/app/api/posts/search/route';
+import { GET as tagsSearchGET } from '@/app/api/tags/search/route';
+import { GET as postDetailGET } from '@/app/api/posts/[hash]/route';
+import { GET as recommendationsGET } from '@/app/api/recommendations/[hash]/route';
+import { GET as feedGET } from '@/app/api/feed/route';
+import { PUT as favoritePUT, DELETE as favoriteDELETE } from '@/app/api/posts/[hash]/favorite/route';
+import { PUT as dismissalPUT, DELETE as dismissalDELETE } from '@/app/api/posts/[hash]/dismissal/route';
 
 /**
  * Query-count budgets (N+1 guards).
@@ -28,21 +39,43 @@ import {
  * justify it in the PR — that is the point of the guard.
  */
 const QUERY_BUDGETS = {
-  postsSearchSingleTag: 2,
-  postsSearchTwoTags: 2,
+  // +1 vs the pre-favorites baseline of 2: the posts-search route now merges
+  // favorite state (mergeFavoritedState -> getFavoritedPostIdSet, one indexed
+  // lookup) after the search itself.
+  postsSearchSingleTag: 3,
+  postsSearchTwoTags: 3,
   tagAutocomplete: 2,
   tagCoOccurrence: 2,
-  // One findUnique whose nested include tree Prisma loads as ~10 constant
-  // queries (post, tags->tag, notes->translation, groups->group->posts).
-  // Constant in row count — not an N+1.
-  postDetail: 10,
+  // One findUnique whose nested include tree Prisma loads as constant queries
+  // (post, tags->tag, notes->translation, groups->group->posts). Constant in
+  // row count — not an N+1. NB: 11 is the observed count and is unrelated to
+  // this PR (post detail queries no favorite state); the prior 10 predates the
+  // guard suite actually being run.
+  postDetail: 11,
   recommendationsCold: 5,
+  // buildFeed cost is O(seeds), NOT O(posts): a constant base (favorites +
+  // dismissals + seed group-siblings + embedding-config resolution) plus a
+  // per-seed fan-out (embedding k-NN — skipped with no embedding config — and
+  // tag-IDF recommendations). Merging candidates adds no per-row queries.
+  // A non-empty merged list then costs ONE extra postGroup.findMany (per-group
+  // feed dedup — a single indexed `postId IN (...)` batch, not an N+1); it is
+  // skipped when the feed is empty. Calibrated with FEED_GUARD_SEEDS favorites
+  // seeded (< recentSeedCount, so every favorite is a seed with no sampling).
+  feed: 21,
+  // resolvePostForMutation's getPostIdByHash is the only pool-captured query
+  // for PUT: setFavorite/setDismissal run in an interactive transaction whose
+  // statements (advisory lock, delete-opposite, upsert-self) run on a
+  // checked-out client the pool-level capture does not observe. DELETE is not
+  // transactional, so its deleteMany is captured — 2 (lookup + delete).
+  favoritePut: 1,
+  favoriteDelete: 2,
+  dismissalPut: 1,
+  dismissalDelete: 2,
 } as const;
 
-let postsSearchGET: typeof import('@/app/api/posts/search/route').GET;
-let tagsSearchGET: typeof import('@/app/api/tags/search/route').GET;
-let postDetailGET: typeof import('@/app/api/posts/[hash]/route').GET;
-let recommendationsGET: typeof import('@/app/api/recommendations/[hash]/route').GET;
+// Fixed favorite count for the feed guard: small and < recentSeedCount so the
+// build fans out deterministically over exactly this many seeds.
+const FEED_GUARD_SEEDS = 3;
 
 // Rate limits are disabled for this suite via DISABLE_RATE_LIMITS in
 // vitest.guards.config.ts.
@@ -78,11 +111,6 @@ describe('Query count guards', () => {
     // but rows must exist so N+1 patterns actually multiply.
     await seedLargeDataset(prisma, { posts: 300, uniqueTags: 150, tagsPerPost: 8 });
     await recalculateTagStats();
-
-    postsSearchGET = (await import('@/app/api/posts/search/route')).GET;
-    tagsSearchGET = (await import('@/app/api/tags/search/route')).GET;
-    postDetailGET = (await import('@/app/api/posts/[hash]/route')).GET;
-    recommendationsGET = (await import('@/app/api/recommendations/[hash]/route')).GET;
   });
 
   afterAll(async () => {
@@ -170,5 +198,78 @@ describe('Query count guards', () => {
 
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.recommendationsCold);
+  });
+
+  it('feed build stays within budget for a fixed seed count', async () => {
+    const prisma = getTestPrisma();
+
+    // Deterministic slice: clear preference + cached-recommendation state, then
+    // seed exactly FEED_GUARD_SEEDS favorites so buildFeed genuinely fans out
+    // (an empty favorites set early-returns after a single query).
+    const seeds = await prisma.post.findMany({
+      orderBy: { id: 'asc' },
+      take: FEED_GUARD_SEEDS,
+      select: { id: true },
+    });
+    const seedIds = seeds.map((s) => s.id);
+    await prisma.favorite.deleteMany();
+    await prisma.feedDismissal.deleteMany();
+    await prisma.postRecommendation.deleteMany({ where: { postId: { in: seedIds } } });
+    await prisma.favorite.createMany({ data: seedIds.map((postId) => ({ postId })) });
+
+    const count = await countQueries('feed (cold)', () =>
+      feedGET(apiRequest('http://localhost/api/feed'))
+    );
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feed);
+  });
+
+  it('favorite PUT stays within budget', async () => {
+    const prisma = getTestPrisma();
+    const post = await prisma.post.findFirstOrThrow({ select: { hash: true } });
+
+    const count = await countQueries('favorite PUT', () =>
+      favoritePUT(apiRequest(`http://localhost/api/posts/${post.hash}/favorite`), hashParams(post.hash))
+    );
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.favoritePut);
+  });
+
+  it('favorite DELETE stays within budget', async () => {
+    const prisma = getTestPrisma();
+    const post = await prisma.post.findFirstOrThrow({ select: { hash: true } });
+
+    const count = await countQueries('favorite DELETE', () =>
+      favoriteDELETE(apiRequest(`http://localhost/api/posts/${post.hash}/favorite`), hashParams(post.hash))
+    );
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.favoriteDelete);
+  });
+
+  it('dismissal PUT stays within budget', async () => {
+    const prisma = getTestPrisma();
+    const post = await prisma.post.findFirstOrThrow({ select: { hash: true } });
+
+    const count = await countQueries('dismissal PUT', () =>
+      dismissalPUT(apiRequest(`http://localhost/api/posts/${post.hash}/dismissal`), hashParams(post.hash))
+    );
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.dismissalPut);
+  });
+
+  it('dismissal DELETE stays within budget', async () => {
+    const prisma = getTestPrisma();
+    const post = await prisma.post.findFirstOrThrow({ select: { hash: true } });
+
+    const count = await countQueries('dismissal DELETE', () =>
+      dismissalDELETE(apiRequest(`http://localhost/api/posts/${post.hash}/dismissal`), hashParams(post.hash))
+    );
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.dismissalDelete);
   });
 });

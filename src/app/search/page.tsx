@@ -25,6 +25,8 @@ import { checkRateLimit, getClientIPFromHeaders } from "@/lib/rate-limit";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
+import { mergeFavoritedState } from "@/lib/favorites";
+import { isFavoriteTag } from "@/lib/meta-tags-shared";
 
 export const metadata: Metadata = {
   title: "Search - Booru",
@@ -173,15 +175,24 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
 
   // Execute search. Semantic search is intentionally uncached because it depends
   // on current embedding settings and newly generated vectors.
+  // Favorite-filtered tag searches change on every toggle; never serve them
+  // from the 5-minute unstable_cache. All other tag searches stay cached —
+  // favorite state is merged AFTER retrieval so hearts are always fresh.
+  const hasFavoriteFilter = tags.some(isFavoriteTag);
+
   const result = shouldRunSemanticSearch
     ? semanticRateLimit ?? (await searchSemanticPosts(semanticQuery, page, { minScore: semanticMinScore }))
     : isNotesSearch
     ? await getCachedNoteSearch(notesQuery, page)
     : tags.length > 0
-      ? await getCachedPostSearch(tags, page)
+      ? hasFavoriteFilter
+        ? await searchPosts(tags, page, { includeRelatedTags: true })
+        : await getCachedPostSearch(tags, page)
       : null;
 
-  const posts = result && "posts" in result ? result.posts : [];
+  const rawPosts = result && "posts" in result ? result.posts : [];
+  // Merge favorite state after cache retrieval (never cached) so hearts are fresh.
+  const posts = await mergeFavoritedState(rawPosts);
   const rawNotes = result && "notes" in result ? result.notes : [];
 
   // Group notes by contentHash to merge duplicate content (e.g., same Pixiv description across multiple images)

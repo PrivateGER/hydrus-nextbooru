@@ -13,7 +13,7 @@ import { Prisma, Orientation } from "@/generated/prisma/client";
 /**
  * Categories for meta tags to help with organization and display.
  */
-export type MetaTagCategory = "type" | "orientation" | "resolution";
+export type MetaTagCategory = "type" | "orientation" | "resolution" | "user";
 
 /**
  * Definition of a meta tag including its name, condition, and metadata.
@@ -127,6 +127,17 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     getSqlCondition: (negated = false) => negated
       ? Prisma.sql`NOT ("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`
       : Prisma.sql`("width" IS NOT NULL AND "height" IS NOT NULL AND "width" <= 500 AND "height" <= 500)`,
+  },
+
+  // User signal
+  {
+    name: "favorite",
+    description: "Posts you have favorited",
+    category: "user",
+    getCondition: () => ({ favorite: { isNot: null } }),
+    getSqlCondition: (negated = false) => negated
+      ? Prisma.sql`NOT EXISTS (SELECT 1 FROM "Favorite" fav WHERE fav."postId" = "Post".id)`
+      : Prisma.sql`EXISTS (SELECT 1 FROM "Favorite" fav WHERE fav."postId" = "Post".id)`,
   },
 ];
 
