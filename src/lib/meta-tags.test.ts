@@ -300,3 +300,35 @@ describe("assertSafeMetaTagIdentifier (raw SQL identifier guard)", () => {
     expect(() => assertSafeMetaTagIdentifier("")).toThrow();
   });
 });
+
+describe("favorite meta tag", () => {
+  it("is registered and case-insensitive", () => {
+    expect(getMetaTagDefinition("favorite")).toBeDefined();
+    expect(getMetaTagDefinition("FAVORITE")).toBeDefined();
+    expect(getMetaTagDefinition("favorite")!.category).toBe("user");
+  });
+
+  it("is separated from regular tags including negation", () => {
+    const { metaTags, regularTags } = separateMetaTags(["favorite", "-favorite", "blue_eyes"]);
+    expect(metaTags.include).toContain("favorite");
+    expect(metaTags.exclude).toContain("favorite");
+    expect(regularTags.include).toEqual(["blue_eyes"]);
+  });
+
+  it("compiles to EXISTS / NOT EXISTS on Favorite", () => {
+    const positive = getMetaTagSqlCondition("favorite", false);
+    const negative = getMetaTagSqlCondition("favorite", true);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+    // Prisma.Sql exposes the raw SQL text via .sql (single fragment, no params)
+    expect(positive!.sql).toContain('EXISTS');
+    expect(positive!.sql).toContain('"Favorite"');
+    expect(negative!.sql).toContain('NOT EXISTS');
+  });
+
+  it("provides a Prisma relation condition", () => {
+    const def = getMetaTagDefinition("favorite")!;
+    expect(def.getCondition).toBeDefined();
+    expect(def.getCondition!()).toEqual({ favorite: { isNot: null } });
+  });
+});

@@ -691,4 +691,35 @@ describe('GET /api/posts/search (Integration)', () => {
       });
     });
   });
+
+  describe('favorite meta tag', () => {
+    it('favorite returns only favorited posts, composed with tags', async () => {
+      const prisma = getTestPrisma();
+      const favedMatching = await createPostWithTags(prisma, ['blue eyes']);
+      await createPostWithTags(prisma, ['blue eyes']); // not favorited
+      const favedOther = await createPostWithTags(prisma, ['red eyes']);
+      await prisma.favorite.createMany({
+        data: [{ postId: favedMatching.id }, { postId: favedOther.id }],
+      });
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=favorite,blue eyes');
+      const data = await (await GET(request)).json();
+
+      expect(data.totalCount).toBe(1);
+      expect(data.posts[0].hash).toBe(favedMatching.hash);
+    });
+
+    it('-favorite excludes favorited posts', async () => {
+      const prisma = getTestPrisma();
+      const faved = await createPostWithTags(prisma, ['blue eyes']);
+      const plain = await createPostWithTags(prisma, ['blue eyes']);
+      await prisma.favorite.create({ data: { postId: faved.id } });
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=blue eyes,-favorite');
+      const data = await (await GET(request)).json();
+
+      expect(data.totalCount).toBe(1);
+      expect(data.posts[0].hash).toBe(plain.hash);
+    });
+  });
 });

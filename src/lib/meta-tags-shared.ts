@@ -17,6 +17,7 @@ const META_TAG_NAMES = new Set([
   "square",
   "highres",
   "lowres",
+  "favorite",
 ]);
 
 /**
