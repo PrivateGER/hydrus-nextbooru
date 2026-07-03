@@ -167,6 +167,8 @@ export async function cleanDatabase(): Promise<void> {
 
   // Delete in order of dependencies (children first)
   await p.postRecommendation.deleteMany();
+  await p.favorite.deleteMany();
+  await p.feedDismissal.deleteMany();
   await p.postTag.deleteMany();
   await p.postGroup.deleteMany();
   await p.thumbnail.deleteMany();
