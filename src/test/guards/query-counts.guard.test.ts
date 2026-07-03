@@ -57,9 +57,11 @@ const QUERY_BUDGETS = {
   // dismissals + seed group-siblings + embedding-config resolution) plus a
   // per-seed fan-out (embedding k-NN — skipped with no embedding config — and
   // tag-IDF recommendations). Merging candidates adds no per-row queries.
-  // Calibrated with FEED_GUARD_SEEDS favorites seeded (< recentSeedCount, so
-  // every favorite is a seed with no sampling).
-  feed: 20,
+  // A non-empty merged list then costs ONE extra postGroup.findMany (per-group
+  // feed dedup — a single indexed `postId IN (...)` batch, not an N+1); it is
+  // skipped when the feed is empty. Calibrated with FEED_GUARD_SEEDS favorites
+  // seeded (< recentSeedCount, so every favorite is a seed with no sampling).
+  feed: 21,
   // resolvePostForMutation's getPostIdByHash is the only pool-captured query
   // for PUT: setFavorite/setDismissal run in an interactive transaction whose
   // statements (advisory lock, delete-opposite, upsert-self) run on a

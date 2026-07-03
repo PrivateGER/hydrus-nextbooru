@@ -5,9 +5,11 @@ import {
   selectSeeds,
   mulberry32,
   mergeSeedCandidates,
+  dedupeRankedByGroup,
   type FavoriteSeedInput,
   type SeedContribution,
   type FeedConfig,
+  type FeedPost,
 } from "./feed";
 
 const DAY_MS = 86_400_000;
@@ -92,6 +94,32 @@ describe("selectSeeds", () => {
     expect(tail(same1)).toHaveLength(FEED_CONFIG.sampledSeedCount);
     expect(tail(same1)).not.toEqual(tail(other));
   });
+
+  it("floors a sampled seed several half-lives old to sampledSeedWeightFloor", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 1, sampledSeedCount: 1 };
+    // fav 2 is 360d old (4 half-lives) → raw weight 2^-4 = 0.0625, well below the floor.
+    const seeds = selectSeeds([favorite(1, 0), favorite(2, 360)], NOW, config);
+    expect(seeds[1].postId).toBe(2); // the sampled (older-stratum) seed
+    expect(seeds[1].weight).toBe(config.sampledSeedWeightFloor);
+  });
+
+  it("does NOT floor an old favorite that lands in the recent stratum", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 2, sampledSeedCount: 1 };
+    // fav 2 (360d, raw 0.0625) is inside the recent stratum → keeps its raw decayed weight.
+    const seeds = selectSeeds([favorite(1, 0), favorite(2, 360), favorite(3, 720)], NOW, config);
+    expect(seeds[1].postId).toBe(2);
+    expect(seeds[1].weight).toBeCloseTo(0.0625, 10);
+    expect(seeds[1].weight).toBeLessThan(config.sampledSeedWeightFloor);
+  });
+
+  it("keeps a sampled seed's raw weight when it exceeds the floor", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 1, sampledSeedCount: 1 };
+    // fav 2 is one half-life old → raw weight 0.5, above the 0.25 floor → unchanged.
+    const seeds = selectSeeds([favorite(1, 0), favorite(2, 90)], NOW, config);
+    expect(seeds[1].postId).toBe(2);
+    expect(seeds[1].weight).toBeCloseTo(0.5, 10);
+    expect(seeds[1].weight).toBeGreaterThan(config.sampledSeedWeightFloor);
+  });
 });
 
 describe("mergeSeedCandidates", () => {
@@ -159,5 +187,56 @@ describe("mergeSeedCandidates", () => {
     expect(merged).toHaveLength(10);
     // Equal scores tie-break by ascending id
     expect(merged.map((p) => p.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+});
+
+describe("dedupeRankedByGroup", () => {
+  const post = (id: number, score: number): FeedPost => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width: 100,
+    height: 100,
+    blurhash: null,
+    mimeType: "image/png",
+    score,
+  });
+
+  it("preserves ranked order when nothing is grouped", () => {
+    const posts = [post(1, 0.9), post(2, 0.8), post(3, 0.7)];
+    const result = dedupeRankedByGroup(posts, new Map());
+    expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
+  });
+
+  it("drops the lower-scored sibling and keeps the group's first representative", () => {
+    const posts = [post(1, 0.9), post(2, 0.8), post(3, 0.7)];
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [3, [10]],
+    ]);
+    const result = dedupeRankedByGroup(posts, groups);
+    // 1 represents group 10; 3 (same group, lower score) drops; 2 is ungrouped.
+    expect(result.map((p) => p.id)).toEqual([1, 2]);
+  });
+
+  it("drops a multi-group post if ANY of its groups was already seen", () => {
+    const posts = [post(1, 0.9), post(2, 0.8), post(3, 0.7)];
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [2, [20]],
+      [3, [20, 30]], // shares group 20 with post 2
+    ]);
+    const result = dedupeRankedByGroup(posts, groups);
+    expect(result.map((p) => p.id)).toEqual([1, 2]);
+  });
+
+  it("keeps a post whose groups are all unseen even alongside grouped ones", () => {
+    const posts = [post(1, 0.9), post(2, 0.8), post(3, 0.7)];
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [3, [30]],
+    ]);
+    // 2 is ungrouped, 3's group 30 is fresh → all three survive.
+    const result = dedupeRankedByGroup(posts, groups);
+    expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
   });
 });

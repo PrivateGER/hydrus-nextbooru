@@ -37,6 +37,12 @@ export interface FeedConfig {
   recencyHalfLifeDays: number;
   /** Minimum cosine similarity for embedding candidates. */
   minEmbeddingScore: number;
+  /**
+   * Contribution-weight floor for sampled (older-stratum) seeds: sampled seeds
+   * already paid the recency penalty at selection; the floor gives long-term
+   * taste a real voice in ranking.
+   */
+  sampledSeedWeightFloor: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
@@ -49,6 +55,7 @@ export const FEED_CONFIG: FeedConfig = {
   idfWeight: 0.3,
   recencyHalfLifeDays: 90,
   minEmbeddingScore: 0.25,
+  sampledSeedWeightFloor: 0.25,
   maxFeedSize: 500,
 };
 
@@ -157,11 +164,23 @@ export function selectSeeds(
     }
   }
 
-  return [...recent, ...sampled].map((fav) => ({
-    postId: fav.postId,
-    hash: fav.hash,
-    weight: seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays),
-  }));
+  // Recent-stratum seeds keep their raw recency-decayed weight. Sampled seeds
+  // already paid the recency penalty as selection probability, so charging it
+  // again as contribution weight would double-decay them; the floor restores a
+  // meaningful long-term-taste voice in ranking.
+  const toSeed = (fav: FavoriteSeedInput, floored: boolean): FeedSeed => {
+    const raw = seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays);
+    return {
+      postId: fav.postId,
+      hash: fav.hash,
+      weight: floored ? Math.max(raw, config.sampledSeedWeightFloor) : raw,
+    };
+  };
+
+  return [
+    ...recent.map((fav) => toSeed(fav, false)),
+    ...sampled.map((fav) => toSeed(fav, true)),
+  ];
 }
 
 /**
@@ -218,6 +237,35 @@ export function mergeSeedCandidates(
   return [...byId.values()]
     .sort((a, b) => b.score - a.score || a.id - b.id)
     .slice(0, config.maxFeedSize);
+}
+
+/**
+ * Collapse group siblings in a ranked feed to one representative each.
+ *
+ * Without this, a multi-page set near the user's taste occupies one feed slot
+ * per page. Walking in ranked (descending-score) order, a post is kept unless
+ * ANY of its group ids was already claimed by an earlier (higher-ranked) kept
+ * post — so the highest-scoring member of a group becomes its representative
+ * and the rest drop. Posts absent from the map (ungrouped) are always kept.
+ * Input order is preserved.
+ */
+export function dedupeRankedByGroup(
+  posts: FeedPost[],
+  groupIdsByPostId: ReadonlyMap<number, number[]>
+): FeedPost[] {
+  const seenGroups = new Set<number>();
+  const result: FeedPost[] = [];
+  for (const post of posts) {
+    const groupIds = groupIdsByPostId.get(post.id);
+    if (!groupIds || groupIds.length === 0) {
+      result.push(post);
+      continue;
+    }
+    if (groupIds.some((id) => seenGroups.has(id))) continue;
+    for (const id of groupIds) seenGroups.add(id);
+    result.push(post);
+  }
+  return result;
 }
 
 // ============================================
@@ -313,7 +361,24 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     ...seedGroupSiblings.map((g) => g.postId),
   ]);
 
-  return mergeSeedCandidates(contributions, excluded, config);
+  const merged = mergeSeedCandidates(contributions, excluded, config);
+  if (merged.length === 0) return merged;
+
+  // Collapse multi-post sets (a candidate whose group sibling is also a
+  // candidate) to one representative each, so a large set near the user's
+  // taste cannot flood the feed. One extra query, only when there is a feed.
+  const groupRows = await prisma.postGroup.findMany({
+    where: { postId: { in: merged.map((p) => p.id) } },
+    select: { postId: true, groupId: true },
+  });
+  const groupIdsByPostId = new Map<number, number[]>();
+  for (const { postId, groupId } of groupRows) {
+    const existing = groupIdsByPostId.get(postId);
+    if (existing) existing.push(groupId);
+    else groupIdsByPostId.set(postId, [groupId]);
+  }
+
+  return dedupeRankedByGroup(merged, groupIdsByPostId);
 }
 
 /**

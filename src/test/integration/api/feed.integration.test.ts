@@ -130,4 +130,35 @@ describe('GET /api/feed (Integration)', () => {
     expect(hashes).not.toContain(sibling.hash);
     expect(hashes).toContain(outsider.hash);
   });
+
+  it('collapses group siblings among candidates to one representative', async () => {
+    const prisma = getTestPrisma();
+    const a = await createPostWithTags(prisma, TASTE_TAGS); // favorite / seed
+    const b = await createPostWithTags(prisma, TASTE_TAGS); // group member
+    const c = await createPostWithTags(prisma, TASTE_TAGS); // group sibling of b
+    const control = await createPostWithTags(prisma, TASTE_TAGS); // ungrouped
+    await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+
+    // B and C form a group that does NOT include the seed A, so neither is
+    // excluded as a seed's group sibling — both reach the candidate list and
+    // the feed's per-group dedup must keep exactly one of them.
+    const group = await prisma.group.create({
+      data: { sourceType: 'PIXIV', sourceId: 'feed-dedup-group' },
+    });
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: b.id, groupId: group.id, position: 0 },
+        { postId: c.id, groupId: group.id, position: 1 },
+      ],
+    });
+
+    await favorite(a.hash);
+    const data = await fetchFeed();
+
+    const hashes = data.posts.map((p: { hash: string }) => p.hash);
+    const survivingSiblings = [b.hash, c.hash].filter((h) => hashes.includes(h));
+    expect(survivingSiblings).toHaveLength(1); // one group representative only
+    expect(hashes).toContain(control.hash); // ungrouped taste-sharing post kept
+    expect(hashes).not.toContain(a.hash); // never the favorite itself
+  });
 });
