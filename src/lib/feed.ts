@@ -13,6 +13,14 @@
 
 import type { RecommendedPost } from "@/lib/recommendations";
 import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
+import { prisma } from "@/lib/db";
+import { getOrComputeRecommendations } from "@/lib/recommendations";
+import {
+  getEmbeddingOpenRouterSettings,
+  toEmbeddingConfig,
+  type EmbeddingConfig,
+} from "@/lib/embeddings/settings";
+import { findRelatedPostsByEmbedding } from "@/lib/embeddings/store";
 
 export interface FeedConfig {
   /** Most recent favorites always used as seeds (current taste). */
@@ -188,4 +196,161 @@ export function mergeSeedCandidates(
   return [...byId.values()]
     .sort((a, b) => b.score - a.score || a.id - b.id)
     .slice(0, config.maxFeedSize);
+}
+
+// ============================================
+// Feed build + in-process cache
+// ============================================
+
+interface FeedCacheEntry {
+  builtAt: number;
+  posts: FeedPost[];
+}
+
+let feedCache: FeedCacheEntry | null = null;
+let inFlightBuild: Promise<FeedPost[]> | null = null;
+/**
+ * Monotonic counter bumped by every invalidation. A build captures its value
+ * at start and only writes its result to the cache if the counter is unchanged
+ * on completion — so a mutation that lands mid-build discards the now-stale
+ * rebuild instead of re-caching pre-mutation data for a full TTL.
+ */
+let feedGeneration = 0;
+
+/** Drop the cached feed. Called on every favorite/dismissal mutation. */
+export function invalidateFeedCache(): void {
+  feedCache = null;
+  feedGeneration++;
+}
+
+async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
+  try {
+    return toEmbeddingConfig(await getEmbeddingOpenRouterSettings());
+  } catch (error) {
+    console.error("Feed: embeddings unavailable, falling back to tag similarity only:", error);
+    return null;
+  }
+}
+
+async function fetchSeedContribution(
+  seed: FeedSeed,
+  embeddingConfig: EmbeddingConfig | null,
+  config: FeedConfig
+): Promise<SeedContribution> {
+  const [embedding, idf] = await Promise.all([
+    embeddingConfig
+      ? findRelatedPostsByEmbedding({
+          hash: seed.hash,
+          config: embeddingConfig,
+          limit: config.neighborsPerSeed,
+          minScore: config.minEmbeddingScore,
+        }).catch((error): EmbeddedRelatedPost[] => {
+          console.error(`Feed: embedding neighbors failed for seed ${seed.hash}:`, error);
+          return [];
+        })
+      : Promise.resolve<EmbeddedRelatedPost[]>([]),
+    getOrComputeRecommendations(seed.postId, config.neighborsPerSeed).catch(
+      (error): RecommendedPost[] => {
+        console.error(`Feed: tag recommendations failed for seed ${seed.postId}:`, error);
+        return [];
+      }
+    ),
+  ]);
+
+  return { seed, embedding, idf };
+}
+
+/**
+ * Build the full ranked feed from scratch.
+ *
+ * Excludes favorited posts, dismissed posts, and any post sharing a group
+ * with a seed (the per-seed engines already exclude the seed's own group;
+ * this applies the rule across seeds too). Both engines degrade to empty
+ * per-seed results on failure rather than failing the build.
+ */
+export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
+  const favorites = await prisma.favorite.findMany({
+    orderBy: { favoritedAt: "desc" },
+    select: {
+      postId: true,
+      favoritedAt: true,
+      post: { select: { hash: true } },
+    },
+  });
+
+  if (favorites.length === 0) return [];
+
+  const seeds = selectSeeds(
+    favorites.map((fav) => ({
+      postId: fav.postId,
+      hash: fav.post.hash,
+      favoritedAt: fav.favoritedAt,
+    })),
+    new Date(),
+    config
+  );
+
+  const embeddingConfig = await resolveEmbeddingConfig();
+
+  // Prisma queues queries beyond its pool size, so a flat Promise.all over
+  // all seeds is safe (single-user deployment).
+  const [dismissals, seedGroupSiblings, contributions] = await Promise.all([
+    prisma.feedDismissal.findMany({ select: { postId: true } }),
+    prisma.postGroup.findMany({
+      where: {
+        group: { posts: { some: { postId: { in: seeds.map((s) => s.postId) } } } },
+      },
+      select: { postId: true },
+    }),
+    Promise.all(seeds.map((seed) => fetchSeedContribution(seed, embeddingConfig, config))),
+  ]);
+
+  const excluded = new Set<number>([
+    ...favorites.map((fav) => fav.postId),
+    ...dismissals.map((d) => d.postId),
+    ...seedGroupSiblings.map((g) => g.postId),
+  ]);
+
+  return mergeSeedCandidates(contributions, excluded, config);
+}
+
+/**
+ * Paginated slice of the (cached) feed. Rebuilds on cache miss/expiry with
+ * in-flight coalescing (same pattern as src/lib/recommendations.ts).
+ */
+export async function getFeedPage(
+  page: number,
+  limit: number
+): Promise<{ posts: FeedPost[]; totalCount: number; totalPages: number }> {
+  const now = Date.now();
+  let posts: FeedPost[];
+  if (feedCache && now - feedCache.builtAt <= FEED_CONFIG.cacheTtlMs) {
+    posts = feedCache.posts;
+  } else {
+    if (!inFlightBuild) {
+      const generation = feedGeneration;
+      inFlightBuild = buildFeed()
+        .then((built) => {
+          // Only cache if no invalidation landed while this build ran; a stale
+          // rebuild would otherwise mask the mutation until the TTL expires.
+          if (feedGeneration === generation) {
+            feedCache = { builtAt: Date.now(), posts: built };
+          }
+          return built;
+        })
+        .finally(() => {
+          inFlightBuild = null;
+        });
+    }
+    // Serve this caller from the build result directly: feedCache may be null
+    // (invalidated mid-build) or belong to a newer generation.
+    posts = await inFlightBuild;
+  }
+
+  const start = (page - 1) * limit;
+  return {
+    posts: posts.slice(start, start + limit),
+    totalCount: posts.length,
+    totalPages: Math.ceil(posts.length / limit),
+  };
 }

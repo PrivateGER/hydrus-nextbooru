@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { invalidateFeedCache } from "@/lib/feed";
 
 /** Resolve a (lowercased) post hash to its numeric id. */
 export async function getPostIdByHash(hash: string): Promise<number | null> {
@@ -23,11 +24,13 @@ export async function setFavorite(postId: number): Promise<void> {
       update: {},
     }),
   ]);
+  invalidateFeedCache();
 }
 
 /** Remove a favorite. Idempotent. */
 export async function unsetFavorite(postId: number): Promise<void> {
   await prisma.favorite.deleteMany({ where: { postId } });
+  invalidateFeedCache();
 }
 
 /**
@@ -43,11 +46,13 @@ export async function setDismissal(postId: number): Promise<void> {
       update: {},
     }),
   ]);
+  invalidateFeedCache();
 }
 
 /** Remove a feed dismissal. Idempotent. */
 export async function unsetDismissal(postId: number): Promise<void> {
   await prisma.feedDismissal.deleteMany({ where: { postId } });
+  invalidateFeedCache();
 }
 
 /** Which of the given post ids are favorited. One indexed query. */
