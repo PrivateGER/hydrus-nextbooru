@@ -56,6 +56,10 @@ vi.mock("@/lib/search", () => ({
   },
 }));
 
+vi.mock("@/lib/favorites", () => ({
+  getFavoritedPostIdSet: vi.fn(async () => new Set<number>()),
+}));
+
 import SearchPage from "./page";
 
 async function renderSearchPageContent(params: Record<string, string>) {
