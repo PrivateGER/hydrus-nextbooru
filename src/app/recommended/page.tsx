@@ -8,7 +8,7 @@ import { Pagination } from "@/components/pagination";
 import { PostGridSkeleton } from "@/components/skeletons";
 
 export const metadata: Metadata = {
-  title: "For You – Booru",
+  title: "For You - Booru",
   description: "Posts recommended from your favorites",
 };
 
@@ -52,7 +52,7 @@ async function RecommendedContent({ searchParams }: RecommendedPageProps) {
           {totalCount} recommendation{totalCount === 1 ? "" : "s"}
         </span>
       </header>
-      <FeedGrid posts={posts} />
+      <FeedGrid key={page} posts={posts} />
       <Pagination currentPage={page} totalPages={totalPages} />
     </div>
   );
