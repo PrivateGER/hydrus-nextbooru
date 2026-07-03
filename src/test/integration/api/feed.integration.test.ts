@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
+// Static route imports are safe here: @/lib/db's prisma is a Proxy resolving the test client per property access, and these modules do no top-level DB work (unlike suites using vi.doMock, which need dynamic imports).
 import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
@@ -83,7 +84,7 @@ describe('GET /api/feed (Integration)', () => {
     const similar = await createPostWithTags(prisma, TASTE_TAGS);
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
 
-    // Build (and cache) an empty feed first
+    // Build an empty feed first
     const before = await fetchFeed();
     expect(before.posts).toEqual([]);
 

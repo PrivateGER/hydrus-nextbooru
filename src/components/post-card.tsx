@@ -17,7 +17,7 @@ interface PostCardProps {
   layout?: LayoutMode;
   /** Heart overlay state; omit to hide the overlay entirely (e.g. filmstrips). */
   favorited?: boolean;
-  /** Feed-only "not interested" control; fires after the dismissal request is sent. */
+  /** Feed-only "not interested" control; fires only after the dismissal PUT succeeds. */
   onDismiss?: (hash: string) => void;
 }
 
@@ -36,6 +36,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
   const [fav, setFav] = useState(favorited ?? false);
   const [favPending, setFavPending] = useState(false);
+  const [dismissPending, setDismissPending] = useState(false);
 
   // Prop can change without remount (e.g. client-side pagination) — resync.
   useEffect(() => {
@@ -59,11 +60,21 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     }
   };
 
-  const handleDismiss = (event: React.MouseEvent) => {
+  const handleDismiss = async (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    void fetch(`/api/posts/${hash}/dismissal`, { method: "PUT" });
-    onDismiss?.(hash);
+    if (dismissPending) return;
+    setDismissPending(true);
+    try {
+      const response = await fetch(`/api/posts/${hash}/dismissal`, { method: "PUT" });
+      // Only remove the card once the server has recorded the dismissal; on
+      // failure keep it (no rollback needed — the card was never removed).
+      if (response.ok) onDismiss?.(hash);
+    } catch {
+      // Network error: keep the card.
+    } finally {
+      setDismissPending(false);
+    }
   };
 
   const isVideo = mimeType.startsWith("video/");
@@ -329,6 +340,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
       {onDismiss && (
         <button
           onClick={handleDismiss}
+          disabled={dismissPending}
           title="Not interested"
           className="absolute left-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition-opacity hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
         >

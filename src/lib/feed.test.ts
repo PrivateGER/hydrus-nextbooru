@@ -3,6 +3,7 @@ import {
   FEED_CONFIG,
   seedWeight,
   selectSeeds,
+  mulberry32,
   mergeSeedCandidates,
   type FavoriteSeedInput,
   type SeedContribution,
@@ -73,6 +74,23 @@ describe("selectSeeds", () => {
     expect(a.weight).toBeGreaterThan(b.weight);
     expect(b.weight).toBeGreaterThan(c.weight);
     expect(b.weight).toBeCloseTo(0.5, 5);
+  });
+
+  it("samples deterministically per rng seed and drifts across seeds", () => {
+    const favorites = Array.from({ length: 100 }, (_, i) => favorite(i + 1, i));
+    const same1 = selectSeeds(favorites, NOW, FEED_CONFIG, mulberry32(2026));
+    const same2 = selectSeeds(favorites, NOW, FEED_CONFIG, mulberry32(2026));
+    const other = selectSeeds(favorites, NOW, FEED_CONFIG, mulberry32(1337));
+
+    // Same seed → identical full seed list (stable pagination within a bucket).
+    expect(same1.map((s) => s.postId)).toEqual(same2.map((s) => s.postId));
+
+    // The deterministic recent stratum is identical regardless of seed; the
+    // sampled tail (older stratum) must differ across seeds (taste drift).
+    const tail = (seeds: typeof same1) =>
+      seeds.slice(FEED_CONFIG.recentSeedCount).map((s) => s.postId);
+    expect(tail(same1)).toHaveLength(FEED_CONFIG.sampledSeedCount);
+    expect(tail(same1)).not.toEqual(tail(other));
   });
 });
 

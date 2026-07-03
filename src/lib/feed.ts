@@ -82,6 +82,31 @@ export interface SeedContribution {
 
 const DAY_MS = 86_400_000;
 
+/**
+ * Time-bucket width for the seed sampler's PRNG seed. Builds within the same
+ * bucket reseed mulberry32 identically, so the 20 sampled older seeds — and
+ * thus feed order — stay stable across a session's page requests; the seed
+ * changes each bucket so the sampled tail drifts over time (taste
+ * exploration). 5 minutes trades a little cross-bucket churn for pagination
+ * that holds still while a user scrolls.
+ */
+const SEED_SAMPLE_BUCKET_MS = 300_000;
+
+/**
+ * Deterministic 32-bit PRNG (mulberry32). Seeded, so a given seed reproduces
+ * the same stream — used to make seed sampling stable within a time bucket.
+ */
+export function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** Exponential recency decay: 1 at age 0, 0.5 after one half-life. */
 export function seedWeight(favoritedAt: Date, now: Date, halfLifeDays: number): number {
   const ageDays = Math.max(0, (now.getTime() - favoritedAt.getTime()) / DAY_MS);
@@ -263,7 +288,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
       favoritedAt: fav.favoritedAt,
     })),
     new Date(),
-    config
+    config,
+    mulberry32(Math.floor(Date.now() / SEED_SAMPLE_BUCKET_MS))
   );
 
   const embeddingConfig = await resolveEmbeddingConfig();

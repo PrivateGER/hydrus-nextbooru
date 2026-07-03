@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPost, randomHash } from '../factories';
+// Static route imports are safe here: @/lib/db's prisma is a Proxy resolving the test client per property access, and these modules do no top-level DB work (unlike suites using vi.doMock, which need dynamic imports).
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
 
