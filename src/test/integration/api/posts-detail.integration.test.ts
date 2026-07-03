@@ -152,4 +152,15 @@ describe('GET /api/posts/[hash] (Integration)', () => {
     expect(response.status).toBe(404);
     expect(data.error).toBe('Post not found');
   });
+
+  it('reports favorited state', async () => {
+    const prisma = getTestPrisma();
+    const post = await createPost(prisma);
+    await prisma.favorite.create({ data: { postId: post.id } });
+
+    const request = new NextRequest(`http://localhost/api/posts/${post.hash}`);
+    const data = await (await GET(request, { params: Promise.resolve({ hash: post.hash }) })).json();
+
+    expect(data.favorited).toBe(true);
+  });
 });

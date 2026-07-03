@@ -721,5 +721,19 @@ describe('GET /api/posts/search (Integration)', () => {
       expect(data.totalCount).toBe(1);
       expect(data.posts[0].hash).toBe(plain.hash);
     });
+
+    it('marks favorited state on search results', async () => {
+      const prisma = getTestPrisma();
+      const faved = await createPostWithTags(prisma, ['blue eyes']);
+      const plain = await createPostWithTags(prisma, ['blue eyes']);
+      await prisma.favorite.create({ data: { postId: faved.id } });
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=blue eyes');
+      const data = await (await GET(request)).json();
+
+      const byHash = new Map(data.posts.map((p: { hash: string; favorited: boolean }) => [p.hash, p.favorited]));
+      expect(byHash.get(faved.hash)).toBe(true);
+      expect(byHash.get(plain.hash)).toBe(false);
+    });
   });
 });

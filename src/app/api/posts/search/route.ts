@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchPosts, sanitizePositiveInt, MAX_LIMIT, MAX_PAGE } from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
+import { getFavoritedPostIdSet } from "@/lib/favorites";
 
 const RATE_LIMIT_CONFIG = {
   prefix: "posts-search",
@@ -49,8 +50,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
 
+  const favoritedIds = await getFavoritedPostIdSet(result.posts.map((p) => p.id));
+
   return NextResponse.json({
-    posts: result.posts,
+    posts: result.posts.map((p) => ({ ...p, favorited: favoritedIds.has(p.id) })),
     totalCount: result.totalCount,
     totalPages: result.totalPages,
     ...(result.resolvedWildcards.length > 0 && { resolvedWildcards: result.resolvedWildcards }),

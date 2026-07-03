@@ -69,6 +69,8 @@ export interface PostResult {
   rating?: string;
   distance?: number;
   score?: number;
+  /** Whether the (single) user has favorited this post. Merged at the route/page layer, never cached. */
+  favorited?: boolean;
 }
 
 /** Type of search result - either a note or a group title */
