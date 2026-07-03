@@ -8,7 +8,7 @@
  * evidence (a candidate reached from several seeds) accumulates score.
  *
  * The pure functions (seed selection, score merging) live at the top and
- * are unit-tested; DB/build/cache plumbing follows.
+ * are unit-tested; DB/build plumbing follows.
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
@@ -39,8 +39,6 @@ export interface FeedConfig {
   minEmbeddingScore: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
-  /** In-process feed cache TTL. */
-  cacheTtlMs: number;
 }
 
 export const FEED_CONFIG: FeedConfig = {
@@ -52,7 +50,6 @@ export const FEED_CONFIG: FeedConfig = {
   recencyHalfLifeDays: 90,
   minEmbeddingScore: 0.25,
   maxFeedSize: 500,
-  cacheTtlMs: 60 * 60 * 1000,
 };
 
 export interface FavoriteSeedInput {
@@ -199,29 +196,8 @@ export function mergeSeedCandidates(
 }
 
 // ============================================
-// Feed build + in-process cache
+// Feed build
 // ============================================
-
-interface FeedCacheEntry {
-  builtAt: number;
-  posts: FeedPost[];
-}
-
-let feedCache: FeedCacheEntry | null = null;
-let inFlightBuild: Promise<FeedPost[]> | null = null;
-/**
- * Monotonic counter bumped by every invalidation. A build captures its value
- * at start and only writes its result to the cache if the counter is unchanged
- * on completion — so a mutation that lands mid-build discards the now-stale
- * rebuild instead of re-caching pre-mutation data for a full TTL.
- */
-let feedGeneration = 0;
-
-/** Drop the cached feed. Called on every favorite/dismissal mutation. */
-export function invalidateFeedCache(): void {
-  feedCache = null;
-  feedGeneration++;
-}
 
 async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   try {
@@ -315,38 +291,21 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 }
 
 /**
- * Paginated slice of the (cached) feed. Rebuilds on cache miss/expiry with
- * in-flight coalescing (same pattern as src/lib/recommendations.ts).
+ * Paginated slice of the feed. Rebuilds the full ranked feed on every call —
+ * there is intentionally no in-process cache. A module-level cache is
+ * per-bundle under Next.js (the /recommended page and the API-route bundles
+ * get separate module instances) and per-process, so a favorite/dismissal
+ * mutation cannot invalidate it reliably: one bundle would serve stale data.
+ * A fresh build is cheap for this single-user app — the IDF layer is DB-cached
+ * for 24h by getOrComputeRecommendations and embedding k-NN is ms-scale.
+ *
+ * Precondition: page and limit are pre-sanitized positive integers.
  */
 export async function getFeedPage(
   page: number,
   limit: number
 ): Promise<{ posts: FeedPost[]; totalCount: number; totalPages: number }> {
-  const now = Date.now();
-  let posts: FeedPost[];
-  if (feedCache && now - feedCache.builtAt <= FEED_CONFIG.cacheTtlMs) {
-    posts = feedCache.posts;
-  } else {
-    if (!inFlightBuild) {
-      const generation = feedGeneration;
-      inFlightBuild = buildFeed()
-        .then((built) => {
-          // Only cache if no invalidation landed while this build ran; a stale
-          // rebuild would otherwise mask the mutation until the TTL expires.
-          if (feedGeneration === generation) {
-            feedCache = { builtAt: Date.now(), posts: built };
-          }
-          return built;
-        })
-        .finally(() => {
-          inFlightBuild = null;
-        });
-    }
-    // Serve this caller from the build result directly: feedCache may be null
-    // (invalidated mid-build) or belong to a newer generation.
-    posts = await inFlightBuild;
-  }
-
+  const posts = await buildFeed();
   const start = (page - 1) * limit;
   return {
     posts: posts.slice(start, start + limit),

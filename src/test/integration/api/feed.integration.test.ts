@@ -3,7 +3,6 @@ import { NextRequest } from 'next/server';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
-import { invalidateFeedCache } from '@/lib/feed';
 import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
@@ -49,7 +48,6 @@ describe('GET /api/feed (Integration)', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
-    invalidateFeedCache();
   });
 
   it('returns an empty feed with no favorites (cold start)', async () => {
@@ -79,7 +77,7 @@ describe('GET /api/feed (Integration)', () => {
     expect(data.posts[0].score).toBeGreaterThan(0);
   });
 
-  it('favoriting invalidates the cached feed', async () => {
+  it('feed reflects new favorites immediately', async () => {
     const prisma = getTestPrisma();
     const seed = await createPostWithTags(prisma, TASTE_TAGS);
     const similar = await createPostWithTags(prisma, TASTE_TAGS);
