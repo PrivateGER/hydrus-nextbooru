@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { HeartIcon } from "@heroicons/react/24/outline";
 import { HeartIcon as HeartSolidIcon } from "@heroicons/react/24/solid";
+import { useFavoriteToggle } from "@/hooks/use-favorite-toggle";
 
 interface FavoriteButtonProps {
   hash: string;
@@ -15,28 +15,7 @@ interface FavoriteButtonProps {
  * Safe inside <summary>/<Link> parents: stops propagation and default.
  */
 export function FavoriteButton({ hash, initialFavorited, className = "" }: FavoriteButtonProps) {
-  const [favorited, setFavorited] = useState(initialFavorited);
-  const [pending, setPending] = useState(false);
-
-  const toggle = async (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (pending) return;
-
-    const next = !favorited;
-    setFavorited(next);
-    setPending(true);
-    try {
-      const response = await fetch(`/api/posts/${hash}/favorite`, {
-        method: next ? "PUT" : "DELETE",
-      });
-      if (!response.ok) setFavorited(!next);
-    } catch {
-      setFavorited(!next);
-    } finally {
-      setPending(false);
-    }
-  };
+  const { favorited, pending, toggle } = useFavoriteToggle(hash, initialFavorited);
 
   return (
     <button

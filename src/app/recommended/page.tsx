@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { HeartIcon, SparklesIcon } from "@heroicons/react/24/outline";
 import { getFeedPage } from "@/lib/feed";
+import { sanitizePositiveInt, MAX_PAGE } from "@/lib/search";
 import { FeedGrid } from "@/components/feed-grid";
 import { Pagination } from "@/components/pagination";
 import { PostGridSkeleton } from "@/components/skeletons";
@@ -24,7 +25,7 @@ interface RecommendedPageProps {
 
 async function RecommendedContent({ searchParams }: RecommendedPageProps) {
   const params = await searchParams;
-  const page = Math.max(1, parseInt(params.page || "1", 10) || 1);
+  const page = sanitizePositiveInt(params.page ?? null, 1, MAX_PAGE);
 
   const { posts, totalCount, totalPages } = await getFeedPage(page, FEED_PAGE_SIZE);
 

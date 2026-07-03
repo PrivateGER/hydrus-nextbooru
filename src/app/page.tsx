@@ -18,7 +18,7 @@ import {
 } from "@/lib/stats";
 import { POSTS_PER_PAGE } from "@/lib/pagination";
 import { getPostsByHashRotation } from "@/lib/random-order";
-import { getFavoritedPostIdSet } from "@/lib/favorites";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 type SortOption = "newest" | "oldest" | "random";
 
@@ -55,9 +55,8 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
       prisma.post.count(),
     ]);
 
-    const favoritedIds = await getFavoritedPostIdSet(posts.map((p) => p.id));
     return {
-      posts: posts.map((p) => ({ ...p, favorited: favoritedIds.has(p.id) })),
+      posts: await mergeFavoritedState(posts),
       totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
       totalCount,
     };
@@ -84,9 +83,8 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
     prisma.post.count(),
   ]);
 
-  const favoritedIds = await getFavoritedPostIdSet(posts.map((p) => p.id));
   return {
-    posts: posts.map((p) => ({ ...p, favorited: favoritedIds.has(p.id) })),
+    posts: await mergeFavoritedState(posts),
     totalPages: Math.ceil(totalCount / POSTS_PER_PAGE),
     totalCount,
   };

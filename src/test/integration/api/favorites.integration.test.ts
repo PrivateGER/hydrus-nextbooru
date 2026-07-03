@@ -142,4 +142,32 @@ describe('favorite/dismissal routes (Integration)', () => {
     expect(response.status).toBe(200);
     expect(await prisma.favorite.count()).toBe(1);
   });
+
+  it('concurrent favorite + dismissal for one post never leaves both (advisory lock)', async () => {
+    const prisma = getTestPrisma();
+    const post = await createPost(prisma);
+    const favoriteUrl = `http://localhost/api/posts/${post.hash}/favorite`;
+    const dismissalUrl = `http://localhost/api/posts/${post.hash}/dismissal`;
+
+    // Hammer the same post with many interleaved opposite mutations. Without
+    // the per-post advisory lock in setFavorite/setDismissal, two transactions
+    // can each delete the other's row before inserting their own, leaving BOTH
+    // a Favorite and a FeedDismissal (sum === 2). The lock serializes them so
+    // exactly one survives every iteration.
+    for (let iteration = 0; iteration < 20; iteration++) {
+      // 8 concurrent ops (4 favorite / 4 dismissal), under the pool's max of 10.
+      const ops = Array.from({ length: 8 }, (_, i) =>
+        i % 2 === 0
+          ? favoriteRoute.PUT(put(favoriteUrl), makeParams(post.hash))
+          : dismissalRoute.PUT(put(dismissalUrl), makeParams(post.hash)),
+      );
+      await Promise.all(ops);
+
+      const [favorites, dismissals] = await Promise.all([
+        prisma.favorite.count({ where: { postId: post.id } }),
+        prisma.feedDismissal.count({ where: { postId: post.id } }),
+      ]);
+      expect(favorites + dismissals).toBe(1);
+    }
+  });
 });

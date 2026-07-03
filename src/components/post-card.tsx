@@ -5,6 +5,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { PhotoIcon, HeartIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { HeartIcon as HeartSolidIcon } from "@heroicons/react/24/solid";
 import { BlurhashImage } from "./blurhash-image";
+import { useFavoriteToggle } from "@/hooks/use-favorite-toggle";
 
 export type LayoutMode = "masonry" | "grid";
 
@@ -34,31 +35,8 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const mountedRef = useRef(true);
   const loadedRef = useRef(false); // Track loaded state for timeout callback
 
-  const [fav, setFav] = useState(favorited ?? false);
-  const [favPending, setFavPending] = useState(false);
+  const { favorited: fav, pending: favPending, toggle: toggleFavorite } = useFavoriteToggle(hash, favorited ?? false);
   const [dismissPending, setDismissPending] = useState(false);
-
-  // Prop can change without remount (e.g. client-side pagination) — resync.
-  useEffect(() => {
-    setFav(favorited ?? false);
-  }, [favorited]);
-
-  const toggleFavorite = async (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (favPending) return;
-    const next = !fav;
-    setFav(next);
-    setFavPending(true);
-    try {
-      const response = await fetch(`/api/posts/${hash}/favorite`, { method: next ? "PUT" : "DELETE" });
-      if (!response.ok) setFav(!next);
-    } catch {
-      setFav(!next);
-    } finally {
-      setFavPending(false);
-    }
-  };
 
   const handleDismiss = async (event: React.MouseEvent) => {
     event.preventDefault();
@@ -73,7 +51,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
     } catch {
       // Network error: keep the card.
     } finally {
-      setDismissPending(false);
+      if (mountedRef.current) setDismissPending(false);
     }
   };
 
@@ -328,6 +306,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
           disabled={favPending}
           aria-pressed={fav}
           title={fav ? "Remove from favorites" : "Add to favorites"}
+          aria-label={fav ? "Remove from favorites" : "Add to favorites"}
           className={`absolute right-2 top-2 rounded-full bg-black/60 p-1.5 transition-opacity hover:bg-black/80 focus-visible:opacity-100 ${
             fav ? "opacity-100 text-pink-400" : "text-white opacity-0 group-hover:opacity-100"
           }`}
@@ -342,6 +321,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
           onClick={handleDismiss}
           disabled={dismissPending}
           title="Not interested"
+          aria-label="Not interested"
           className="absolute left-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition-opacity hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
         >
           <XMarkIcon className="h-4 w-4" />
