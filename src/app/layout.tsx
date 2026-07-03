@@ -54,6 +54,18 @@ export default function RootLayout({
                 Gallery
               </Link>
               <Link
+                href="/recommended"
+                className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+              >
+                For You
+              </Link>
+              <Link
+                href="/search?tags=favorite"
+                className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+              >
+                Favorites
+              </Link>
+              <Link
                 href="/search"
                 className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
               >

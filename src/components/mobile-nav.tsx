@@ -5,6 +5,8 @@ import Link from "next/link";
 
 const navLinks = [
   { href: "/", label: "Gallery" },
+  { href: "/recommended", label: "For You" },
+  { href: "/search?tags=favorite", label: "Favorites" },
   { href: "/search", label: "Search" },
   { href: "/tags", label: "Tags" },
   { href: "/tree", label: "Tree" },
