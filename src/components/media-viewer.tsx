@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
+import { TextOverlay, type OverlayRegion } from "@/components/post/text-overlay";
 
 interface MediaViewerProps {
   hash: string;
@@ -16,6 +17,8 @@ interface MediaViewerProps {
   nextPostHash?: string;
   currentPosition?: number;
   totalCount?: number;
+  textRegions?: OverlayRegion[];
+  ocrEnabled?: boolean;
 }
 
 /**
@@ -44,6 +47,8 @@ export function MediaViewer({
   nextPostHash,
   currentPosition,
   totalCount,
+  textRegions,
+  ocrEnabled,
 }: MediaViewerProps) {
   return (
     <MediaViewerContent
@@ -58,6 +63,8 @@ export function MediaViewer({
       nextPostHash={nextPostHash}
       currentPosition={currentPosition}
       totalCount={totalCount}
+      textRegions={textRegions}
+      ocrEnabled={ocrEnabled}
     />
   );
 }
@@ -73,6 +80,8 @@ function MediaViewerContent({
   nextPostHash,
   currentPosition,
   totalCount,
+  textRegions,
+  ocrEnabled,
 }: MediaViewerProps) {
   const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
@@ -304,6 +313,14 @@ function MediaViewerContent({
         <div className="flex h-64 items-center justify-center text-zinc-500 dark:text-zinc-400">
           <p>Preview not available for {mimeType}</p>
         </div>
+      )}
+
+      {isImage && (
+        <TextOverlay
+          hash={hash}
+          initialRegions={textRegions ?? []}
+          ocrEnabled={ocrEnabled ?? false}
+        />
       )}
 
       {/* Next button */}
