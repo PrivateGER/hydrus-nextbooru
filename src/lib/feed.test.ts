@@ -120,6 +120,75 @@ describe("selectSeeds", () => {
     expect(seeds[1].weight).toBeCloseTo(0.5, 10);
     expect(seeds[1].weight).toBeGreaterThan(config.sampledSeedWeightFloor);
   });
+
+  it("guarantees every age band contributes a seed regardless of rng (coverage)", () => {
+    // 500 older favorites spanning 0-1000 days → 5 equal-count age quintiles by
+    // age order (postIds 1-100 newest … 401-500 oldest). No matter the rng seed,
+    // every one of the 5 bands must contribute ≥1 sampled seed: old taste eras
+    // are never fully starved by recency decay.
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 0 };
+    const favorites = Array.from({ length: 500 }, (_, i) => favorite(i + 1, i * 2));
+    for (const seed of [2026, 1337, 42]) {
+      const seeds = selectSeeds(favorites, NOW, config, mulberry32(seed));
+      const quintiles = new Set(seeds.map((s) => Math.floor((s.postId - 1) / 100)));
+      expect(quintiles).toEqual(new Set([0, 1, 2, 3, 4]));
+      expect(seeds).toHaveLength(config.sampledSeedCount); // 60 = min(60, 500)
+      expect(new Set(seeds.map((s) => s.postId)).size).toBe(seeds.length);
+    }
+  });
+
+  it("gives each age band exactly its quota when favorites are ample", () => {
+    // 100 older favorites → 5 bands of 20; quota = floor(60 / 5) = 12 each, no
+    // shortfall, so every band contributes precisely 12.
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 0 };
+    const favorites = Array.from({ length: 100 }, (_, i) => favorite(i + 1, i));
+    const seeds = selectSeeds(favorites, NOW, config, mulberry32(7));
+    const perBand = [0, 0, 0, 0, 0];
+    for (const s of seeds) perBand[Math.floor((s.postId - 1) / 20)]++;
+    expect(perBand).toEqual([12, 12, 12, 12, 12]);
+    expect(seeds).toHaveLength(60);
+    expect(new Set(seeds.map((s) => s.postId)).size).toBe(60);
+  });
+
+  it("takes all members of an undersized band and caps the total at older.length", () => {
+    // 6 older favorites → bands sized 1,1,1,1,2 (last band absorbs the
+    // remainder); every band is below its quota of 12, so all 6 are taken with
+    // no duplicates. The 2-member oldest band (postIds 5, 6) is fully present.
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 0 };
+    const favorites = Array.from({ length: 6 }, (_, i) => favorite(i + 1, i));
+    const seeds = selectSeeds(favorites, NOW, config, mulberry32(9));
+    expect(seeds).toHaveLength(6); // min(60, 6)
+    expect(seeds.map((s) => s.postId).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(new Set(seeds.map((s) => s.postId)).size).toBe(6);
+  });
+
+  it("redistributes the global shortfall from the remaining older favorites", () => {
+    // 59 older favorites → bands 11,11,11,11,15; quota 12. The four 11-member
+    // bands take all 11 (one below quota apiece); the 15-member band takes its
+    // quota of 12 and keeps 3 in reserve. That leaves the per-band pass at 56,
+    // so reaching min(60, 59) = 59 REQUIRES a global shortfall of 3 drawn from
+    // the pooled leftovers — here the whole 3-member reserve — so every favorite
+    // ends up sampled exactly once.
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 0 };
+    const favorites = Array.from({ length: 59 }, (_, i) => favorite(i + 1, i));
+    const seeds = selectSeeds(favorites, NOW, config, mulberry32(3));
+    expect(seeds).toHaveLength(59);
+    expect(seeds.map((s) => s.postId).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 59 }, (_, i) => i + 1)
+    );
+    expect(new Set(seeds.map((s) => s.postId)).size).toBe(59);
+  });
+
+  it("produces identical output for the same rng seed through the stratified path", () => {
+    // Determinism must survive the band + shortfall passes, not just a single
+    // weighted draw: a 59-favorite pool exercises both.
+    const config: FeedConfig = { ...FEED_CONFIG, recentSeedCount: 0 };
+    const favorites = Array.from({ length: 59 }, (_, i) => favorite(i + 1, i));
+    const a = selectSeeds(favorites, NOW, config, mulberry32(2026));
+    const b = selectSeeds(favorites, NOW, config, mulberry32(2026));
+    expect(a.map((s) => s.postId)).toEqual(b.map((s) => s.postId));
+    expect(a.map((s) => s.weight)).toEqual(b.map((s) => s.weight));
+  });
 });
 
 describe("mergeSeedCandidates", () => {

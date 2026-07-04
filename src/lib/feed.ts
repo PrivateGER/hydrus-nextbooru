@@ -27,6 +27,12 @@ export interface FeedConfig {
   recentSeedCount: number;
   /** Older favorites sampled with recency-decayed probability (long-term taste). */
   sampledSeedCount: number;
+  /**
+   * The older stratum is split into this many equal-count age bands, each
+   * guaranteed a share of the sampled seeds, so old taste eras cannot be
+   * starved by recency decay.
+   */
+  seedAgeBands: number;
   /** Neighbors fetched per seed per engine (engines cap at 20). */
   neighborsPerSeed: number;
   /** Blend weight for embedding similarity. */
@@ -49,7 +55,8 @@ export interface FeedConfig {
 
 export const FEED_CONFIG: FeedConfig = {
   recentSeedCount: 30,
-  sampledSeedCount: 20,
+  sampledSeedCount: 60,
+  seedAgeBands: 5,
   neighborsPerSeed: 20,
   embeddingWeight: 0.7,
   idfWeight: 0.3,
@@ -91,7 +98,7 @@ const DAY_MS = 86_400_000;
 
 /**
  * Time-bucket width for the seed sampler's PRNG seed. Builds within the same
- * bucket reseed mulberry32 identically, so the 20 sampled older seeds — and
+ * bucket reseed mulberry32 identically, so the 60 sampled older seeds — and
  * thus feed order — stay stable across a session's page requests; the seed
  * changes each bucket so the sampled tail drifts over time (taste
  * exploration). 5 minutes trades a little cross-bucket churn for pagination
@@ -120,13 +127,61 @@ export function seedWeight(favoritedAt: Date, now: Date, halfLifeDays: number): 
   return Math.exp((-Math.LN2 * ageDays) / halfLifeDays);
 }
 
+interface WeightedFavorite {
+  fav: FavoriteSeedInput;
+  weight: number;
+}
+
+/**
+ * Weighted sampling WITHOUT replacement: draws up to `count` favorites from
+ * `pool` with probability proportional to each entry's recency weight,
+ * splicing out every pick so it cannot be drawn twice. Deterministic for a
+ * given `rng`; yields fewer than `count` only when the pool runs dry. Mutates
+ * `pool` — the leftovers are reused for the cross-band shortfall pass.
+ */
+function sampleWeighted(
+  pool: WeightedFavorite[],
+  count: number,
+  rng: () => number
+): FavoriteSeedInput[] {
+  const picks: FavoriteSeedInput[] = [];
+  const target = Math.min(count, pool.length);
+  while (picks.length < target) {
+    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    let roll = rng() * totalWeight;
+    let picked = pool.length - 1;
+    for (let i = 0; i < pool.length; i++) {
+      roll -= pool[i].weight;
+      if (roll <= 0) {
+        picked = i;
+        break;
+      }
+    }
+    picks.push(pool[picked].fav);
+    pool.splice(picked, 1);
+  }
+  return picks;
+}
+
 /**
  * Stratified seed selection.
  *
- * The `recentSeedCount` newest favorites are always seeds. From the older
- * remainder, `sampledSeedCount` favorites are drawn without replacement with
- * probability proportional to their recency weight, so long-standing tastes
- * stay represented without letting ancient favorites dominate.
+ * The `recentSeedCount` newest favorites are always seeds (current taste).
+ *
+ * The older remainder is sampled for long-term taste. Plain uniform weighted
+ * sampling starves niche/old interests: with the previous 20 draws a cluster
+ * holding 5% of the older stratum's decay-weight was absent from ~36% of
+ * builds and a 1% cluster from ~82%. So we (a) widen the sample
+ * (`sampledSeedCount`) and (b) guarantee coverage across taste eras. The older
+ * favorites (already newest-first) are split into `seedAgeBands` contiguous
+ * equal-count age bands, and each band is granted a quota of the sample so
+ * recency decay cannot silence an entire era. Within a band, favorites are
+ * drawn WITHOUT replacement with probability proportional to their recency
+ * weight; a band with fewer members than its quota contributes all of them,
+ * and any resulting global shortfall is filled from the union of the remaining
+ * unsampled older favorites. The result holds `min(sampledSeedCount,
+ * older.length)` sampled seeds, has no duplicates, and is deterministic for a
+ * given `rng`.
  *
  * @param favorites - MUST be sorted favoritedAt DESC (newest first)
  * @param rng - injectable for deterministic tests
@@ -140,27 +195,44 @@ export function selectSeeds(
   const recent = favorites.slice(0, config.recentSeedCount);
   const older = favorites.slice(config.recentSeedCount);
 
+  // Age-stratified weighted sampling of the older stratum. Split `older`
+  // (newest-first) into `seedAgeBands` contiguous equal-count bands — the last
+  // band absorbs the remainder; bands are empty when older.length < bands.
+  // Each band gets a quota (floor(sampledSeedCount / bands), the remainder
+  // handed one-each to the newest bands) sampled without replacement, so no age
+  // era can be starved by recency decay. Undersized bands contribute all their
+  // members; the leftover global shortfall is then drawn from the union of
+  // everything still unsampled.
   const sampled: FavoriteSeedInput[] = [];
-  if (older.length > 0 && config.sampledSeedCount > 0) {
-    const pool = older.map((fav) => ({
-      fav,
-      weight: seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays),
-    }));
-    const target = Math.min(config.sampledSeedCount, pool.length);
+  if (older.length > 0 && config.sampledSeedCount > 0 && config.seedAgeBands > 0) {
+    const bandCount = config.seedAgeBands;
+    const target = Math.min(config.sampledSeedCount, older.length);
+    const bandSize = Math.floor(older.length / bandCount);
+    const baseQuota = Math.floor(config.sampledSeedCount / bandCount);
+    const quotaRemainder = config.sampledSeedCount - baseQuota * bandCount;
 
-    while (sampled.length < target) {
-      const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
-      let roll = rng() * totalWeight;
-      let picked = pool.length - 1;
-      for (let i = 0; i < pool.length; i++) {
-        roll -= pool[i].weight;
-        if (roll <= 0) {
-          picked = i;
-          break;
-        }
-      }
-      sampled.push(pool[picked].fav);
-      pool.splice(picked, 1);
+    const bands: WeightedFavorite[][] = [];
+    for (let b = 0; b < bandCount; b++) {
+      const start = b * bandSize;
+      const end = b === bandCount - 1 ? older.length : start + bandSize;
+      bands.push(
+        older.slice(start, end).map((fav) => ({
+          fav,
+          weight: seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays),
+        }))
+      );
+    }
+
+    // Per-band pass: the extra `quotaRemainder` seeds go to the newest bands.
+    for (let b = 0; b < bandCount; b++) {
+      const quota = baseQuota + (b < quotaRemainder ? 1 : 0);
+      sampled.push(...sampleWeighted(bands[b], quota, rng));
+    }
+
+    // Fill any global shortfall from the pooled leftovers of every band.
+    const shortfall = target - sampled.length;
+    if (shortfall > 0) {
+      sampled.push(...sampleWeighted(bands.flat(), shortfall, rng));
     }
   }
 
