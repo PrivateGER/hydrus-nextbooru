@@ -41,7 +41,9 @@ export async function POST(
   }
   const hash = rawHash.toLowerCase();
 
-  const body: OcrRequestBody = await request.json().catch(() => ({}));
+  const parsed: unknown = await request.json().catch(() => null);
+  const body: OcrRequestBody =
+    parsed && typeof parsed === "object" ? parsed : {};
   const targetLang = typeof body.targetLang === "string" ? body.targetLang : undefined;
 
   const post = await prisma.post.findUnique({

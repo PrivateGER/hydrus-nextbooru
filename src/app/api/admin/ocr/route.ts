@@ -44,7 +44,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json().catch(() => ({}));
+    const parsed: unknown = await request.json().catch(() => null);
+    const body: Record<string, unknown> =
+      parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 
     let limit: number | undefined;
     if (body.limit !== undefined) {

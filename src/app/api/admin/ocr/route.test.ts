@@ -113,6 +113,16 @@ describe("POST /api/admin/ocr", () => {
     expect(mockAcquire).not.toHaveBeenCalled();
     expect(mockRun).not.toHaveBeenCalled();
   });
+
+  it("treats a literal null JSON body as empty and starts the batch", async () => {
+    const response = await POST(request(null));
+    expect(response.status).toBe(202);
+    expect(mockRun).toHaveBeenCalledWith({
+      limit: undefined,
+      tags: undefined,
+      retryFailed: undefined,
+    });
+  });
 });
 
 describe("DELETE /api/admin/ocr", () => {

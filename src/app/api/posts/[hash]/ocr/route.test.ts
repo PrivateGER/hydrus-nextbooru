@@ -137,4 +137,20 @@ describe("POST /api/posts/[hash]/ocr", () => {
     mockScanPost.mockRejectedValueOnce(new OcrFileMissingError("gone"));
     expect((await POST(request(), params(HASH))).status).toBe(404);
   });
+
+  it("does not throw on a literal null JSON body", async () => {
+    mockScanPost.mockResolvedValue({
+      hasText: false,
+      translationFailed: false,
+      scannedAt: new Date("2026-07-04T00:00:00Z"),
+      regions: [],
+    });
+    const nullBodyRequest = new NextRequest(`http://localhost/api/posts/${HASH}/ocr`, {
+      method: "POST",
+      body: "null",
+      headers: { "content-type": "application/json" },
+    });
+    const response = await POST(nullBodyRequest, params(HASH));
+    expect(response.status).toBe(200);
+  });
 });
