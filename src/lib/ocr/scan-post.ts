@@ -1,0 +1,185 @@
+import { readFile } from "fs/promises";
+import sharp from "sharp";
+import { prisma } from "@/lib/db";
+import { buildFilePath } from "@/lib/hydrus/paths";
+import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
+import { aiLog } from "@/lib/logger";
+import { scanImage } from "./client";
+import { normalizeRegions } from "./normalize";
+import type { NormalizedRegion, OcrRegionDto } from "./types";
+
+export interface ScannablePost {
+  id: number;
+  hash: string;
+  extension: string;
+  mimeType: string;
+}
+
+export interface ScanPostOutcome {
+  hasText: boolean;
+  translationFailed: boolean;
+  scannedAt: Date;
+  regions: OcrRegionDto[];
+}
+
+/** The post's media file is missing/unreadable on disk. Maps to 404. */
+export class OcrFileMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OcrFileMissingError";
+  }
+}
+
+/**
+ * Detection + OCR for one post. Pure with respect to the DB.
+ *
+ * @throws OcrFileMissingError | OcrServiceUnavailableError | OcrServiceResponseError
+ */
+export async function ocrPost(
+  post: ScannablePost,
+  options?: { signal?: AbortSignal }
+): Promise<NormalizedRegion[]> {
+  const filePath = buildFilePath(post.hash, post.extension);
+  let image: Buffer;
+  try {
+    image = await readFile(filePath);
+  } catch {
+    throw new OcrFileMissingError(`File not found for post ${post.hash}`);
+  }
+
+  const metadata = await sharp(image).metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new OcrFileMissingError(`Cannot read dimensions for post ${post.hash}`);
+  }
+  if (metadata.orientation && metadata.orientation > 1) {
+    // Known v1 limitation: sidecar coords are pre-rotation, browsers render
+    // post-rotation. Rare for comics; surfaced in logs only.
+    aiLog.warn(
+      { hash: post.hash, orientation: metadata.orientation },
+      "OCR on EXIF-rotated image; overlay boxes may be misaligned"
+    );
+  }
+
+  const parsed = await scanImage(image, post.mimeType, { signal: options?.signal });
+  return normalizeRegions(parsed, { width: metadata.width, height: metadata.height });
+}
+
+/**
+ * Translate normalized regions. NEVER throws for transient/model failures: a
+ * total failure yields failed=true and all-null translations so OCR results
+ * are still persisted.
+ *
+ * A 401 from OpenRouter is a configuration problem, not a transient failure,
+ * so it is rethrown for batch callers to abort on.
+ *
+ * @throws OpenRouterApiError when statusCode === 401
+ */
+export async function translateRegions(
+  regions: NormalizedRegion[],
+  targetLang?: string
+): Promise<{ translated: (string | null)[]; targetLanguage: string | null; failed: boolean }> {
+  if (regions.length === 0) {
+    return { translated: [], targetLanguage: null, failed: false };
+  }
+  try {
+    const client = await getOpenRouterClient();
+    const result = await client.translateTexts({
+      texts: regions.map((r) => r.ocrText),
+      sourceLangs: regions.map((r) => r.sourceLanguage),
+      targetLang,
+    });
+    return { translated: result.translations, targetLanguage: result.targetLang, failed: false };
+  } catch (error) {
+    if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+      throw error;
+    }
+    aiLog.error(
+      { error: error instanceof Error ? error.message : String(error), count: regions.length },
+      "OCR region translation failed; persisting OCR text only"
+    );
+    return { translated: regions.map(() => null), targetLanguage: null, failed: true };
+  }
+}
+
+/** Replace a post's regions and mark the scan COMPLETE, atomically. */
+export async function persistScan(
+  postId: number,
+  regions: NormalizedRegion[],
+  translated: (string | null)[],
+  targetLanguage: string | null
+): Promise<ScanPostOutcome> {
+  const scannedAt = new Date();
+  const rows = regions.map((region, i) => ({
+    postId,
+    readingOrder: region.readingOrder,
+    x: region.x,
+    y: region.y,
+    width: region.width,
+    height: region.height,
+    ocrText: region.ocrText,
+    translatedText: translated[i] ?? null,
+    sourceLanguage: region.sourceLanguage,
+    targetLanguage: translated[i] != null ? targetLanguage : null,
+    confidence: region.confidence,
+    angle: region.angle,
+  }));
+
+  const operations = [
+    prisma.imageTextRegion.deleteMany({ where: { postId } }),
+    ...(rows.length > 0 ? [prisma.imageTextRegion.createMany({ data: rows })] : []),
+    prisma.post.update({
+      where: { id: postId },
+      data: { ocrStatus: "COMPLETE", ocrScannedAt: scannedAt },
+    }),
+  ];
+  await prisma.$transaction(operations);
+
+  return {
+    hasText: rows.length > 0,
+    translationFailed: rows.length > 0 && rows.every((row) => row.translatedText === null),
+    scannedAt,
+    regions: rows.map((row) => ({
+      readingOrder: row.readingOrder,
+      x: row.x,
+      y: row.y,
+      width: row.width,
+      height: row.height,
+      ocrText: row.ocrText,
+      translatedText: row.translatedText,
+      sourceLanguage: row.sourceLanguage,
+    })),
+  };
+}
+
+/** Record a scan failure without touching existing regions. */
+export async function markScanFailed(postId: number): Promise<void> {
+  await prisma.post.update({ where: { id: postId }, data: { ocrStatus: "FAILED" } });
+}
+
+/**
+ * Full per-post pipeline: OCR -> translate -> persist.
+ * Sidecar/file errors mark the post FAILED and rethrow for route mapping.
+ * A 401 during translation is treated like any translation failure here: OCR
+ * regions are persisted with null translations and translationFailed is true.
+ */
+export async function scanPost(post: ScannablePost, targetLang?: string): Promise<ScanPostOutcome> {
+  let regions: NormalizedRegion[];
+  try {
+    regions = await ocrPost(post);
+  } catch (error) {
+    await markScanFailed(post.id).catch(() => {});
+    throw error;
+  }
+
+  try {
+    const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
+    const outcome = await persistScan(post.id, regions, translated, targetLanguage);
+    return { ...outcome, translationFailed: failed && outcome.hasText };
+  } catch (error) {
+    if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+      const outcome = await persistScan(post.id, regions, regions.map(() => null), null);
+      return { ...outcome, translationFailed: true };
+    }
+    throw error;
+  }
+}
