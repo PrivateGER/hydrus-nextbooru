@@ -41,6 +41,27 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
     setVisible(localStorage.getItem(VISIBILITY_KEY) !== "false");
   }, []);
 
+  // While a tooltip is open, dismiss it on Escape or a pointer press that
+  // lands outside the overlay's roots (boxes wrapper + toolbar).
+  useEffect(() => {
+    if (activeRegion === null) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveRegion(null);
+    };
+    const handleOutsidePointer = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest("[data-ocr-overlay]")) setActiveRegion(null);
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handleOutsidePointer);
+    };
+  }, [activeRegion]);
+
   const toggleVisible = () => {
     setVisible((prev) => {
       localStorage.setItem(VISIBILITY_KEY, String(!prev));
@@ -79,14 +100,18 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
     <>
       {/* Region boxes */}
       {visible && regions.length > 0 && (
-        <div className="pointer-events-none absolute inset-0 z-[5]">
+        <div className="pointer-events-none absolute inset-0 z-20" data-ocr-overlay>
           {regions.map((region) => (
             <div
               key={region.readingOrder}
               className="absolute"
               style={regionBoxStyle(region)}
-              onPointerEnter={() => setActiveRegion(region.readingOrder)}
-              onPointerLeave={() => setActiveRegion(null)}
+              onPointerEnter={(e) => {
+                if (e.pointerType !== "touch") setActiveRegion(region.readingOrder);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType !== "touch") setActiveRegion(null);
+              }}
             >
               <button
                 type="button"
@@ -105,7 +130,11 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
                   }`}
                 >
                   <p>{region.translatedText ?? region.ocrText}</p>
-                  {region.translatedText && (
+                  {region.translatedText === null ? (
+                    <p className="mt-1 text-xs italic text-zinc-400">
+                      translation failed — showing original text
+                    </p>
+                  ) : (
                     <p className="mt-1 text-xs text-zinc-400">{region.ocrText}</p>
                   )}
                 </div>
@@ -116,7 +145,10 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
       )}
 
       {/* Toolbar: top-right, hover-reveal like the nav arrows */}
-      <div className="absolute right-2 top-2 z-10 flex gap-2 lg:opacity-0 transition-opacity lg:group-hover:opacity-100">
+      <div
+        data-ocr-overlay
+        className="absolute right-2 top-2 z-20 flex gap-2 lg:opacity-0 transition-opacity lg:group-hover:opacity-100"
+      >
         {regions.length > 0 && (
           <button
             type="button"

@@ -91,6 +91,7 @@ function MediaViewerContent({
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const [showBlurhash, setShowBlurhash] = useState(false);
+  const [measuredRatio, setMeasuredRatio] = useState<number | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLImageElement>(null);
@@ -167,6 +168,15 @@ function MediaViewerContent({
     swipeStartRef.current = null;
   };
 
+  // When Post.width/height are unknown, derive the display aspect ratio from
+  // the first image that paints so overlay percentages map to the image
+  // itself, not the 16/9 letterboxed container.
+  const measureRatio = (img: HTMLImageElement) => {
+    if ((!width || !height) && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setMeasuredRatio(img.naturalWidth / img.naturalHeight);
+    }
+  };
+
   // Render blurhash to canvas
   useEffect(() => {
     if (!blurhash || !canvasRef.current) return;
@@ -199,6 +209,19 @@ function MediaViewerContent({
         if (previewCached) setPreviewLoaded(true);
         if (fullCached) setFullLoaded(true);
 
+        // onLoad does not re-fire for images already cached at mount, so
+        // derive the ratio here as well when dimensions are unknown.
+        if (!width || !height) {
+          const measured = fullCached
+            ? fullRef.current
+            : previewCached
+              ? previewRef.current
+              : null;
+          if (measured && measured.naturalWidth > 0 && measured.naturalHeight > 0) {
+            setMeasuredRatio(measured.naturalWidth / measured.naturalHeight);
+          }
+        }
+
         // Only show blurhash after 100ms if images aren't already loaded
         if (!previewCached && !fullCached) {
           timerId = setTimeout(() => setShowBlurhash(true), 100);
@@ -211,10 +234,10 @@ function MediaViewerContent({
       if (rafId2) cancelAnimationFrame(rafId2);
       if (timerId) clearTimeout(timerId);
     };
-  }, [hash]);
+  }, [hash, width, height]);
 
   // Calculate aspect ratio for stable container sizing
-  const aspectRatio = width && height ? width / height : 16 / 9;
+  const aspectRatio = width && height ? width / height : measuredRatio ?? 16 / 9;
 
   return (
     <div
@@ -290,7 +313,10 @@ function MediaViewerContent({
             ref={previewRef}
             src={`/api/thumbnails/${hash}.webp?size=preview`}
             alt=""
-            onLoad={() => setPreviewLoaded(true)}
+            onLoad={(e) => {
+              setPreviewLoaded(true);
+              measureRatio(e.currentTarget);
+            }}
             onError={() => setPreviewLoaded(true)}
             className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
               previewLoaded && !fullLoaded ? "opacity-100" : "opacity-0"
@@ -302,7 +328,10 @@ function MediaViewerContent({
             ref={fullRef}
             src={`/api/files/${hash}${extension}`}
             alt=""
-            onLoad={() => setFullLoaded(true)}
+            onLoad={(e) => {
+              setFullLoaded(true);
+              measureRatio(e.currentTarget);
+            }}
             onError={() => setFullLoaded(true)}
             className={`h-full w-full object-contain transition-opacity duration-300 ${
               fullLoaded ? "opacity-100" : "opacity-0"
@@ -315,7 +344,7 @@ function MediaViewerContent({
         </div>
       )}
 
-      {isImage && (
+      {isImage && ((width && height) || measuredRatio) && (
         <TextOverlay
           hash={hash}
           initialRegions={textRegions ?? []}
