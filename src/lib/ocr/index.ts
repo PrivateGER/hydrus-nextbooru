@@ -20,3 +20,12 @@ export type {
   NormalizedRegion,
   OcrRegionDto,
 } from "./types";
+export {
+  acquireOcrBatchLock,
+  requestOcrBatchCancel,
+  selectOcrBatchPosts,
+  runOcrBatch,
+  getOcrAdminStatus,
+  type OcrBatchOptions,
+  type OcrBatchResult,
+} from "./batch";
