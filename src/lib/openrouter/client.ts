@@ -1,11 +1,14 @@
 import type {
   OpenRouterClientConfig,
+  ChatMessage,
   ChatCompletionRequest,
   ChatCompletionResponse,
   TranslationRequest,
   TranslationResult,
   ImageTranslationRequest,
   ImageTranslationResult,
+  TextsTranslationRequest,
+  TextsTranslationResult,
   EmbeddingRequest,
   EmbeddingResponse,
   EmbeddingResult,
@@ -14,6 +17,7 @@ import type {
   EmbeddingMultimodalInput,
 } from "./types";
 import { DEFAULT_CHAT_MODEL, EMBEDDING_INPUT_TYPES } from "./types";
+import pLimit from "p-limit";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
 
@@ -222,6 +226,87 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
       sourceLang: sourceLangCode,
       targetLang,
     };
+  }
+
+  /**
+   * Translate a batch of texts (comic page regions, reading order) in ONE
+   * text-only completion. Falls back to per-text translate() when the model
+   * cannot produce a parseable aligned JSON array.
+   */
+  async translateTexts(request: TextsTranslationRequest): Promise<TextsTranslationResult> {
+    const targetLang = request.targetLang || this.defaultTargetLang;
+    if (request.texts.length === 0) {
+      return { translations: [], targetLang };
+    }
+    const targetLangName = this.getLanguageName(targetLang);
+
+    const numbered = request.texts.map((text, i) => ({
+      index: i,
+      language: request.sourceLangs?.[i] ?? undefined,
+      text,
+    }));
+
+    const systemPrompt = `You are a professional translator for comics and illustrations.
+You receive the text regions of ONE page in reading order as a JSON array.
+Translate every region into ${targetLangName}, using surrounding regions as context.
+Keep honorifics and names natural; keep onomatopoeia short.
+
+Respond with ONLY a JSON array of ${request.texts.length} strings — the translations
+in the same order. No markdown, no code fences, no commentary.`;
+
+    const userPrompt = JSON.stringify(numbered);
+    const messages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ];
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const completion = await this.chatCompletion({ messages, max_tokens: 4096 });
+      const content = completion.choices[0]?.message?.content?.trim() || "";
+      const parsed = this.parseTranslationArray(content, request.texts.length);
+      if (parsed) {
+        return { translations: parsed, targetLang };
+      }
+      aiLog.warn(
+        { attempt, contentPreview: content.slice(0, 200) },
+        "translateTexts: unparseable batch response"
+      );
+      messages.push(
+        { role: "assistant", content },
+        {
+          role: "user",
+          content: `That was not a valid JSON array of exactly ${request.texts.length} strings. Respond with ONLY the JSON array.`,
+        }
+      );
+    }
+
+    // Fallback: per-text translation, bounded concurrency.
+    aiLog.warn({ count: request.texts.length }, "translateTexts: falling back to per-text calls");
+    const limit = pLimit(3);
+    const translations = await Promise.all(
+      request.texts.map((text) =>
+        limit(async () => (await this.translate({ text, targetLang })).translatedText)
+      )
+    );
+    return { translations, targetLang };
+  }
+
+  /** Parse a strict JSON string array of the expected length; null when invalid. */
+  private parseTranslationArray(content: string, expectedLength: number): string[] | null {
+    const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    try {
+      const parsed = JSON.parse(unfenced);
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === expectedLength &&
+        parsed.every((item) => typeof item === "string")
+      ) {
+        return parsed;
+      }
+    } catch {
+      // fall through
+    }
+    return null;
   }
 
   /**

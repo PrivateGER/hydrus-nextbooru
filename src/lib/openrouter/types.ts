@@ -73,6 +73,20 @@ export interface ImageTranslationResult {
   hasText: boolean;
 }
 
+export interface TextsTranslationRequest {
+  /** Source texts in reading order. */
+  texts: string[];
+  /** Optional per-text language hints, aligned with texts. */
+  sourceLangs?: (string | null)[];
+  targetLang?: string;
+}
+
+export interface TextsTranslationResult {
+  /** Translations aligned index-for-index with the request texts. */
+  translations: string[];
+  targetLang: string;
+}
+
 export interface EmbeddingContentText {
   type: "text";
   text: string;
