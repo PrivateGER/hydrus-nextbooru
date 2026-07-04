@@ -3,6 +3,7 @@
 import {
   CloudArrowDownIcon,
   CircleStackIcon,
+  DocumentMagnifyingGlassIcon,
   FingerPrintIcon,
   LanguageIcon,
   PhotoIcon,
@@ -17,6 +18,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "phash", label: "Similarity", icon: FingerPrintIcon, description: "Perceptual image hashing" },
   { id: "embeddings", label: "Embeddings", icon: CircleStackIcon, description: "Semantic image search" },
   { id: "translation", label: "Translation", icon: LanguageIcon, description: "Configure AI translation" },
+  { id: "ocr", label: "OCR", icon: DocumentMagnifyingGlassIcon, description: "Positioned text recognition & overlay" },
   { id: "maintenance", label: "Maintenance", icon: WrenchScrewdriverIcon, description: "Database utilities" },
   { id: "help", label: "Help", icon: QuestionMarkCircleIcon, description: "Documentation & tips" },
 ];
