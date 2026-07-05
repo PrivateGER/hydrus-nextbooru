@@ -23,6 +23,34 @@ export interface ScanPostOutcome {
   regions: OcrRegionDto[];
 }
 
+const cropWriteTails = new Map<string, Promise<void>>();
+
+/**
+ * Serialize crop-file replacement plus the matching DB transaction per post.
+ * Batch-vs-manual rescans can otherwise interleave rm/write on the same crop
+ * directory while a different transaction wins the database race.
+ */
+export async function withPostCropWriteLock<T>(hash: string, work: () => Promise<T>): Promise<T> {
+  const key = hash.toLowerCase();
+  const previous = cropWriteTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => current);
+  cropWriteTails.set(key, tail);
+
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+    if (cropWriteTails.get(key) === tail) {
+      cropWriteTails.delete(key);
+    }
+  }
+}
+
 /** The post's media file is missing/unreadable on disk. Maps to 404. */
 export class OcrFileMissingError extends Error {
   constructor(message: string) {
@@ -183,13 +211,17 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
 
   try {
     const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
-    const hasCrops = await storeCrops(post.hash, regions);
-    const outcome = await persistScan(post, regions, translated, targetLanguage, hasCrops);
+    const outcome = await withPostCropWriteLock(post.hash, async () => {
+      const hasCrops = await storeCrops(post.hash, regions);
+      return persistScan(post, regions, translated, targetLanguage, hasCrops);
+    });
     return { ...outcome, translationFailed: failed && outcome.hasText };
   } catch (error) {
     if (error instanceof OpenRouterApiError && error.statusCode === 401) {
-      const hasCrops = await storeCrops(post.hash, regions);
-      const outcome = await persistScan(post, regions, regions.map(() => null), null, hasCrops);
+      const outcome = await withPostCropWriteLock(post.hash, async () => {
+        const hasCrops = await storeCrops(post.hash, regions);
+        return persistScan(post, regions, regions.map(() => null), null, hasCrops);
+      });
       return { ...outcome, translationFailed: true };
     }
     throw error;

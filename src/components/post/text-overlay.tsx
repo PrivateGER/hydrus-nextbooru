@@ -153,7 +153,7 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
           {regions.map((region) =>
             mode === "typeset" && region.hasCrop ? (
               <TypesetRegion
-                key={region.readingOrder}
+                key={`${region.readingOrder}-${region.cropVersion}`}
                 hash={hash}
                 region={region}
                 activeRegion={activeRegion}

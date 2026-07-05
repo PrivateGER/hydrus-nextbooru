@@ -7,6 +7,7 @@ import {
   ocrPost,
   persistScan,
   translateRegions,
+  withPostCropWriteLock,
   type ScannablePost,
 } from "./scan-post";
 import { storeCrops } from "./crops";
@@ -206,16 +207,20 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
               regions,
               options.targetLang
             );
-            const hasCrops = await storeCrops(post.hash, regions);
-            await persistScan(post, regions, translated, targetLanguage, hasCrops);
+            await withPostCropWriteLock(post.hash, async () => {
+              const hasCrops = await storeCrops(post.hash, regions);
+              await persistScan(post, regions, translated, targetLanguage, hasCrops);
+            });
             result.processed++;
             await updateProgress(1, 0);
           } catch (error) {
             if (error instanceof OpenRouterApiError && error.statusCode === 401) {
               abortError = error;
               // Persist OCR-only so the scan work is not lost.
-              const hasCrops = await storeCrops(post.hash, regions);
-              await persistScan(post, regions, regions.map(() => null), null, hasCrops).catch(() => {});
+              await withPostCropWriteLock(post.hash, async () => {
+                const hasCrops = await storeCrops(post.hash, regions);
+                await persistScan(post, regions, regions.map(() => null), null, hasCrops).catch(() => {});
+              });
               result.processed++;
               await updateProgress(1, 0);
               return;

@@ -58,7 +58,7 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
 
-import { scanPost, translateRegions, OcrFileMissingError } from "./scan-post";
+import { scanPost, translateRegions, OcrFileMissingError, withPostCropWriteLock } from "./scan-post";
 import { OcrServiceUnavailableError } from "./errors";
 import { OpenRouterApiError } from "@/lib/openrouter";
 import type { NormalizedRegion } from "./types";
@@ -217,6 +217,29 @@ describe("scanPost", () => {
       where: { id: 7 },
       data: { ocrStatus: "FAILED" },
     });
+  });
+
+  it("serializes crop writes and persistence for the same hash", async () => {
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const first = withPostCropWriteLock(POST.hash, async () => {
+      events.push("first-start");
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      events.push("first-end");
+    });
+    const second = withPostCropWriteLock(POST.hash, async () => {
+      events.push("second-start");
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(["first-start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual(["first-start", "first-end", "second-start"]);
   });
 });
 
