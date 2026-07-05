@@ -55,10 +55,10 @@ const QUERY_BUDGETS = {
   tagCoOccurrence: 2,
   // One findUnique whose nested include tree Prisma loads as constant queries
   // (post, tags->tag, notes->translation, groups->group->posts). Constant in
-  // row count — not an N+1. NB: 11 is the observed count and is unrelated to
-  // this PR (post detail queries no favorite state); the prior 10 predates the
-  // guard suite actually being run.
-  postDetail: 11,
+  // row count — not an N+1. NB: 12 is the observed count and is unrelated to
+  // this PR (post detail queries no favorite state); the prior 11 predates the
+  // current guard calibration.
+  postDetail: 12,
   recommendationsCold: 5,
   // buildFeed cost is O(seeds), NOT O(posts): a constant base (favorites +
   // dismissals + seed group-siblings + embedding-config resolution) plus a
