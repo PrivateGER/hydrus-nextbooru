@@ -242,6 +242,9 @@ model ImageTextRegion {
   targetLanguage String?
   confidence     Float? // sidecar OCR prob
   angle          Float? // rotation degrees; stored, not rendered in v1
+  hasCrop        Boolean  @default(false) // inpainted bubble crop stored on disk
+  textColorFg    String? // hex "#rrggbb" detected text foreground
+  textColorBg    String? // hex detected text background
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
