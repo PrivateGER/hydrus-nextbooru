@@ -9,6 +9,7 @@ import {
   translateRegions,
   type ScannablePost,
 } from "./scan-post";
+import { storeCrops } from "./crops";
 import type { NormalizedRegion } from "./types";
 
 const TRANSLATE_CONCURRENCY = 3;
@@ -205,14 +206,16 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
               regions,
               options.targetLang
             );
-            await persistScan(post.id, regions, translated, targetLanguage);
+            const hasCrops = await storeCrops(post.hash, regions);
+            await persistScan(post, regions, translated, targetLanguage, hasCrops);
             result.processed++;
             await updateProgress(1, 0);
           } catch (error) {
             if (error instanceof OpenRouterApiError && error.statusCode === 401) {
               abortError = error;
               // Persist OCR-only so the scan work is not lost.
-              await persistScan(post.id, regions, regions.map(() => null), null).catch(() => {});
+              const hasCrops = await storeCrops(post.hash, regions);
+              await persistScan(post, regions, regions.map(() => null), null, hasCrops).catch(() => {});
               result.processed++;
               await updateProgress(1, 0);
               return;

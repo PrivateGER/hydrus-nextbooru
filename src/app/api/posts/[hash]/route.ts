@@ -150,6 +150,10 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
                 ocrText: region.ocrText,
                 translatedText: region.translatedText,
                 sourceLanguage: region.sourceLanguage,
+                hasCrop: region.hasCrop,
+                textColorFg: region.textColorFg,
+                textColorBg: region.textColorBg,
+                cropVersion: post.ocrScannedAt?.getTime() ?? 0,
               })),
             }
           : null,

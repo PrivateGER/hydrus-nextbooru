@@ -11,6 +11,7 @@ const {
   mockRegionFindMany,
   mockPostUpdate,
   mockTransaction,
+  mockStoreCrops,
 } = vi.hoisted(() => ({
   mockReadFile: vi.fn(),
   mockMetadata: vi.fn(),
@@ -21,6 +22,7 @@ const {
   mockRegionFindMany: vi.fn(),
   mockPostUpdate: vi.fn(),
   mockTransaction: vi.fn(async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
+  mockStoreCrops: vi.fn(),
 }));
 
 vi.mock("fs/promises", () => ({ readFile: mockReadFile }));
@@ -54,6 +56,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
+
 import { scanPost, translateRegions, OcrFileMissingError } from "./scan-post";
 import { OcrServiceUnavailableError } from "./errors";
 import { OpenRouterApiError } from "@/lib/openrouter";
@@ -71,6 +75,9 @@ const normalized = (overrides: Partial<NormalizedRegion> = {}): NormalizedRegion
   sourceLanguage: "ja",
   confidence: 0.9,
   angle: 0,
+  cropBase64: null,
+  textColorFg: null,
+  textColorBg: null,
   ...overrides,
 });
 
@@ -80,12 +87,13 @@ beforeEach(() => {
   mockReadFile.mockResolvedValue(Buffer.from([1]));
   mockMetadata.mockResolvedValue({ width: 1000, height: 2000, orientation: undefined });
   mockRegionFindMany.mockResolvedValue([]);
+  mockStoreCrops.mockResolvedValue([true]);
 });
 
 describe("scanPost", () => {
   it("persists regions with translations and marks the post COMPLETE", async () => {
     mockScanImage.mockResolvedValue([
-      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0 },
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
     ]);
     mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
 
@@ -93,13 +101,52 @@ describe("scanPost", () => {
 
     expect(outcome.hasText).toBe(true);
     expect(outcome.translationFailed).toBe(false);
-    expect(outcome.regions[0]).toMatchObject({ ocrText: "\u3053\u3093", translatedText: "Hey" });
+    expect(outcome.regions[0]).toMatchObject({
+      ocrText: "\u3053\u3093",
+      translatedText: "Hey",
+      hasCrop: true,
+      textColorFg: "#111111",
+      textColorBg: "#eeeeee",
+    });
+    expect(typeof outcome.regions[0].cropVersion).toBe("number");
+    expect(mockStoreCrops).toHaveBeenCalledWith(
+      POST.hash,
+      expect.arrayContaining([expect.objectContaining({ readingOrder: 0, cropBase64: "abc" })])
+    );
     expect(mockRegionDeleteMany).toHaveBeenCalledWith({ where: { postId: 7 } });
     expect(mockRegionCreateMany).toHaveBeenCalledWith({
       data: [
-        expect.objectContaining({ postId: 7, readingOrder: 0, translatedText: "Hey", targetLanguage: "en" }),
+        expect.objectContaining({
+          postId: 7,
+          readingOrder: 0,
+          translatedText: "Hey",
+          targetLanguage: "en",
+          hasCrop: true,
+          textColorFg: "#111111",
+          textColorBg: "#eeeeee",
+        }),
       ],
     });
+    expect(mockPostUpdate).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
+    });
+  });
+
+  it("persists rows with hasCrop false and still COMPLETE when crop storage fails", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: null, textColorBg: null },
+    ]);
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
+    mockStoreCrops.mockResolvedValue([false]);
+
+    const outcome = await scanPost(POST);
+
+    expect(mockStoreCrops).toHaveBeenCalledWith(POST.hash, expect.any(Array));
+    expect(mockRegionCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ postId: 7, hasCrop: false })],
+    });
+    expect(outcome.regions[0].hasCrop).toBe(false);
     expect(mockPostUpdate).toHaveBeenCalledWith({
       where: { id: 7 },
       data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
@@ -143,8 +190,9 @@ describe("scanPost", () => {
     expect(outcome.hasText).toBe(true);
     expect(outcome.translationFailed).toBe(true);
     expect(outcome.regions[0].translatedText).toBeNull();
+    expect(mockStoreCrops).toHaveBeenCalledWith(POST.hash, expect.any(Array));
     expect(mockRegionCreateMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ postId: 7, translatedText: null, targetLanguage: null })],
+      data: [expect.objectContaining({ postId: 7, translatedText: null, targetLanguage: null, hasCrop: true })],
     });
     expect(mockPostUpdate).toHaveBeenCalledWith({
       where: { id: 7 },

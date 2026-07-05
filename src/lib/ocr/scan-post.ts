@@ -6,6 +6,7 @@ import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 import { scanImage } from "./client";
 import { normalizeRegions } from "./normalize";
+import { storeCrops } from "./crops";
 import type { NormalizedRegion, OcrRegionDto } from "./types";
 
 export interface ScannablePost {
@@ -103,14 +104,15 @@ export async function translateRegions(
 
 /** Replace a post's regions and mark the scan COMPLETE, atomically. */
 export async function persistScan(
-  postId: number,
+  post: { id: number; hash: string },
   regions: NormalizedRegion[],
   translated: (string | null)[],
-  targetLanguage: string | null
+  targetLanguage: string | null,
+  hasCrops: boolean[]
 ): Promise<ScanPostOutcome> {
   const scannedAt = new Date();
   const rows = regions.map((region, i) => ({
-    postId,
+    postId: post.id,
     readingOrder: region.readingOrder,
     x: region.x,
     y: region.y,
@@ -122,18 +124,22 @@ export async function persistScan(
     targetLanguage: translated[i] != null ? targetLanguage : null,
     confidence: region.confidence,
     angle: region.angle,
+    hasCrop: hasCrops[i] ?? false,
+    textColorFg: region.textColorFg,
+    textColorBg: region.textColorBg,
   }));
 
   const operations = [
-    prisma.imageTextRegion.deleteMany({ where: { postId } }),
+    prisma.imageTextRegion.deleteMany({ where: { postId: post.id } }),
     ...(rows.length > 0 ? [prisma.imageTextRegion.createMany({ data: rows })] : []),
     prisma.post.update({
-      where: { id: postId },
+      where: { id: post.id },
       data: { ocrStatus: "COMPLETE", ocrScannedAt: scannedAt },
     }),
   ];
   await prisma.$transaction(operations);
 
+  const cropVersion = scannedAt.getTime();
   return {
     hasText: rows.length > 0,
     translationFailed: rows.length > 0 && rows.every((row) => row.translatedText === null),
@@ -147,6 +153,10 @@ export async function persistScan(
       ocrText: row.ocrText,
       translatedText: row.translatedText,
       sourceLanguage: row.sourceLanguage,
+      hasCrop: row.hasCrop,
+      textColorFg: row.textColorFg,
+      textColorBg: row.textColorBg,
+      cropVersion,
     })),
   };
 }
@@ -173,11 +183,13 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
 
   try {
     const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
-    const outcome = await persistScan(post.id, regions, translated, targetLanguage);
+    const hasCrops = await storeCrops(post.hash, regions);
+    const outcome = await persistScan(post, regions, translated, targetLanguage, hasCrops);
     return { ...outcome, translationFailed: failed && outcome.hasText };
   } catch (error) {
     if (error instanceof OpenRouterApiError && error.statusCode === 401) {
-      const outcome = await persistScan(post.id, regions, regions.map(() => null), null);
+      const hasCrops = await storeCrops(post.hash, regions);
+      const outcome = await persistScan(post, regions, regions.map(() => null), null, hasCrops);
       return { ...outcome, translationFailed: true };
     }
     throw error;

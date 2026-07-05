@@ -12,6 +12,7 @@ const {
   mockPostFindMany,
   mockPostCount,
   mockRegionCount,
+  mockStoreCrops,
 } = vi.hoisted(() => ({
   mockOcrPost: vi.fn(),
   mockTranslateRegions: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockPostFindMany: vi.fn(),
   mockPostCount: vi.fn(),
   mockRegionCount: vi.fn(),
+  mockStoreCrops: vi.fn(),
 }));
 
 vi.mock("./scan-post", async (importOriginal) => {
@@ -48,6 +50,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
+
 import { acquireOcrBatchLock, runOcrBatch, selectOcrBatchPosts } from "./batch";
 import { OpenRouterApiError } from "@/lib/openrouter";
 
@@ -65,6 +69,7 @@ beforeEach(() => {
     scannedAt: new Date(),
     regions: [],
   });
+  mockStoreCrops.mockResolvedValue([true]);
 });
 
 describe("acquireOcrBatchLock", () => {
@@ -126,6 +131,14 @@ describe("runOcrBatch", () => {
     expect(result.processed).toBe(2);
     expect(result.failed).toBe(0);
     expect(mockOcrPost).toHaveBeenCalledTimes(2);
+    expect(mockStoreCrops).toHaveBeenCalledWith(post(1).hash, expect.any(Array));
+    expect(mockPersistScan).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, hash: post(1).hash }),
+      expect.any(Array),
+      expect.any(Array),
+      "en",
+      [true]
+    );
   });
 
   it("continues after per-post OCR failures and counts them", async () => {
@@ -149,6 +162,17 @@ describe("runOcrBatch", () => {
     const result = await runOcrBatch({});
     expect(result.status).toBe("error");
     expect(mockOcrPost).toHaveBeenCalledTimes(1); // second post never scanned
+    expect(mockStoreCrops).toHaveBeenCalledWith(post(1).hash, expect.any(Array));
+    expect(mockPersistScan).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: post(1).hash }),
+      expect.any(Array),
+      [null],
+      null,
+      [true]
+    );
+    expect(mockStoreCrops.mock.invocationCallOrder[0]).toBeLessThan(
+      mockPersistScan.mock.invocationCallOrder[0]
+    );
   });
 
   it("stops between posts when cancellation was requested", async () => {
