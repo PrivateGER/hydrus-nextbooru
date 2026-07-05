@@ -82,8 +82,8 @@ export interface TextsTranslationRequest {
 }
 
 export interface TextsTranslationResult {
-  /** Translations aligned index-for-index with the request texts. */
-  translations: string[];
+  /** Translations aligned index-for-index with the request texts; null marks a per-text fallback failure. */
+  translations: (string | null)[];
   targetLang: string;
 }
 

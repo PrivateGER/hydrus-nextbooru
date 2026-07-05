@@ -13,6 +13,14 @@ const completionResponse = (content: string) => ({
   text: vi.fn().mockResolvedValue(""),
 });
 
+const errorResponse = (status: number) => ({
+  ok: false,
+  status,
+  statusText: status === 401 ? "Unauthorized" : "Server Error",
+  json: vi.fn().mockResolvedValue({}),
+  text: vi.fn().mockResolvedValue("error body"),
+});
+
 describe("OpenRouterClient.translateTexts", () => {
   const originalFetch = global.fetch;
   let client: OpenRouterClient;
@@ -90,5 +98,34 @@ describe("OpenRouterClient.translateTexts", () => {
       .mockResolvedValueOnce(completionResponse('["ok","fine"]'));
     const result = await client.translateTexts({ texts: ["a", "b"] });
     expect(result.translations).toEqual(["ok", "fine"]);
+  });
+
+  it("rethrows a 401 batch error without attempting per-text fallback", async () => {
+    (global.fetch as Mock).mockResolvedValueOnce(errorResponse(401));
+    await expect(client.translateTexts({ texts: ["a", "b"] })).rejects.toThrow();
+    // No fallback calls: the batch request is the only fetch.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to per-text calls when the batch request fails with a non-401 error", async () => {
+    (global.fetch as Mock)
+      .mockResolvedValueOnce(errorResponse(500))
+      .mockResolvedValueOnce(completionResponse("LANGUAGE: Japanese\nTRANSLATION:\nOne"))
+      .mockResolvedValueOnce(completionResponse("LANGUAGE: Japanese\nTRANSLATION:\nTwo"));
+    const result = await client.translateTexts({ texts: ["a", "b"] });
+    expect(result.translations).toEqual(["One", "Two"]);
+    // 1 failed batch attempt + 2 per-text fallback calls.
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves successful per-text translations when one individual call fails", async () => {
+    (global.fetch as Mock)
+      .mockResolvedValueOnce(completionResponse("not json"))
+      .mockResolvedValueOnce(completionResponse("still not json"))
+      .mockResolvedValueOnce(completionResponse("LANGUAGE: Japanese\nTRANSLATION:\nOne"))
+      .mockResolvedValueOnce(errorResponse(500));
+    const result = await client.translateTexts({ texts: ["a", "b"] });
+    expect(result.translations).toEqual(["One", null]);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 });

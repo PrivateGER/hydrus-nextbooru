@@ -261,8 +261,21 @@ in the same order. No markdown, no code fences, no commentary.`;
     ];
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const completion = await this.chatCompletion({ messages, max_tokens: 4096 });
-      const content = completion.choices[0]?.message?.content?.trim() || "";
+      let content: string;
+      try {
+        const completion = await this.chatCompletion({ messages, max_tokens: 4096 });
+        content = completion.choices[0]?.message?.content?.trim() || "";
+      } catch (error) {
+        // 401 is a configuration problem, not a transient failure — abort.
+        if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+          throw error;
+        }
+        aiLog.warn(
+          { attempt, error: error instanceof Error ? error.message : String(error) },
+          "translateTexts: batch request failed; falling back to per-text calls"
+        );
+        break;
+      }
       const parsed = this.parseTranslationArray(content, request.texts.length);
       if (parsed) {
         return { translations: parsed, targetLang };
@@ -280,14 +293,28 @@ in the same order. No markdown, no code fences, no commentary.`;
       );
     }
 
-    // Fallback: per-text translation, bounded concurrency.
+    // Fallback: per-text translation, bounded concurrency. Preserve partial
+    // successes — one failed individual translation must not lose the others.
     aiLog.warn({ count: request.texts.length }, "translateTexts: falling back to per-text calls");
     const limit = pLimit(3);
-    const translations = await Promise.all(
+    const settled = await Promise.allSettled(
       request.texts.map((text) =>
         limit(async () => (await this.translate({ text, targetLang })).translatedText)
       )
     );
+    const translations = settled.map((outcome, index) => {
+      if (outcome.status === "fulfilled") {
+        return outcome.value;
+      }
+      aiLog.warn(
+        {
+          index,
+          error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+        },
+        "translateTexts: per-text fallback failed for region"
+      );
+      return null;
+    });
     return { translations, targetLang };
   }
 
