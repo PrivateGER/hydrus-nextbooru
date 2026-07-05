@@ -120,5 +120,5 @@ and start it on demand.
 Typeset view is a third viewer overlay state: it places LaMa-inpainted bubble crops back over
 the original image and renders the configured LLM's translations as selectable fitted text.
 Inpainting is heavier than hover notes (`lama_large` by default); if VRAM is constrained, tune
-`src/lib/ocr/config.ts` to use `lama_mpe` or a lower `inpainting_size`. Posts scanned before
+the `inpainter` in `src/lib/ocr/config.ts` to a lighter model such as `lama_mpe`. Posts scanned before
 typeset support need a rescan before the typeset state is available.
