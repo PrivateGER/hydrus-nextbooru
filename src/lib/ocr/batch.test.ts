@@ -7,7 +7,7 @@ const {
   mockPersistScan,
   mockMarkScanFailed,
   mockBatchUpdateMany,
-  mockBatchFindFirst,
+  mockBatchFindUnique,
   mockBatchCreate,
   mockPostFindMany,
   mockPostCount,
@@ -19,7 +19,7 @@ const {
   mockPersistScan: vi.fn(),
   mockMarkScanFailed: vi.fn(),
   mockBatchUpdateMany: vi.fn(),
-  mockBatchFindFirst: vi.fn(),
+  mockBatchFindUnique: vi.fn(),
   mockBatchCreate: vi.fn(),
   mockPostFindMany: vi.fn(),
   mockPostCount: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     ocrBatchState: {
       updateMany: mockBatchUpdateMany,
-      findFirst: mockBatchFindFirst,
+      findUnique: mockBatchFindUnique,
       create: mockBatchCreate,
     },
     post: { findMany: mockPostFindMany, count: mockPostCount },
@@ -52,7 +52,13 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
 
-import { acquireOcrBatchLock, runOcrBatch, selectOcrBatchPosts } from "./batch";
+import {
+  acquireOcrBatchLock,
+  getOcrAdminStatus,
+  requestOcrBatchCancel,
+  runOcrBatch,
+  selectOcrBatchPosts,
+} from "./batch";
 import { OpenRouterApiError } from "@/lib/openrouter";
 
 const post = (id: number) => ({ id, hash: `${id}`.padStart(64, "0"), extension: ".png", mimeType: "image/png" });
@@ -60,7 +66,7 @@ const post = (id: number) => ({ id, hash: `${id}`.padStart(64, "0"), extension: 
 beforeEach(() => {
   vi.clearAllMocks();
   mockBatchUpdateMany.mockResolvedValue({ count: 1 });
-  mockBatchFindFirst.mockResolvedValue({ status: "running" });
+  mockBatchFindUnique.mockResolvedValue({ status: "running" });
   mockMarkScanFailed.mockResolvedValue(undefined);
   mockTranslateRegions.mockResolvedValue({ translated: [], targetLanguage: "en", failed: false });
   mockPersistScan.mockResolvedValue({
@@ -78,20 +84,20 @@ describe("acquireOcrBatchLock", () => {
     await expect(acquireOcrBatchLock()).resolves.toBe(true);
     expect(mockBatchUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: { notIn: ["running", "cancelling"] } },
+        where: { key: "singleton", status: { notIn: ["running", "cancelling"] } },
       })
     );
   });
 
   it("loses when a row exists but is running", async () => {
     mockBatchUpdateMany.mockResolvedValueOnce({ count: 0 });
-    mockBatchFindFirst.mockResolvedValueOnce({ status: "running" });
+    mockBatchFindUnique.mockResolvedValueOnce({ status: "running" });
     await expect(acquireOcrBatchLock()).resolves.toBe(false);
   });
 
   it("creates the row when none exists", async () => {
     mockBatchUpdateMany.mockResolvedValueOnce({ count: 0 });
-    mockBatchFindFirst.mockResolvedValueOnce(null);
+    mockBatchFindUnique.mockResolvedValueOnce(null);
     mockBatchCreate.mockResolvedValueOnce({});
     await expect(acquireOcrBatchLock()).resolves.toBe(true);
   });
@@ -179,12 +185,90 @@ describe("runOcrBatch", () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
     mockOcrPost.mockResolvedValue([]);
     // First status poll: running; second: cancelling.
-    mockBatchFindFirst
+    mockBatchFindUnique
       .mockResolvedValueOnce({ status: "running" })
       .mockResolvedValueOnce({ status: "cancelling" });
 
     const result = await runOcrBatch({});
     expect(result.status).toBe("cancelled");
     expect(mockOcrPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the post FAILED on a non-401 persist error in the pool", async () => {
+    mockPostFindMany.mockResolvedValue([post(1)]);
+    mockOcrPost.mockResolvedValue([
+      { readingOrder: 0, x: 0, y: 0, width: 1, height: 1, ocrText: "t", sourceLanguage: "ja", confidence: null, angle: null },
+    ]);
+    // Non-401 failure in the translate+persist pool.
+    mockPersistScan.mockRejectedValueOnce(new Error("db down"));
+
+    const result = await runOcrBatch({});
+    expect(result.status).toBe("completed");
+    expect(result.processed).toBe(0);
+    expect(result.failed).toBe(1);
+    // Must not leave the post silently PENDING; a retry pass depends on FAILED.
+    expect(mockMarkScanFailed).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("requestOcrBatchCancel", () => {
+  it("flips the running singleton to cancelling and reports true", async () => {
+    mockBatchUpdateMany.mockResolvedValueOnce({ count: 1 });
+    await expect(requestOcrBatchCancel()).resolves.toBe(true);
+    expect(mockBatchUpdateMany).toHaveBeenCalledWith({
+      where: { key: "singleton", status: "running" },
+      data: { status: "cancelling" },
+    });
+  });
+
+  it("reports false when no batch is running", async () => {
+    mockBatchUpdateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(requestOcrBatchCancel()).resolves.toBe(false);
+  });
+});
+
+describe("getOcrAdminStatus", () => {
+  it("aggregates post counts with the singleton batch state", async () => {
+    // Promise.all order: PENDING, COMPLETE, FAILED counts, then regions.
+    mockPostCount.mockResolvedValueOnce(3).mockResolvedValueOnce(5).mockResolvedValueOnce(2);
+    mockRegionCount.mockResolvedValueOnce(42);
+    mockBatchFindUnique.mockResolvedValueOnce({
+      status: "running",
+      totalPosts: 10,
+      processedPosts: 4,
+      failedPosts: 1,
+      errorMessage: null,
+    });
+
+    const status = await getOcrAdminStatus();
+    expect(status).toEqual({
+      pendingImages: 3,
+      completeImages: 5,
+      failedImages: 2,
+      totalRegions: 42,
+      batch: {
+        status: "running",
+        totalPosts: 10,
+        processedPosts: 4,
+        failedPosts: 1,
+        errorMessage: null,
+      },
+    });
+    expect(mockBatchFindUnique).toHaveBeenCalledWith({ where: { key: "singleton" } });
+  });
+
+  it("falls back to idle defaults when no batch row exists", async () => {
+    mockPostCount.mockResolvedValue(0);
+    mockRegionCount.mockResolvedValueOnce(0);
+    mockBatchFindUnique.mockResolvedValueOnce(null);
+
+    const status = await getOcrAdminStatus();
+    expect(status.batch).toEqual({
+      status: "idle",
+      totalPosts: 0,
+      processedPosts: 0,
+      failedPosts: 0,
+      errorMessage: null,
+    });
   });
 });

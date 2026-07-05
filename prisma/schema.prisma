@@ -249,12 +249,13 @@ model ImageTextRegion {
   updatedAt      DateTime @updatedAt
 
   @@unique([postId, readingOrder])
-  @@index([postId])
 }
 
-// Single-row batch state; the atomic lock for admin OCR batches (SyncState pattern)
+// Single-row batch state; the atomic lock for admin OCR batches (SyncState pattern).
+// `key` is a fixed unique value so the table can hold at most one (singleton) row.
 model OcrBatchState {
   id             Int       @id @default(autoincrement())
+  key            String    @unique @default("singleton")
   status         String    @default("idle") // idle, running, cancelling, completed, error, cancelled
   totalPosts     Int       @default(0)
   processedPosts Int       @default(0)

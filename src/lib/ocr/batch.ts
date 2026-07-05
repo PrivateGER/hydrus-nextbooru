@@ -17,6 +17,7 @@ const TRANSLATE_CONCURRENCY = 3;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 10000;
 const MAX_ERROR_ENTRIES = 10;
+const SINGLETON_KEY = "singleton";
 
 export interface OcrBatchOptions {
   limit?: number;
@@ -49,20 +50,26 @@ export async function acquireOcrBatchLock(): Promise<boolean> {
   };
 
   const claimed = await prisma.ocrBatchState.updateMany({
-    where: { status: { notIn: ["running", "cancelling"] } },
+    where: { key: SINGLETON_KEY, status: { notIn: ["running", "cancelling"] } },
     data: runningData,
   });
   if (claimed.count > 0) return true;
 
-  const existing = await prisma.ocrBatchState.findFirst({ select: { status: true } });
+  const existing = await prisma.ocrBatchState.findUnique({
+    where: { key: SINGLETON_KEY },
+    select: { status: true },
+  });
   if (existing) return false;
 
   try {
-    await prisma.ocrBatchState.create({ data: runningData });
+    // The unique `key` guarantees at most one row, so a racing create loses here.
+    await prisma.ocrBatchState.create({ data: { key: SINGLETON_KEY, ...runningData } });
     return true;
   } catch {
+    // Lost the create race (unique violation) or the singleton row appeared
+    // between our read and write; re-run the conditional claim against it.
     const retry = await prisma.ocrBatchState.updateMany({
-      where: { status: { notIn: ["running", "cancelling"] } },
+      where: { key: SINGLETON_KEY, status: { notIn: ["running", "cancelling"] } },
       data: runningData,
     });
     return retry.count > 0;
@@ -76,7 +83,7 @@ let activeBatchAbort: AbortController | null = null;
 /** Request cancellation of a running batch. True when a batch was running. */
 export async function requestOcrBatchCancel(): Promise<boolean> {
   const updated = await prisma.ocrBatchState.updateMany({
-    where: { status: "running" },
+    where: { key: SINGLETON_KEY, status: "running" },
     data: { status: "cancelling" },
   });
   // Abort the in-flight sidecar call for an instant stop instead of waiting
@@ -107,33 +114,46 @@ export async function selectOcrBatchPosts(options: OcrBatchOptions): Promise<Sca
 }
 
 async function isCancelling(): Promise<boolean> {
-  const state = await prisma.ocrBatchState.findFirst({ select: { status: true } });
+  const state = await prisma.ocrBatchState.findUnique({
+    where: { key: SINGLETON_KEY },
+    select: { status: true },
+  });
   return state?.status === "cancelling";
 }
 
 async function updateProgress(processedDelta: number, failedDelta: number): Promise<void> {
-  await prisma.ocrBatchState
-    .updateMany({
-      where: { status: { in: ["running", "cancelling"] } },
+  try {
+    await prisma.ocrBatchState.updateMany({
+      where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
       data: {
         processedPosts: { increment: processedDelta },
         failedPosts: { increment: failedDelta },
       },
-    })
-    .catch(() => {});
+    });
+  } catch (error) {
+    aiLog.error(
+      { error: String(error), processedDelta, failedDelta },
+      "OCR batch progress update failed"
+    );
+  }
 }
 
 async function finalize(result: OcrBatchResult): Promise<void> {
-  await prisma.ocrBatchState
-    .updateMany({
-      where: { status: { in: ["running", "cancelling"] } },
+  try {
+    await prisma.ocrBatchState.updateMany({
+      where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
       data: {
         status: result.status,
         errorMessage: result.errors[0] ?? null,
         finishedAt: new Date(),
       },
-    })
-    .catch(() => {});
+    });
+  } catch (error) {
+    aiLog.error(
+      { error: String(error), status: result.status, failed: result.failed },
+      "OCR batch finalize failed"
+    );
+  }
 }
 
 /**
@@ -160,10 +180,15 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
     result.total = posts.length;
     await prisma.ocrBatchState
       .updateMany({
-        where: { status: { in: ["running", "cancelling"] } },
+        where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
         data: { totalPosts: posts.length },
       })
-      .catch(() => {});
+      .catch((error) => {
+        aiLog.error(
+          { error: String(error), total: posts.length },
+          "OCR batch total update failed"
+        );
+      });
     aiLog.info({ total: posts.length }, "OCR batch started");
 
     const translateLimit = pLimit(TRANSLATE_CONCURRENCY);
@@ -227,6 +252,9 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
             }
             result.failed++;
             pushError(`${post.hash.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`);
+            // Mirror the Stage 1 handling: a persist-stage failure must leave the
+            // post FAILED, not silently PENDING, so a retry pass can pick it up.
+            await markScanFailed(post.id).catch(() => {});
             await updateProgress(0, 1);
           }
         })
@@ -261,7 +289,7 @@ export async function getOcrAdminStatus() {
     prisma.post.count({ where: { mimeType: { startsWith: "image/" }, ocrStatus: "COMPLETE" } }),
     prisma.post.count({ where: { mimeType: { startsWith: "image/" }, ocrStatus: "FAILED" } }),
     prisma.imageTextRegion.count(),
-    prisma.ocrBatchState.findFirst(),
+    prisma.ocrBatchState.findUnique({ where: { key: SINGLETON_KEY } }),
   ]);
 
   return {
