@@ -29,3 +29,4 @@ export {
   type OcrBatchOptions,
   type OcrBatchResult,
 } from "./batch";
+export { storeCrops, deleteCrops, buildCropDir, buildCropFilePath } from "./crops";
