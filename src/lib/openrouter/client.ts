@@ -247,12 +247,13 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
     }));
 
     const systemPrompt = `You are a professional translator for comics and illustrations.
-You receive the text regions of ONE page in reading order as a JSON array.
+You receive the text regions of ONE page in reading order as a JSON array; each region has a numeric "index".
 Translate every region into ${targetLangName}, using surrounding regions as context.
 Keep honorifics and names natural; keep onomatopoeia short.
 
-Respond with ONLY a JSON array of ${request.texts.length} strings — the translations
-in the same order. No markdown, no code fences, no commentary.`;
+Respond with ONLY a JSON array of objects shaped exactly like {"index": 0, "translation": "..."}.
+Include exactly one object for every input index, preserve each input "index" value, and put the translated text in "translation".
+No markdown, no code fences, no commentary.`;
 
     const userPrompt = JSON.stringify(numbered);
     const messages: ChatMessage[] = [
@@ -276,7 +277,7 @@ in the same order. No markdown, no code fences, no commentary.`;
         );
         break;
       }
-      const parsed = this.parseTranslationArray(content, request.texts.length);
+      const parsed = this.parseIndexedTranslations(content, request.texts.length);
       if (parsed) {
         return { translations: parsed, targetLang };
       }
@@ -288,7 +289,7 @@ in the same order. No markdown, no code fences, no commentary.`;
         { role: "assistant", content },
         {
           role: "user",
-          content: `That was not a valid JSON array of exactly ${request.texts.length} strings. Respond with ONLY the JSON array.`,
+          content: `That was not a valid JSON array of exactly ${request.texts.length} objects shaped {"index": number, "translation": string}, with every index from 0 to ${request.texts.length - 1} present exactly once. Respond with ONLY that JSON array.`,
         }
       );
     }
@@ -318,22 +319,40 @@ in the same order. No markdown, no code fences, no commentary.`;
     return { translations, targetLang };
   }
 
-  /** Parse a strict JSON string array of the expected length; null when invalid. */
-  private parseTranslationArray(content: string, expectedLength: number): string[] | null {
+  /** Parse strict indexed translation objects; null when invalid. */
+  private parseIndexedTranslations(content: string, expectedLength: number): string[] | null {
     const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     try {
       const parsed = JSON.parse(unfenced);
-      if (
-        Array.isArray(parsed) &&
-        parsed.length === expectedLength &&
-        parsed.every((item) => typeof item === "string")
-      ) {
-        return parsed;
+      if (!Array.isArray(parsed) || parsed.length !== expectedLength) {
+        return null;
       }
+
+      const translations = new Array<string>(expectedLength);
+      const seen = new Set<number>();
+      for (const item of parsed) {
+        if (item === null || typeof item !== "object") {
+          return null;
+        }
+        const { index, translation } = item as { index?: unknown; translation?: unknown };
+        if (
+          typeof index !== "number" ||
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= expectedLength ||
+          seen.has(index) ||
+          typeof translation !== "string"
+        ) {
+          return null;
+        }
+        translations[index] = translation;
+        seen.add(index);
+      }
+
+      return seen.size === expectedLength ? translations : null;
     } catch {
-      // fall through
+      return null;
     }
-    return null;
   }
 
   /**

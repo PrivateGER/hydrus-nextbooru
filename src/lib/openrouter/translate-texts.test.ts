@@ -41,12 +41,12 @@ describe("OpenRouterClient.translateTexts", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it("translates all texts in one completion and parses a plain JSON array", async () => {
+  it("translates all texts in one completion and parses indexed translation objects", async () => {
     (global.fetch as Mock).mockResolvedValueOnce(
-      completionResponse('["Hello","Goodbye"]')
+      completionResponse('[{"index":0,"translation":"Hello"},{"index":1,"translation":"Goodbye"}]')
     );
     const result = await client.translateTexts({
-      texts: ["\u3053\u3093\u306b\u3061\u306f", "\u3055\u3088\u306a\u3089"],
+      texts: ["こんにちは", "さよなら"],
       sourceLangs: ["ja", "ja"],
       targetLang: "en",
     });
@@ -56,23 +56,33 @@ describe("OpenRouterClient.translateTexts", () => {
     const body = JSON.parse(
       String(((global.fetch as Mock).mock.calls[0] as [string, RequestInit])[1].body)
     );
-    // All source texts travel in the single user message.
-    expect(body.messages[1].content).toContain("\u3053\u3093\u306b\u3061\u306f");
-    expect(body.messages[1].content).toContain("\u3055\u3088\u306a\u3089");
+    // All source texts travel in the single user message with stable indices.
+    expect(body.messages[1].content).toContain("こんにちは");
+    expect(body.messages[1].content).toContain("さよなら");
+    expect(body.messages[0].content).toContain('"index"');
+    expect(body.messages[0].content).toContain('"translation"');
+  });
+
+  it("uses explicit indices instead of output order", async () => {
+    (global.fetch as Mock).mockResolvedValueOnce(
+      completionResponse('[{"index":1,"translation":"Goodbye"},{"index":0,"translation":"Hello"}]')
+    );
+    const result = await client.translateTexts({ texts: ["a", "b"] });
+    expect(result.translations).toEqual(["Hello", "Goodbye"]);
   });
 
   it("strips markdown fences before parsing", async () => {
     (global.fetch as Mock).mockResolvedValueOnce(
-      completionResponse('```json\n["Hi"]\n```')
+      completionResponse('```json\n[{"index":0,"translation":"Hi"}]\n```')
     );
-    const result = await client.translateTexts({ texts: ["\u3084\u3042"] });
+    const result = await client.translateTexts({ texts: ["やあ"] });
     expect(result.translations).toEqual(["Hi"]);
   });
 
-  it("retries once with a corrective message when the array length mismatches", async () => {
+  it("retries once with a corrective message when index coverage mismatches", async () => {
     (global.fetch as Mock)
-      .mockResolvedValueOnce(completionResponse('["only one"]'))
-      .mockResolvedValueOnce(completionResponse('["one","two"]'));
+      .mockResolvedValueOnce(completionResponse('[{"index":0,"translation":"only one"}]'))
+      .mockResolvedValueOnce(completionResponse('[{"index":0,"translation":"one"},{"index":1,"translation":"two"}]'));
 
     const result = await client.translateTexts({ texts: ["a", "b"] });
     expect(result.translations).toEqual(["one", "two"]);
@@ -92,10 +102,10 @@ describe("OpenRouterClient.translateTexts", () => {
     expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
-  it("rejects non-string entries in the parsed array via retry/fallback path", async () => {
+  it("rejects invalid indexed entries via retry/fallback path", async () => {
     (global.fetch as Mock)
-      .mockResolvedValueOnce(completionResponse('["ok", 42]'))
-      .mockResolvedValueOnce(completionResponse('["ok","fine"]'));
+      .mockResolvedValueOnce(completionResponse('[{"index":0,"translation":"ok"},{"index":1,"translation":42}]'))
+      .mockResolvedValueOnce(completionResponse('[{"index":0,"translation":"ok"},{"index":1,"translation":"fine"}]'));
     const result = await client.translateTexts({ texts: ["a", "b"] });
     expect(result.translations).toEqual(["ok", "fine"]);
   });
