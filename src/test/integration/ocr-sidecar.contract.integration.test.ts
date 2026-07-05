@@ -25,6 +25,14 @@ describe.skipIf(!enabled)("ocr sidecar contract", () => {
         expect(region.maxX).toBeGreaterThan(region.minX);
         expect(region.maxY).toBeGreaterThan(region.minY);
         expect(region.ocrText.trim().length).toBeGreaterThan(0);
+        // Typeset metadata (Task 2 parse output). Presence is model/config-dependent,
+        // so we only pin the SHAPE: a crop, if reported, must be valid base64, and
+        // reported colors must be `#rrggbb` (else null). Inpainter output is not required.
+        if (region.cropBase64) {
+          expect(() => Buffer.from(region.cropBase64!, "base64")).not.toThrow();
+        }
+        expect(region.textColorFg === null || /^#[0-9a-f]{6}$/.test(region.textColorFg)).toBe(true);
+        expect(region.textColorBg === null || /^#[0-9a-f]{6}$/.test(region.textColorBg)).toBe(true);
       }
     }
   );
