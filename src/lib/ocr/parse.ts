@@ -7,6 +7,38 @@ function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+const DATA_URI = /^data:image\/[a-z+.-]+;base64,(.+)$/i;
+
+function extractCropBase64(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = DATA_URI.exec(value);
+  return match ? match[1] : null;
+}
+
+function channelToHex(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  if (rounded < 0 || rounded > 255) return null;
+  return rounded.toString(16).padStart(2, "0");
+}
+
+function rgbToHex(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const channels = value.map(channelToHex);
+  if (channels.some((c) => c === null)) return null;
+  return `#${channels.join("")}`;
+}
+
+function extractTextColors(value: unknown): { fg: string | null; bg: string | null } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { fg: null, bg: null };
+  }
+  return {
+    fg: "fg" in value ? rgbToHex(value.fg) : null,
+    bg: "bg" in value ? rgbToHex(value.bg) : null,
+  };
+}
+
 /**
  * Interpret a manga-image-translator TranslationResponse.
  *
@@ -66,6 +98,8 @@ export function parseSidecarResponse(payload: unknown): ParsedRegion[] {
     // Degenerate box: drop.
     if (maxX <= minX || maxY <= minY) continue;
 
+    const colors = extractTextColors("text_color" in entry ? entry.text_color : undefined);
+
     regions.push({
       minX,
       minY,
@@ -75,6 +109,9 @@ export function parseSidecarResponse(payload: unknown): ParsedRegion[] {
       sourceLanguage: langidEntry ? langidEntry[0] : null,
       confidence: "prob" in entry ? asFiniteNumber(entry.prob) : null,
       angle: "angle" in entry ? asFiniteNumber(entry.angle) : null,
+      cropBase64: extractCropBase64("background" in entry ? entry.background : undefined),
+      textColorFg: colors.fg,
+      textColorBg: colors.bg,
     });
   }
 

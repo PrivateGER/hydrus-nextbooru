@@ -41,7 +41,7 @@ describe("ocr config", () => {
 
   it("pipeline config disables translation, inpainting and colorizing", () => {
     expect(OCR_PIPELINE_CONFIG.translator.translator).toBe("original");
-    expect(OCR_PIPELINE_CONFIG.inpainter.inpainter).toBe("none");
+    expect(OCR_PIPELINE_CONFIG.inpainter.inpainter).toBe("lama_large");
     expect(OCR_PIPELINE_CONFIG.colorizer.colorizer).toBe("none");
   });
 });

@@ -11,6 +11,9 @@ const parsed = (overrides: Partial<ParsedRegion> = {}): ParsedRegion => ({
   sourceLanguage: "ja",
   confidence: 0.9,
   angle: 0,
+  cropBase64: "aGVsbG8=",
+  textColorFg: "#000000",
+  textColorBg: "#ffffff",
   ...overrides,
 });
 
@@ -26,6 +29,9 @@ describe("normalizeRegions", () => {
       y: 0.1,
       width: 0.2,
       height: 0.2,
+      cropBase64: "aGVsbG8=",
+      textColorFg: "#000000",
+      textColorBg: "#ffffff",
     });
     expect(result[1].readingOrder).toBe(1);
     expect(result[1].width).toBe(1);

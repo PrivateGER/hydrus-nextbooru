@@ -5,14 +5,14 @@ const DEFAULT_TIMEOUT_MS = 120000;
  *
  * - translator "original": every key of the response text dict holds the OCR
  *   text and no translation model is ever loaded.
- * - inpainter "none": model-free whiteout stub (the always-emitted background
- *   crops become cheap; we ignore them anyway).
+ * - inpainter "lama_large": produces clean text-removed background crops we now
+ *   keep; LaMa loads on scan and unloads after models-ttl.
  * - upscale_ratio MUST stay unset so returned pixel coords are in the space of
  *   the uploaded image.
  */
 export const OCR_PIPELINE_CONFIG = {
   translator: { translator: "original" },
-  inpainter: { inpainter: "none" },
+  inpainter: { inpainter: "lama_large" },
   colorizer: { colorizer: "none" },
   detector: { detector: "default" },
   ocr: { ocr: "48px" },
