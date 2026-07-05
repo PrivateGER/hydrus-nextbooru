@@ -218,12 +218,21 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
     return { ...outcome, translationFailed: failed && outcome.hasText };
   } catch (error) {
     if (error instanceof OpenRouterApiError && error.statusCode === 401) {
-      const outcome = await withPostCropWriteLock(post.hash, async () => {
-        const hasCrops = await storeCrops(post.hash, regions);
-        return persistScan(post, regions, regions.map(() => null), null, hasCrops);
-      });
-      return { ...outcome, translationFailed: true };
+      try {
+        const outcome = await withPostCropWriteLock(post.hash, async () => {
+          const hasCrops = await storeCrops(post.hash, regions);
+          return persistScan(post, regions, regions.map(() => null), null, hasCrops);
+        });
+        return { ...outcome, translationFailed: true };
+      } catch (recoveryError) {
+        // OCR-only persistence itself failed: don't leave the post PENDING.
+        await markScanFailed(post.id).catch(() => {});
+        throw recoveryError;
+      }
     }
+    // storeCrops/persistScan failed for a recoverable-OCR post: mark FAILED so
+    // a stuck PENDING row doesn't hide the error from rescans/monitoring.
+    await markScanFailed(post.id).catch(() => {});
     throw error;
   }
 }

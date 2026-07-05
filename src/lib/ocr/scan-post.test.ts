@@ -241,6 +241,65 @@ describe("scanPost", () => {
 
     expect(events).toEqual(["first-start", "first-end", "second-start"]);
   });
+
+  it("marks FAILED and rethrows when the persistence transaction fails", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 0, minY: 0, maxX: 10, maxY: 10, ocrText: "\u3042", sourceLanguage: "ja", confidence: 0.9, angle: 0 },
+    ]);
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hi"], targetLang: "en" });
+    const dbError = new Error("db transaction failed");
+    mockTransaction.mockRejectedValueOnce(dbError);
+
+    await expect(scanPost(POST)).rejects.toBe(dbError);
+    expect(mockPostUpdate).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { ocrStatus: "FAILED" },
+    });
+  });
+
+  it("marks FAILED and rethrows when crop storage throws", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 0, minY: 0, maxX: 10, maxY: 10, ocrText: "\u3042", sourceLanguage: "ja", confidence: 0.9, angle: 0 },
+    ]);
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hi"], targetLang: "en" });
+    const cropError = new Error("disk full");
+    mockStoreCrops.mockRejectedValueOnce(cropError);
+
+    await expect(scanPost(POST)).rejects.toBe(cropError);
+    expect(mockPostUpdate).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { ocrStatus: "FAILED" },
+    });
+  });
+
+  it("does not mark FAILED on a recoverable 401 translation error", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 0, minY: 0, maxX: 10, maxY: 10, ocrText: "\u3042", sourceLanguage: "ja", confidence: 0.5, angle: 0 },
+    ]);
+    mockTranslateTexts.mockRejectedValue(new OpenRouterApiError("unauthorized", 401));
+
+    const outcome = await scanPost(POST);
+    expect(outcome.translationFailed).toBe(true);
+    expect(mockPostUpdate).not.toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { ocrStatus: "FAILED" },
+    });
+  });
+
+  it("marks FAILED when persistence fails during 401 recovery", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 0, minY: 0, maxX: 10, maxY: 10, ocrText: "\u3042", sourceLanguage: "ja", confidence: 0.5, angle: 0 },
+    ]);
+    mockTranslateTexts.mockRejectedValue(new OpenRouterApiError("unauthorized", 401));
+    const dbError = new Error("db down during recovery");
+    mockTransaction.mockRejectedValueOnce(dbError);
+
+    await expect(scanPost(POST)).rejects.toBe(dbError);
+    expect(mockPostUpdate).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { ocrStatus: "FAILED" },
+    });
+  });
 });
 
 describe("translateRegions", () => {
