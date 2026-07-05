@@ -79,6 +79,11 @@ export interface TextsTranslationRequest {
   /** Optional per-text language hints, aligned with texts. */
   sourceLangs?: (string | null)[];
   targetLang?: string;
+  /**
+   * Optional full-page image for visual translation context. `base64` is the
+   * raw image data with no data-URI prefix. Requires a vision-capable model.
+   */
+  pageImage?: { base64: string; mimeType: string };
 }
 
 export interface TextsTranslationResult {

@@ -14,6 +14,13 @@ export interface SidecarResponse {
   translations: SidecarTranslation[];
 }
 
+/** Downscaled full-page image sent to the LLM as visual translation context. */
+export interface OcrContextImage {
+  /** Encoded image bytes (JPEG). */
+  data: Buffer;
+  mimeType: string;
+}
+
 /** Region in sidecar pixel space after text extraction. Array order = reading order. */
 export interface ParsedRegion {
   minX: number;

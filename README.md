@@ -111,7 +111,7 @@ Open for improvements, PRs and whatever of course.
 Positioned text recognition for comic pages: an optional
 [manga-image-translator](https://github.com/zyddnys/manga-image-translator) sidecar detects
 speech-bubble text regions (boxes + text + reading order), the app translates the text with
-your configured LLM provider (text-only, cheap), and translations render as hover notes over
+your configured LLM provider, and translations render as hover notes over
 the image. Enable by uncommenting the `ocr` service in `docker-compose.yml` and setting
 `OCR_SERVICE_URL` in `.env`. Scan per-post from the viewer toolbar, or in bulk from Admin → OCR.
 The sidecar processes one page at a time (~2–10 s each); idle model memory is released after
@@ -122,3 +122,20 @@ the original image and renders the configured LLM's translations as selectable f
 Inpainting is heavier than hover notes (`lama_large` by default); if VRAM is constrained, tune
 `src/lib/ocr/config.ts` to use `lama_mpe` or a lower `inpainting_size`. Posts scanned before
 typeset support need a rescan before the typeset state is available.
+
+### Translation with visual context (optional)
+
+By default the translation call is text-only: the OCR'd region texts of a page go to the LLM
+in one request, in reading order. Setting `OCR_TRANSLATION_VISION_CONTEXT=true` additionally
+attaches the (downscaled) page image to that call, so the model can use the artwork — speaker,
+tone, panel layout, sound effects — as context. This measurably improves comic translation
+quality but **requires a vision-capable model** and adds image tokens per page, so it is
+opt-in. `OCR_TRANSLATION_VISION_CONTEXT_SIZE` (default `1024`, longest edge) bounds the
+attached image size and therefore the token cost.
+
+This pairs well with a **locally hosted VLM**: point the `local` translation provider (Admin →
+Settings) at an OpenAI-compatible endpoint (vLLM, Ollama, LM Studio) serving a vision model
+such as Qwen2.5-VL, and visual-context translation costs only GPU time. A 24 GB card (e.g. an
+RTX 3090) comfortably runs a 7–8B VLM alongside the sidecar (whose models unload after
+`--models-ttl`). If the configured model is not vision-capable, the call simply fails and the
+scan is persisted OCR-only (text kept, translations left blank) — nothing is lost.

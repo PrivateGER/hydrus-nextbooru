@@ -255,4 +255,25 @@ describe("translateRegions", () => {
     mockTranslateTexts.mockRejectedValue(new OpenRouterApiError("unauthorized", 401));
     await expect(translateRegions([normalized()], "en")).rejects.toBeInstanceOf(OpenRouterApiError);
   });
+
+  it("forwards the page context image as a base64 pageImage", async () => {
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hi"], targetLang: "en" });
+    const contextImage = { data: Buffer.from("PAGE"), mimeType: "image/jpeg" };
+
+    await translateRegions([normalized()], "en", contextImage);
+
+    expect(mockTranslateTexts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageImage: { base64: Buffer.from("PAGE").toString("base64"), mimeType: "image/jpeg" },
+      })
+    );
+  });
+
+  it("omits pageImage when no context image is supplied", async () => {
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hi"], targetLang: "en" });
+    await translateRegions([normalized()], "en");
+    expect(mockTranslateTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ pageImage: undefined })
+    );
+  });
 });

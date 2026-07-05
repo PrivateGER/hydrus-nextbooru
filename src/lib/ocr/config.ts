@@ -40,3 +40,31 @@ export function getOcrTimeoutMs(): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TIMEOUT_MS;
   return parsed;
 }
+
+const DEFAULT_VISION_CONTEXT_SIZE = 1024;
+
+/**
+ * Whether OCR translation should attach the page image to the LLM call as
+ * visual context. Off by default: sending images requires a vision-capable
+ * model and costs image tokens, so it is opt-in. Cheap/free when the translation
+ * provider is a locally hosted VLM (point the `local` provider at it).
+ */
+export function isOcrVisionContextEnabled(): boolean {
+  const raw = process.env.OCR_TRANSLATION_VISION_CONTEXT?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/**
+ * Longest-edge pixel size of the downscaled page image sent as translation
+ * context. Small enough to bound image-token cost while preserving the layout
+ * cues (speaker, panel order, tone) the model needs. Clamped to [256, 4096].
+ */
+export function getOcrVisionContextSize(): number {
+  const raw = process.env.OCR_TRANSLATION_VISION_CONTEXT_SIZE;
+  if (!raw) return DEFAULT_VISION_CONTEXT_SIZE;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 256 || parsed > 4096) {
+    return DEFAULT_VISION_CONTEXT_SIZE;
+  }
+  return parsed;
+}

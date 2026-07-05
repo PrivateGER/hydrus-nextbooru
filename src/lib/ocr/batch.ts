@@ -11,7 +11,7 @@ import {
   type ScannablePost,
 } from "./scan-post";
 import { storeCrops } from "./crops";
-import type { NormalizedRegion } from "./types";
+import type { NormalizedRegion, OcrContextImage } from "./types";
 
 const TRANSLATE_CONCURRENCY = 3;
 const DEFAULT_LIMIT = 500;
@@ -184,8 +184,9 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
 
       // Stage 1: serial OCR.
       let regions: NormalizedRegion[];
+      let contextImage: OcrContextImage | null;
       try {
-        regions = await ocrPost(post, { signal: batchSignal });
+        ({ regions, contextImage } = await ocrPost(post, { signal: batchSignal }));
       } catch (error) {
         if (batchSignal.aborted) {
           // Cancellation aborted the in-flight OCR call: not a post failure.
@@ -205,7 +206,8 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
           try {
             const { translated, targetLanguage } = await translateRegions(
               regions,
-              options.targetLang
+              options.targetLang,
+              contextImage
             );
             await withPostCropWriteLock(post.hash, async () => {
               const hasCrops = await storeCrops(post.hash, regions);

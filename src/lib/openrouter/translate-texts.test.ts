@@ -91,4 +91,38 @@ describe("OpenRouterClient.translateTexts", () => {
     const result = await client.translateTexts({ texts: ["a", "b"] });
     expect(result.translations).toEqual(["ok", "fine"]);
   });
+
+  it("attaches the page image as a multimodal user message when pageImage is set", async () => {
+    (global.fetch as Mock).mockResolvedValueOnce(completionResponse('["Hello"]'));
+
+    const result = await client.translateTexts({
+      texts: ["こんにちは"],
+      sourceLangs: ["ja"],
+      targetLang: "en",
+      pageImage: { base64: "QUJD", mimeType: "image/jpeg" },
+    });
+    expect(result.translations).toEqual(["Hello"]);
+
+    const body = JSON.parse(
+      String(((global.fetch as Mock).mock.calls[0] as [string, RequestInit])[1].body)
+    );
+    // The user turn is a content array carrying the image plus the region JSON.
+    const userContent = body.messages[1].content;
+    expect(Array.isArray(userContent)).toBe(true);
+    const image = userContent.find((p: { type: string }) => p.type === "image_url");
+    expect(image.image_url.url).toBe("data:image/jpeg;base64,QUJD");
+    const text = userContent.find((p: { type: string }) => p.type === "text");
+    expect(text.text).toContain("こんにちは");
+    // The system prompt tells the model to use the attached page image.
+    expect(body.messages[0].content).toContain("page image");
+  });
+
+  it("sends a plain text user message when no pageImage is set", async () => {
+    (global.fetch as Mock).mockResolvedValueOnce(completionResponse('["Hi"]'));
+    await client.translateTexts({ texts: ["やあ"] });
+    const body = JSON.parse(
+      String(((global.fetch as Mock).mock.calls[0] as [string, RequestInit])[1].body)
+    );
+    expect(typeof body.messages[1].content).toBe("string");
+  });
 });

@@ -124,7 +124,8 @@ describe("selectOcrBatchPosts", () => {
 describe("runOcrBatch", () => {
   it("processes posts serially and reports counts", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
-    mockOcrPost.mockResolvedValue([]);
+    const contextImage = { data: Buffer.from("page"), mimeType: "image/jpeg" };
+    mockOcrPost.mockResolvedValue({ regions: [], contextImage });
 
     const result = await runOcrBatch({});
     expect(result.status).toBe("completed");
@@ -132,6 +133,8 @@ describe("runOcrBatch", () => {
     expect(result.failed).toBe(0);
     expect(mockOcrPost).toHaveBeenCalledTimes(2);
     expect(mockStoreCrops).toHaveBeenCalledWith(post(1).hash, expect.any(Array));
+    // The page context image from ocrPost is forwarded to translation.
+    expect(mockTranslateRegions).toHaveBeenCalledWith(expect.any(Array), undefined, contextImage);
     expect(mockPersistScan).toHaveBeenCalledWith(
       expect.objectContaining({ id: 1, hash: post(1).hash }),
       expect.any(Array),
@@ -143,7 +146,9 @@ describe("runOcrBatch", () => {
 
   it("continues after per-post OCR failures and counts them", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
-    mockOcrPost.mockRejectedValueOnce(new Error("bad file")).mockResolvedValueOnce([]);
+    mockOcrPost
+      .mockRejectedValueOnce(new Error("bad file"))
+      .mockResolvedValueOnce({ regions: [], contextImage: null });
 
     const result = await runOcrBatch({});
     expect(result.status).toBe("completed");
@@ -154,9 +159,12 @@ describe("runOcrBatch", () => {
 
   it("aborts on 401 auth errors from translation", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
-    mockOcrPost.mockResolvedValue([
-      { readingOrder: 0, x: 0, y: 0, width: 1, height: 1, ocrText: "t", sourceLanguage: "ja", confidence: null, angle: null },
-    ]);
+    mockOcrPost.mockResolvedValue({
+      regions: [
+        { readingOrder: 0, x: 0, y: 0, width: 1, height: 1, ocrText: "t", sourceLanguage: "ja", confidence: null, angle: null },
+      ],
+      contextImage: null,
+    });
     mockTranslateRegions.mockRejectedValue(new OpenRouterApiError("auth", 401));
 
     const result = await runOcrBatch({});
@@ -177,7 +185,7 @@ describe("runOcrBatch", () => {
 
   it("stops between posts when cancellation was requested", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
-    mockOcrPost.mockResolvedValue([]);
+    mockOcrPost.mockResolvedValue({ regions: [], contextImage: null });
     // First status poll: running; second: cancelling.
     mockBatchFindFirst
       .mockResolvedValueOnce({ status: "running" })

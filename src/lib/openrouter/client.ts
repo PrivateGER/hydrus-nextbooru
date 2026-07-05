@@ -230,8 +230,10 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
 
   /**
    * Translate a batch of texts (comic page regions, reading order) in ONE
-   * text-only completion. Falls back to per-text translate() when the model
-   * cannot produce a parseable aligned JSON array.
+   * completion. When `request.pageImage` is set, the page image is attached so
+   * the model can use visual context (speaker, tone, panel layout) — this
+   * requires a vision-capable model. Falls back to per-text translate() when the
+   * model cannot produce a parseable aligned JSON array.
    */
   async translateTexts(request: TextsTranslationRequest): Promise<TextsTranslationResult> {
     const targetLang = request.targetLang || this.defaultTargetLang;
@@ -239,6 +241,7 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
       return { translations: [], targetLang };
     }
     const targetLangName = this.getLanguageName(targetLang);
+    const hasImage = Boolean(request.pageImage);
 
     const numbered = request.texts.map((text, i) => ({
       index: i,
@@ -247,17 +250,38 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
     }));
 
     const systemPrompt = `You are a professional translator for comics and illustrations.
-You receive the text regions of ONE page in reading order as a JSON array.
-Translate every region into ${targetLangName}, using surrounding regions as context.
+You receive the text regions of ONE page in reading order as a JSON array; each region has a numeric "index".${
+      hasImage
+        ? `\nThe full page image is attached. Use it as visual context — speaker, tone, panel layout, sound effects — but translate ONLY the region texts given in the JSON, not other text you may see in the image.`
+        : ""
+    }
+Translate every region into ${targetLangName}, using surrounding regions${
+      hasImage ? " and the page image" : ""
+    } as context.
 Keep honorifics and names natural; keep onomatopoeia short.
 
 Respond with ONLY a JSON array of ${request.texts.length} strings — the translations
-in the same order. No markdown, no code fences, no commentary.`;
+in the same order as the input regions. No markdown, no code fences, no commentary.`;
 
-    const userPrompt = JSON.stringify(numbered);
+    const userJson = JSON.stringify(numbered);
+    const userMessage: ChatMessage = request.pageImage
+      ? {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${request.pageImage.mimeType};base64,${request.pageImage.base64}`,
+              },
+            },
+            { type: "text", text: userJson },
+          ],
+        }
+      : { role: "user", content: userJson };
+
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
+      userMessage,
     ];
 
     for (let attempt = 0; attempt < 2; attempt++) {

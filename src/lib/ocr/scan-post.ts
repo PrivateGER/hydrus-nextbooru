@@ -5,9 +5,10 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 import { scanImage } from "./client";
+import { isOcrVisionContextEnabled, getOcrVisionContextSize } from "./config";
 import { normalizeRegions } from "./normalize";
 import { storeCrops } from "./crops";
-import type { NormalizedRegion, OcrRegionDto } from "./types";
+import type { NormalizedRegion, OcrContextImage, OcrRegionDto } from "./types";
 
 export interface ScannablePost {
   id: number;
@@ -59,15 +60,26 @@ export class OcrFileMissingError extends Error {
   }
 }
 
+/** OCR regions plus the optional page image used as translation context. */
+export interface OcrScanResult {
+  regions: NormalizedRegion[];
+  /** Downscaled page image for visual translation context, or null when disabled/empty. */
+  contextImage: OcrContextImage | null;
+}
+
 /**
  * Detection + OCR for one post. Pure with respect to the DB.
+ *
+ * When `OCR_TRANSLATION_VISION_CONTEXT` is enabled and the page has text, a
+ * downscaled JPEG of the page is returned so the translator can use visual
+ * context; building it never fails the scan (falls back to null on error).
  *
  * @throws OcrFileMissingError | OcrServiceUnavailableError | OcrServiceResponseError
  */
 export async function ocrPost(
   post: ScannablePost,
   options?: { signal?: AbortSignal }
-): Promise<NormalizedRegion[]> {
+): Promise<OcrScanResult> {
   const filePath = buildFilePath(post.hash, post.extension);
   let image: Buffer;
   try {
@@ -90,7 +102,27 @@ export async function ocrPost(
   }
 
   const parsed = await scanImage(image, post.mimeType, { signal: options?.signal });
-  return normalizeRegions(parsed, { width: metadata.width, height: metadata.height });
+  const regions = normalizeRegions(parsed, { width: metadata.width, height: metadata.height });
+
+  let contextImage: OcrContextImage | null = null;
+  if (regions.length > 0 && isOcrVisionContextEnabled()) {
+    try {
+      const size = getOcrVisionContextSize();
+      const data = await sharp(image)
+        .rotate() // bake in EXIF orientation so the model sees upright pixels
+        .resize(size, size, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      contextImage = { data, mimeType: "image/jpeg" };
+    } catch (error) {
+      aiLog.warn(
+        { hash: post.hash, error: error instanceof Error ? error.message : String(error) },
+        "Failed to build OCR vision context image; translating text-only"
+      );
+    }
+  }
+
+  return { regions, contextImage };
 }
 
 /**
@@ -105,7 +137,8 @@ export async function ocrPost(
  */
 export async function translateRegions(
   regions: NormalizedRegion[],
-  targetLang?: string
+  targetLang?: string,
+  contextImage?: OcrContextImage | null
 ): Promise<{ translated: (string | null)[]; targetLanguage: string | null; failed: boolean }> {
   if (regions.length === 0) {
     return { translated: [], targetLanguage: null, failed: false };
@@ -116,6 +149,9 @@ export async function translateRegions(
       texts: regions.map((r) => r.ocrText),
       sourceLangs: regions.map((r) => r.sourceLanguage),
       targetLang,
+      pageImage: contextImage
+        ? { base64: contextImage.data.toString("base64"), mimeType: contextImage.mimeType }
+        : undefined,
     });
     return { translated: result.translations, targetLanguage: result.targetLang, failed: false };
   } catch (error) {
@@ -202,15 +238,20 @@ export async function markScanFailed(postId: number): Promise<void> {
  */
 export async function scanPost(post: ScannablePost, targetLang?: string): Promise<ScanPostOutcome> {
   let regions: NormalizedRegion[];
+  let contextImage: OcrContextImage | null;
   try {
-    regions = await ocrPost(post);
+    ({ regions, contextImage } = await ocrPost(post));
   } catch (error) {
     await markScanFailed(post.id).catch(() => {});
     throw error;
   }
 
   try {
-    const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
+    const { translated, targetLanguage, failed } = await translateRegions(
+      regions,
+      targetLang,
+      contextImage
+    );
     const outcome = await withPostCropWriteLock(post.hash, async () => {
       const hasCrops = await storeCrops(post.hash, regions);
       return persistScan(post, regions, translated, targetLanguage, hasCrops);
