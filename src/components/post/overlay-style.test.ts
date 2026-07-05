@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { regionBoxStyle, tooltipBelow } from "./overlay-style";
+import { regionBoxStyle, tooltipBelow, typesetTextStyle } from "./overlay-style";
 
 describe("regionBoxStyle", () => {
   it("converts normalized coords to percent strings", () => {
@@ -22,5 +22,25 @@ describe("tooltipBelow", () => {
   it("places tooltip below for regions near the top edge", () => {
     expect(tooltipBelow({ y: 0.1 })).toBe(true);
     expect(tooltipBelow({ y: 0.4 })).toBe(false);
+  });
+});
+
+describe("typesetTextStyle", () => {
+  it("uses region text colors for fill and halo", () => {
+    expect(
+      typesetTextStyle({ textColorFg: "#abcdef", textColorBg: "#123456" }, 14)
+    ).toEqual({
+      fontSize: 14,
+      color: "#abcdef",
+      textShadow: "0 0 3px #123456, 0 0 1px #123456",
+    });
+  });
+
+  it("falls back to #111 fill and #fff halo when colors are null", () => {
+    expect(typesetTextStyle({ textColorFg: null, textColorBg: null }, 9)).toEqual({
+      fontSize: 9,
+      color: "#111",
+      textShadow: "0 0 3px #fff, 0 0 1px #fff",
+    });
   });
 });

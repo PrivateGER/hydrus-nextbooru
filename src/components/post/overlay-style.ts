@@ -21,3 +21,21 @@ export function regionBoxStyle(region: {
 export function tooltipBelow(region: { y: number }): boolean {
   return region.y < 0.25;
 }
+
+/**
+ * Inline style for client-composited typeset text: the sidecar-reported
+ * foreground color with a halo built from the background color so text stays
+ * legible over any crop. Falls back to dark-on-light defaults when the
+ * sidecar did not report colors.
+ */
+export function typesetTextStyle(
+  region: { textColorFg: string | null; textColorBg: string | null },
+  fontSizePx: number,
+): CSSProperties {
+  const bg = region.textColorBg ?? "#fff";
+  return {
+    fontSize: fontSizePx,
+    color: region.textColorFg ?? "#111",
+    textShadow: `0 0 3px ${bg}, 0 0 1px ${bg}`,
+  };
+}
