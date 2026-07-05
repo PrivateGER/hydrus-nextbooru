@@ -66,11 +66,27 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
       setMode(stored);
       return;
     }
-    // Migrate the legacy boolean visibility flag, then retire it.
+    // Migrate the legacy boolean visibility flag once: persist the result to
+    // the mode key so it survives reloads, then retire the legacy flag.
     const legacy = localStorage.getItem(LEGACY_VISIBILITY_KEY);
-    setMode(legacy === "false" ? "hidden" : "notes");
-    localStorage.removeItem(LEGACY_VISIBILITY_KEY);
+    if (legacy !== null) {
+      const migrated: OverlayMode = legacy === "false" ? "hidden" : "notes";
+      setMode(migrated);
+      localStorage.setItem(MODE_KEY, migrated);
+      localStorage.removeItem(LEGACY_VISIBILITY_KEY);
+    }
   }, []);
+
+  // Typeset is only meaningful when a region carries a crop. If the persisted
+  // or active mode is typeset while no crop is available — on initial hydration
+  // or after a rescan drops crops — fall back to notes and persist it so the
+  // toolbar and cycle skip the unavailable mode.
+  useEffect(() => {
+    if (mode === "typeset" && !anyCrop) {
+      setMode("notes");
+      localStorage.setItem(MODE_KEY, "notes");
+    }
+  }, [mode, anyCrop]);
 
   // While a tooltip is open, dismiss it on Escape or a pointer press that
   // lands outside the overlay's roots (boxes wrapper + toolbar).
