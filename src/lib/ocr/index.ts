@@ -2,7 +2,7 @@ export { isOcrEnabled, getOcrServiceUrl, getOcrTimeoutMs, OCR_PIPELINE_CONFIG } 
 export { parseSidecarResponse } from "./parse";
 export { normalizeRegions } from "./normalize";
 export { OcrServiceUnavailableError, OcrServiceResponseError } from "./errors";
-export { scanImage, checkOcrServiceHealth } from "./client";
+export { renderInpaintedPage, scanImage, checkOcrServiceHealth } from "./client";
 export {
   scanPost,
   ocrPost,
@@ -29,4 +29,4 @@ export {
   type OcrBatchOptions,
   type OcrBatchResult,
 } from "./batch";
-export { storeCrops, deleteCrops, buildCropDir, buildCropFilePath } from "./crops";
+export { storeCrops, storeInpaintedPage, deleteCrops, deleteInpaintedPage, buildCropDir, buildCropFilePath, buildInpaintedPageFilePath } from "./crops";

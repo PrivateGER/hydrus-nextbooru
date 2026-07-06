@@ -18,6 +18,12 @@ export const OCR_PIPELINE_CONFIG = {
   ocr: { ocr: "48px" },
 } as const;
 
+/** Full-page inpaint render: same detector/OCR/inpainter, but no text rendering. */
+export const OCR_PAGE_INPAINT_CONFIG = {
+  ...OCR_PIPELINE_CONFIG,
+  translator: { translator: "none" },
+} as const;
+
 /** Whether the OCR sidecar feature is configured. */
 export function isOcrEnabled(): boolean {
   return Boolean(process.env.OCR_SERVICE_URL?.trim());

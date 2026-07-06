@@ -5,6 +5,8 @@ const {
   mockReadFile,
   mockMetadata,
   mockScanImage,
+  mockRenderInpaintedPage,
+  mockPrepareSidecarImage,
   mockTranslateTexts,
   mockRegionDeleteMany,
   mockRegionCreateMany,
@@ -12,10 +14,14 @@ const {
   mockPostUpdate,
   mockTransaction,
   mockStoreCrops,
+  mockStoreInpaintedPage,
+  mockDeleteInpaintedPage,
 } = vi.hoisted(() => ({
   mockReadFile: vi.fn(),
   mockMetadata: vi.fn(),
   mockScanImage: vi.fn(),
+  mockRenderInpaintedPage: vi.fn(),
+  mockPrepareSidecarImage: vi.fn(),
   mockTranslateTexts: vi.fn(),
   mockRegionDeleteMany: vi.fn(),
   mockRegionCreateMany: vi.fn(),
@@ -23,6 +29,8 @@ const {
   mockPostUpdate: vi.fn(),
   mockTransaction: vi.fn(async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
   mockStoreCrops: vi.fn(),
+  mockStoreInpaintedPage: vi.fn(),
+  mockDeleteInpaintedPage: vi.fn(),
 }));
 
 vi.mock("fs/promises", () => ({ readFile: mockReadFile }));
@@ -33,7 +41,12 @@ vi.mock("sharp", () => ({
 
 vi.mock("./client", () => ({
   scanImage: mockScanImage,
+  renderInpaintedPage: mockRenderInpaintedPage,
   checkOcrServiceHealth: vi.fn(),
+}));
+
+vi.mock("./image-prep", () => ({
+  prepareSidecarImage: mockPrepareSidecarImage,
 }));
 
 vi.mock("@/lib/openrouter", async (importOriginal) => {
@@ -56,7 +69,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
+vi.mock("./crops", () => ({ storeCrops: mockStoreCrops, storeInpaintedPage: mockStoreInpaintedPage, deleteInpaintedPage: mockDeleteInpaintedPage }));
 
 import { scanPost, translateRegions, OcrFileMissingError, withPostCropWriteLock } from "./scan-post";
 import { OcrServiceUnavailableError } from "./errors";
@@ -86,8 +99,17 @@ beforeEach(() => {
   process.env.OCR_SERVICE_URL = "http://ocr:8000";
   mockReadFile.mockResolvedValue(Buffer.from([1]));
   mockMetadata.mockResolvedValue({ width: 1000, height: 2000, orientation: undefined });
+  mockPrepareSidecarImage.mockResolvedValue({
+    image: Buffer.from([1]),
+    mimeType: "image/png",
+    width: 1000,
+    height: 2000,
+    resized: false,
+  });
   mockRegionFindMany.mockResolvedValue([]);
   mockStoreCrops.mockResolvedValue([true]);
+  mockRenderInpaintedPage.mockResolvedValue(Buffer.from([9, 9, 9]));
+  mockStoreInpaintedPage.mockResolvedValue(true);
 });
 
 describe("scanPost", () => {
@@ -131,6 +153,47 @@ describe("scanPost", () => {
       where: { id: 7 },
       data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
     });
+  });
+
+  it("sends a prepared sidecar image and normalizes returned boxes against its dimensions", async () => {
+    mockPrepareSidecarImage.mockResolvedValueOnce({
+      image: Buffer.from([5, 6, 7]),
+      mimeType: "image/jpeg",
+      width: 500,
+      height: 1000,
+      resized: true,
+    });
+    mockScanImage.mockResolvedValue([
+      { minX: 50, minY: 200, maxX: 150, maxY: 500, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
+    ]);
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
+
+    await scanPost(POST);
+
+    expect(mockPrepareSidecarImage).toHaveBeenCalledWith(Buffer.from([1]), "image/png");
+    expect(mockScanImage).toHaveBeenCalledWith(Buffer.from([5, 6, 7]), "image/jpeg", { signal: undefined });
+    expect(mockRegionCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          x: 0.1,
+          y: 0.2,
+          width: 0.2,
+          height: 0.3,
+        }),
+      ],
+    });
+  });
+
+  it("stores a full-page inpaint when text regions are detected", async () => {
+    mockScanImage.mockResolvedValue([
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
+    ]);
+    mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
+
+    await scanPost(POST);
+
+    expect(mockRenderInpaintedPage).toHaveBeenCalledWith(Buffer.from([1]), "image/png");
+    expect(mockStoreInpaintedPage).toHaveBeenCalledWith(POST.hash, Buffer.from([9, 9, 9]));
   });
 
   it("persists rows with hasCrop false and still COMPLETE when crop storage fails", async () => {

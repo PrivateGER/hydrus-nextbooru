@@ -53,12 +53,15 @@ const MODE_LABEL: Record<OverlayMode, string> = {
 export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayProps) {
   const router = useRouter();
   const [regions, setRegions] = useState<OverlayRegion[]>(initialRegions);
-  const [mode, setMode] = useState<OverlayMode>("notes");
+  const [mode, setMode] = useState<OverlayMode>("typeset");
   const [activeRegion, setActiveRegion] = useState<number | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pageInpaintFailed, setPageInpaintFailed] = useState(false);
 
-  const anyCrop = regions.some((r) => r.hasCrop);
+  const hasTypesetContent = regions.length > 0;
+  const cropVersion = regions.reduce((max, region) => Math.max(max, region.cropVersion), 0);
+  const usePageInpaint = mode === "typeset" && hasTypesetContent && !pageInpaintFailed;
 
   useEffect(() => {
     const stored = localStorage.getItem(MODE_KEY);
@@ -66,27 +69,21 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
       setMode(stored);
       return;
     }
-    // Migrate the legacy boolean visibility flag once: persist the result to
-    // the mode key so it survives reloads, then retire the legacy flag.
+    // Migrate the legacy boolean visibility flag once. Visible used to mean
+    // notes-only; now the default visible OCR experience is full-page typeset.
     const legacy = localStorage.getItem(LEGACY_VISIBILITY_KEY);
     if (legacy !== null) {
-      const migrated: OverlayMode = legacy === "false" ? "hidden" : "notes";
+      const migrated: OverlayMode = legacy === "false" ? "hidden" : "typeset";
       setMode(migrated);
       localStorage.setItem(MODE_KEY, migrated);
       localStorage.removeItem(LEGACY_VISIBILITY_KEY);
     }
   }, []);
 
-  // Typeset is only meaningful when a region carries a crop. If the persisted
-  // or active mode is typeset while no crop is available — on initial hydration
-  // or after a rescan drops crops — fall back to notes and persist it so the
-  // toolbar and cycle skip the unavailable mode.
+
   useEffect(() => {
-    if (mode === "typeset" && !anyCrop) {
-      setMode("notes");
-      localStorage.setItem(MODE_KEY, "notes");
-    }
-  }, [mode, anyCrop]);
+    setPageInpaintFailed(false);
+  }, [hash, cropVersion]);
 
   // While a tooltip is open, dismiss it on Escape or a pointer press that
   // lands outside the overlay's roots (boxes wrapper + toolbar).
@@ -109,9 +106,9 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
     };
   }, [activeRegion]);
 
-  // Cycle: hidden → notes → (typeset when a crop exists, else hidden) → hidden.
+  // Cycle: hidden → notes → (typeset when regions exist, else hidden) → hidden.
   const nextMode: OverlayMode =
-    mode === "hidden" ? "notes" : mode === "notes" ? (anyCrop ? "typeset" : "hidden") : "hidden";
+    mode === "hidden" ? "notes" : mode === "notes" ? (hasTypesetContent ? "typeset" : "hidden") : "hidden";
 
   const cycleMode = () => {
     localStorage.setItem(MODE_KEY, nextMode);
@@ -150,14 +147,25 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
       {/* Region boxes */}
       {mode !== "hidden" && regions.length > 0 && (
         <div className="pointer-events-none absolute inset-0 z-20" data-ocr-overlay>
+          {usePageInpaint && (
+            // eslint-disable-next-line @next/next/no-img-element -- generated, versioned full-page OCR inpaint that must exactly cover the displayed image
+            <img
+              src={`/api/ocr-pages/${hash}?v=${cropVersion}`}
+              alt=""
+              draggable={false}
+              onError={() => setPageInpaintFailed(true)}
+              className="pointer-events-none absolute inset-0 h-full w-full"
+            />
+          )}
           {regions.map((region) =>
-            mode === "typeset" && region.hasCrop ? (
+            mode === "typeset" && (usePageInpaint || region.hasCrop) ? (
               <TypesetRegion
                 key={`${region.readingOrder}-${region.cropVersion}`}
                 hash={hash}
                 region={region}
                 activeRegion={activeRegion}
                 setActiveRegion={setActiveRegion}
+                useRegionCrop={!usePageInpaint}
               />
             ) : (
               <NotesRegion
@@ -181,7 +189,7 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
             type="button"
             onClick={cycleMode}
             aria-label={MODE_LABEL[nextMode]}
-            title={anyCrop ? undefined : "Rescan to enable typeset view"}
+            title={hasTypesetContent ? undefined : "Scan text to enable typeset view"}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
           >
             {mode === "hidden" ? (
@@ -278,7 +286,13 @@ function NotesRegion({ region, activeRegion, setActiveRegion }: RegionProps) {
  * Typeset mode: the inpainted crop composited under centered, auto-fitted
  * translated text. Falls back to text-only if the crop image fails to load.
  */
-function TypesetRegion({ hash, region, activeRegion, setActiveRegion }: RegionProps & { hash: string }) {
+function TypesetRegion({
+  hash,
+  region,
+  activeRegion,
+  setActiveRegion,
+  useRegionCrop,
+}: RegionProps & { hash: string; useRegionCrop: boolean }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [cropFailed, setCropFailed] = useState(false);
   const text = region.translatedText ?? region.ocrText;
@@ -296,7 +310,7 @@ function TypesetRegion({ hash, region, activeRegion, setActiveRegion }: RegionPr
         if (e.pointerType !== "touch") setActiveRegion(null);
       }}
     >
-      {!cropFailed && (
+      {useRegionCrop && !cropFailed && (
         // eslint-disable-next-line @next/next/no-img-element -- versioned, immutable API crop that must fill an absolutely-positioned box
         <img
           src={`/api/ocr-crops/${hash}/${region.readingOrder}?v=${region.cropVersion}`}

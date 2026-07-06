@@ -1,12 +1,12 @@
 import { readFile } from "fs/promises";
-import sharp from "sharp";
 import { prisma } from "@/lib/db";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
-import { scanImage } from "./client";
+import { renderInpaintedPage, scanImage } from "./client";
 import { normalizeRegions } from "./normalize";
-import { storeCrops } from "./crops";
+import { deleteInpaintedPage, storeCrops, storeInpaintedPage } from "./crops";
+import { prepareSidecarImage } from "./image-prep";
 import type { NormalizedRegion, OcrRegionDto } from "./types";
 
 export interface ScannablePost {
@@ -76,21 +76,20 @@ export async function ocrPost(
     throw new OcrFileMissingError(`File not found for post ${post.hash}`);
   }
 
-  const metadata = await sharp(image).metadata();
-  if (!metadata.width || !metadata.height) {
-    throw new OcrFileMissingError(`Cannot read dimensions for post ${post.hash}`);
-  }
-  if (metadata.orientation && metadata.orientation > 1) {
-    // Known v1 limitation: sidecar coords are pre-rotation, browsers render
-    // post-rotation. Rare for comics; surfaced in logs only.
-    aiLog.warn(
-      { hash: post.hash, orientation: metadata.orientation },
-      "OCR on EXIF-rotated image; overlay boxes may be misaligned"
+  const prepared = await prepareSidecarImage(image, post.mimeType);
+  if (prepared.resized) {
+    aiLog.info(
+      {
+        hash: post.hash,
+        width: prepared.width,
+        height: prepared.height,
+      },
+      "OCR image downscaled for sidecar"
     );
   }
 
-  const parsed = await scanImage(image, post.mimeType, { signal: options?.signal });
-  return normalizeRegions(parsed, { width: metadata.width, height: metadata.height });
+  const parsed = await scanImage(prepared.image, prepared.mimeType, { signal: options?.signal });
+  return normalizeRegions(parsed, { width: prepared.width, height: prepared.height });
 }
 
 /**
@@ -189,6 +188,20 @@ export async function persistScan(
   };
 }
 
+async function renderPostInpaintedPage(post: ScannablePost): Promise<Buffer | null> {
+  try {
+    const image = await readFile(buildFilePath(post.hash, post.extension));
+    const prepared = await prepareSidecarImage(image, post.mimeType);
+    return await renderInpaintedPage(prepared.image, prepared.mimeType);
+  } catch (error) {
+    aiLog.warn(
+      { hash: post.hash, error: error instanceof Error ? error.message : String(error) },
+      "OCR full-page inpaint unavailable; typeset overlay will use region crops"
+    );
+    return null;
+  }
+}
+
 /** Record a scan failure without touching existing regions. */
 export async function markScanFailed(postId: number): Promise<void> {
   await prisma.post.update({ where: { id: postId }, data: { ocrStatus: "FAILED" } });
@@ -209,10 +222,17 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
     throw error;
   }
 
+
+  const inpaintedPage = regions.length > 0 ? await renderPostInpaintedPage(post) : null;
   try {
     const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
     const outcome = await withPostCropWriteLock(post.hash, async () => {
       const hasCrops = await storeCrops(post.hash, regions);
+      if (inpaintedPage) {
+        await storeInpaintedPage(post.hash, inpaintedPage);
+      } else {
+        await deleteInpaintedPage(post.hash);
+      }
       return persistScan(post, regions, translated, targetLanguage, hasCrops);
     });
     return { ...outcome, translationFailed: failed && outcome.hasText };
@@ -221,6 +241,11 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
       try {
         const outcome = await withPostCropWriteLock(post.hash, async () => {
           const hasCrops = await storeCrops(post.hash, regions);
+          if (inpaintedPage) {
+            await storeInpaintedPage(post.hash, inpaintedPage);
+          } else {
+            await deleteInpaintedPage(post.hash);
+          }
           return persistScan(post, regions, regions.map(() => null), null, hasCrops);
         });
         return { ...outcome, translationFailed: true };

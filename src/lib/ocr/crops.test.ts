@@ -1,73 +1,70 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtemp, readFile, stat, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import sharp from 'sharp';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildInpaintedPageFilePath, deleteCrops, storeInpaintedPage } from './crops';
 
-const { mockRm, mockMkdir, mockToFile, mockSharp } = vi.hoisted(() => {
-  const mockToFile = vi.fn();
-  return {
-    mockRm: vi.fn(),
-    mockMkdir: vi.fn(),
-    mockToFile,
-    mockSharp: vi.fn(() => ({ webp: vi.fn(() => ({ toFile: mockToFile })) })),
-  };
-});
-vi.mock("fs/promises", () => ({ rm: mockRm, mkdir: mockMkdir }));
-vi.mock("sharp", () => ({ default: mockSharp }));
+describe('OCR crop storage', () => {
+  let previousThumbnailPath: string | undefined;
+  let tempDir: string;
 
-import { storeCrops, deleteCrops, buildCropFilePath } from "./crops";
-import type { NormalizedRegion } from "./types";
-
-const region = (overrides: Partial<NormalizedRegion> = {}): NormalizedRegion => ({
-  readingOrder: 0, x: 0, y: 0, width: 0.5, height: 0.5,
-  ocrText: "t", sourceLanguage: "ja", confidence: 1, angle: 0,
-  cropBase64: Buffer.from("img").toString("base64"), textColorFg: null, textColorBg: null,
-  ...overrides,
-});
-
-const HASH = "a".repeat(64);
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  process.env.THUMBNAIL_PATH = "/thumbs";
-  mockRm.mockResolvedValue(undefined);
-  mockMkdir.mockResolvedValue(undefined);
-  mockToFile.mockResolvedValue(undefined);
-});
-
-describe("storeCrops", () => {
-  it("wipes the dir, then writes one webp per crop region and reports flags", async () => {
-    const flags = await storeCrops(HASH, [region(), region({ readingOrder: 1, cropBase64: null })]);
-    expect(mockRm).toHaveBeenCalledWith(expect.stringContaining(HASH), { recursive: true, force: true });
-    expect(mockMkdir).toHaveBeenCalledWith(expect.stringContaining(HASH), { recursive: true });
-    expect(flags).toEqual([true, false]);
-    expect(mockToFile).toHaveBeenCalledTimes(1);
-    expect(mockToFile).toHaveBeenCalledWith(buildCropFilePath(HASH, 0));
+  beforeEach(async () => {
+    previousThumbnailPath = process.env.THUMBNAIL_PATH;
+    tempDir = await mkdtemp(join(tmpdir(), 'ocr-pages-'));
+    process.env.THUMBNAIL_PATH = tempDir;
   });
 
-  it("degrades a region to false when its write fails, without throwing", async () => {
-    mockToFile.mockRejectedValueOnce(new Error("disk full")).mockResolvedValueOnce(undefined);
-    const flags = await storeCrops(HASH, [region(), region({ readingOrder: 1 })]);
-    expect(flags).toEqual([false, true]);
+  afterEach(async () => {
+    if (previousThumbnailPath === undefined) {
+      delete process.env.THUMBNAIL_PATH;
+    } else {
+      process.env.THUMBNAIL_PATH = previousThumbnailPath;
+    }
+    await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("returns all-false when the directory cannot be prepared", async () => {
-    mockMkdir.mockRejectedValueOnce(new Error("ro fs"));
-    const flags = await storeCrops(HASH, [region(), region({ readingOrder: 1 })]);
-    expect(flags).toEqual([false, false]);
-    expect(mockToFile).not.toHaveBeenCalled();
+  it('stores and deletes a normalized full-page inpaint image for a post hash', async () => {
+    const image = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 3,
+        background: '#ffffff',
+      },
+    })
+      .png()
+      .toBuffer();
+
+    await storeInpaintedPage('ABCDEF', image);
+
+    const path = buildInpaintedPageFilePath('ABCDEF');
+    await expect(stat(path)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    const stored = await readFile(path);
+    expect(stored.subarray(0, 4).toString('ascii')).toBe('RIFF');
+
+    await deleteCrops('ABCDEF');
+
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it("wipes before writing (recorded rm -> mkdir -> write ordering)", async () => {
-    await storeCrops(HASH, [region()]);
-    const rmOrder = mockRm.mock.invocationCallOrder[0];
-    const mkdirOrder = mockMkdir.mock.invocationCallOrder[0];
-    const writeOrder = mockToFile.mock.invocationCallOrder[0];
-    expect(rmOrder).toBeLessThan(mkdirOrder);
-    expect(mkdirOrder).toBeLessThan(writeOrder);
-  });
-});
+  it('removes a stale full-page inpaint image when replacement encoding fails', async () => {
+    const image = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 3,
+        background: '#ffffff',
+      },
+    })
+      .png()
+      .toBuffer();
+    await storeInpaintedPage('ABCDEF', image);
+    const path = buildInpaintedPageFilePath('ABCDEF');
+    await expect(stat(path)).resolves.toMatchObject({ isFile: expect.any(Function) });
 
-describe("deleteCrops", () => {
-  it("removes the dir and swallows errors", async () => {
-    mockRm.mockRejectedValueOnce(new Error("gone"));
-    await expect(deleteCrops(HASH)).resolves.toBeUndefined();
+    await expect(storeInpaintedPage('ABCDEF', Buffer.from('not an image'))).resolves.toBe(false);
+
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

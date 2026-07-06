@@ -15,6 +15,10 @@ function cropBasePath(): string {
   return join(getThumbnailBasePath(), "ocr-crops");
 }
 
+function pageBasePath(): string {
+  return join(getThumbnailBasePath(), "ocr-pages");
+}
+
 /** Directory holding one post's region crops. */
 export function buildCropDir(hash: string): string {
   return join(cropBasePath(), hash.toLowerCase());
@@ -23,6 +27,11 @@ export function buildCropDir(hash: string): string {
 /** File path for one region's crop. */
 export function buildCropFilePath(hash: string, readingOrder: number): string {
   return join(buildCropDir(hash), `${readingOrder}.webp`);
+}
+
+/** File path for a post's full-page inpaint render. */
+export function buildInpaintedPageFilePath(hash: string): string {
+  return join(pageBasePath(), `${hash.toLowerCase()}.webp`);
 }
 
 /**
@@ -60,7 +69,29 @@ export async function storeCrops(hash: string, regions: NormalizedRegion[]): Pro
   return flags;
 }
 
+/** Replace a post's full-page inpaint image. Never throws. */
+export async function storeInpaintedPage(hash: string, image: Buffer): Promise<boolean> {
+  const filePath = buildInpaintedPageFilePath(hash);
+  try {
+    await mkdir(pageBasePath(), { recursive: true });
+    await sharp(image).webp({ quality: WEBP_QUALITY }).toFile(filePath);
+    return true;
+  } catch (error) {
+    await rm(filePath, { force: true }).catch(() => {});
+    aiLog.warn({ hash, error: String(error) }, "OCR full-page inpaint write failed");
+    return false;
+  }
+}
+
+/** Remove a post's full-page inpaint image. Best-effort. */
+export async function deleteInpaintedPage(hash: string): Promise<void> {
+  await rm(buildInpaintedPageFilePath(hash), { force: true }).catch(() => {});
+}
+
 /** Remove a post's crop directory. Best-effort. */
 export async function deleteCrops(hash: string): Promise<void> {
-  await rm(buildCropDir(hash), { recursive: true, force: true }).catch(() => {});
+  await Promise.all([
+    rm(buildCropDir(hash), { recursive: true, force: true }).catch(() => {}),
+    deleteInpaintedPage(hash),
+  ]);
 }
