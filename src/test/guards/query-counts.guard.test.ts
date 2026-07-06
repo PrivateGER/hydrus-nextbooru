@@ -60,14 +60,21 @@ const QUERY_BUDGETS = {
   // current guard calibration.
   postDetail: 12,
   recommendationsCold: 5,
-  // buildFeed cost is O(seeds), NOT O(posts): a constant base (favorites +
-  // dismissals + seed group-siblings + embedding-config resolution) plus a
-  // per-seed fan-out (embedding k-NN — skipped with no embedding config — and
-  // tag-IDF recommendations). Merging candidates adds no per-row queries.
-  // A non-empty merged list then costs ONE extra postGroup.findMany (per-group
-  // feed dedup — a single indexed `postId IN (...)` batch, not an N+1); it is
-  // skipped when the feed is empty. Calibrated with FEED_GUARD_SEEDS favorites
-  // seeded (< recentSeedCount, so every favorite is a seed with no sampling).
+  // buildFeed cost is O(1) in query count, independent of seed count. A
+  // constant base (favorites + dismissals + recently-viewed + seed group-
+  // siblings + embedding-config resolution) plus a SINGLE batched tag-IDF
+  // compute for ALL seeds (getTagNeighborhoodsForSeeds: cache read + one
+  // set-based compute + one post-detail fetch; the cache-write runs in an
+  // interactive transaction the pool-level capture does not observe) and a
+  // per-seed embedding k-NN fan-out (skipped with no embedding config). Adding
+  // signals (dismissals as negative seeds, views as positive seeds) adds seeds
+  // but NOT queries — they flow through the same batched compute. Merging adds
+  // no per-row queries. A non-empty merged list then costs ONE extra
+  // postGroup.findMany (per-group feed dedup — a single indexed `postId IN
+  // (...)` batch, not an N+1); it is skipped when the feed is empty. Calibrated
+  // with FEED_GUARD_SEEDS favorites (< recentSeedCount, so every favorite is a
+  // seed with no sampling) and no dismissals/views seeded. The budget is a
+  // loose ceiling: batching left the real count well under it.
   feed: 21,
   // resolvePostForMutation's getPostIdByHash is the only pool-captured query
   // for PUT: setFavorite/setDismissal run in an interactive transaction whose

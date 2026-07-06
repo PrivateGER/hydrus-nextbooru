@@ -125,6 +125,7 @@ model Post {
   embeddings      PostEmbedding[]
   favorite        Favorite?
   feedDismissal   FeedDismissal?
+  view            PostView?
 
   @@index([rating])
   @@index([importedAt])
@@ -421,4 +422,18 @@ model FeedDismissal {
   postId      Int      @id
   post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   dismissedAt DateTime @default(now())
+}
+
+// Implicit engagement signal: opening a post's detail page records a view.
+// A weak, recency-decayed positive signal for the "For You" feed — repeated
+// views of the same post read as stronger interest (viewCount). Recorded
+// client-side (real opens only, not SSR/prefetch) via /api/posts/[hash]/view.
+model PostView {
+  postId       Int      @id
+  post         Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewCount    Int      @default(1)
+  firstViewedAt DateTime @default(now())
+  lastViewedAt DateTime @default(now())
+
+  @@index([lastViewedAt(sort: Desc)])
 }

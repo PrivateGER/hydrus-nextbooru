@@ -63,6 +63,26 @@ export interface FeedConfig {
    * rolling positive taste.
    */
   negativeStrength: number;
+  /**
+   * Most-recently-viewed posts used as weak POSITIVE seeds (implicit
+   * engagement). Excludes favorited/dismissed posts — those already carry a
+   * stronger explicit signal.
+   */
+  viewSeedCount: number;
+  /** View-seed weight halves every this many days since the last view. */
+  viewRecencyHalfLifeDays: number;
+  /**
+   * Ceiling on a single view seed's weight, reached by a freshly, repeatedly
+   * viewed post. Kept well below 1 (a fresh favorite) so a passive view never
+   * outweighs a deliberate favorite.
+   */
+  viewWeightCap: number;
+  /**
+   * viewCount at which the count factor saturates to ~1. The factor grows with
+   * log(viewCount), so the 2nd open of a post lifts its weight far more than
+   * the 20th.
+   */
+  viewCountSaturation: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
@@ -80,6 +100,10 @@ export const FEED_CONFIG: FeedConfig = {
   negativeSeedCount: 30,
   negativeRecencyHalfLifeDays: 60,
   negativeStrength: 0.8,
+  viewSeedCount: 25,
+  viewRecencyHalfLifeDays: 30,
+  viewWeightCap: 0.35,
+  viewCountSaturation: 8,
   maxFeedSize: 500,
 };
 
@@ -93,6 +117,13 @@ export interface DismissalSeedInput {
   postId: number;
   hash: string;
   dismissedAt: Date;
+}
+
+export interface ViewSeedInput {
+  postId: number;
+  hash: string;
+  viewCount: number;
+  lastViewedAt: Date;
 }
 
 export interface FeedSeed {
@@ -308,6 +339,39 @@ export function selectNegativeSeeds(
 }
 
 /**
+ * Positive seeds from implicit views (opening a post's detail page).
+ *
+ * A view is a much softer signal than a deliberate favorite, so its weight is
+ * capped well below 1: weight = viewWeightCap * recency(lastViewedAt) *
+ * countFactor. countFactor grows with log(viewCount) and saturates at
+ * viewCountSaturation, so re-opening a post lifts it (real interest) but a
+ * single accidental open stays a gentle nudge. Callers must exclude favorited
+ * and dismissed posts upstream — those carry a stronger explicit signal.
+ *
+ * @param views - MUST be sorted lastViewedAt DESC (newest first)
+ */
+export function selectViewSeeds(
+  views: ViewSeedInput[],
+  now: Date,
+  config: FeedConfig = FEED_CONFIG
+): FeedSeed[] {
+  if (config.viewSeedCount <= 0 || config.viewWeightCap <= 0) return [];
+  const saturationLog = Math.log(1 + Math.max(0, config.viewCountSaturation));
+  return views.slice(0, config.viewSeedCount).map((v) => {
+    const recency = seedWeight(v.lastViewedAt, now, config.viewRecencyHalfLifeDays);
+    const countFactor =
+      saturationLog > 0
+        ? Math.min(1, Math.log(1 + Math.max(0, v.viewCount)) / saturationLog)
+        : 1;
+    return {
+      postId: v.postId,
+      hash: v.hash,
+      weight: config.viewWeightCap * recency * countFactor,
+    };
+  });
+}
+
+/**
  * Merge per-seed candidate neighborhoods into one ranked list.
  *
  * Embedding scores are cosine similarities already in [0,1] (clamped
@@ -485,7 +549,7 @@ function assembleContributions(
 export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
   const now = new Date();
 
-  const [favorites, dismissals] = await Promise.all([
+  const [favorites, dismissals, views] = await Promise.all([
     prisma.favorite.findMany({
       orderBy: { favoritedAt: "desc" },
       select: {
@@ -502,13 +566,26 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         post: { select: { hash: true } },
       },
     }),
+    // Recently-viewed posts that carry no explicit signal yet (not favorited,
+    // not dismissed) — the implicit-engagement seeds.
+    prisma.postView.findMany({
+      where: { post: { favorite: { is: null }, feedDismissal: { is: null } } },
+      orderBy: { lastViewedAt: "desc" },
+      take: config.viewSeedCount,
+      select: {
+        postId: true,
+        viewCount: true,
+        lastViewedAt: true,
+        post: { select: { hash: true } },
+      },
+    }),
   ]);
 
   // Without favorites there is no positive taste to seed from; a feed built
-  // only from dislikes would have nothing to rank.
+  // only from dislikes/views would have too little explicit signal to rank on.
   if (favorites.length === 0) return [];
 
-  const positiveSeeds = selectSeeds(
+  const favoriteSeeds = selectSeeds(
     favorites.map((fav) => ({
       postId: fav.postId,
       hash: fav.post.hash,
@@ -517,6 +594,17 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     now,
     config,
     mulberry32(Math.floor(Date.now() / SEED_SAMPLE_BUCKET_MS))
+  );
+
+  const viewSeeds = selectViewSeeds(
+    views.map((v) => ({
+      postId: v.postId,
+      hash: v.post.hash,
+      viewCount: v.viewCount,
+      lastViewedAt: v.lastViewedAt,
+    })),
+    now,
+    config
   );
 
   const negativeSeeds = selectNegativeSeeds(
@@ -529,8 +617,12 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     config
   );
 
-  // Both signs feed the same batched tag compute and per-seed embedding fetch,
-  // so the negative signal adds seeds without multiplying query count.
+  // Favorites and views are positive (boost neighbors); dismissals are negative
+  // (suppress neighbors). All three feed the same batched tag compute and
+  // per-seed embedding fetch, so extra signals add seeds without multiplying
+  // query count. Seed sets are disjoint by construction (views exclude
+  // favorited/dismissed; favorites and dismissals are mutually exclusive).
+  const positiveSeeds = [...favoriteSeeds, ...viewSeeds];
   const allSeeds = [...positiveSeeds, ...negativeSeeds];
   const allSeedIds = allSeeds.map((s) => s.postId);
 

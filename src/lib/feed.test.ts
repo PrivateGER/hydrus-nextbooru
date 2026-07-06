@@ -4,11 +4,13 @@ import {
   seedWeight,
   selectSeeds,
   selectNegativeSeeds,
+  selectViewSeeds,
   mulberry32,
   mergeSeedCandidates,
   dedupeRankedByGroup,
   type FavoriteSeedInput,
   type DismissalSeedInput,
+  type ViewSeedInput,
   type SeedContribution,
   type FeedConfig,
   type FeedPost,
@@ -219,6 +221,53 @@ describe("selectNegativeSeeds", () => {
   it("returns nothing when negative seeding is disabled", () => {
     const config: FeedConfig = { ...FEED_CONFIG, negativeSeedCount: 0 };
     expect(selectNegativeSeeds([dismissal(1, 0)], NOW, config)).toEqual([]);
+  });
+});
+
+describe("selectViewSeeds", () => {
+  function view(postId: number, ageDays: number, viewCount: number): ViewSeedInput {
+    return {
+      postId,
+      hash: postId.toString(16).padStart(64, "0"),
+      viewCount,
+      lastViewedAt: new Date(NOW.getTime() - ageDays * DAY_MS),
+    };
+  }
+
+  it("takes the most-recently-viewed posts up to viewSeedCount", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewSeedCount: 2 };
+    const seeds = selectViewSeeds(
+      [view(1, 0, 1), view(2, 1, 1), view(3, 2, 1)],
+      NOW,
+      config
+    );
+    expect(seeds.map((s) => s.postId)).toEqual([1, 2]);
+  });
+
+  it("keeps a single fresh view well below a fresh favorite's weight", () => {
+    // A favorite made now weighs 1; a single fresh view must be a gentle nudge.
+    const [seed] = selectViewSeeds([view(1, 0, 1)], NOW, FEED_CONFIG);
+    expect(seed.weight).toBeGreaterThan(0);
+    expect(seed.weight).toBeLessThan(FEED_CONFIG.viewWeightCap);
+    expect(seed.weight).toBeLessThan(0.5);
+  });
+
+  it("weights a repeatedly-viewed post above a once-viewed one", () => {
+    const [once, many] = selectViewSeeds([view(1, 0, 1), view(2, 0, 20)], NOW, FEED_CONFIG);
+    expect(many.weight).toBeGreaterThan(once.weight);
+    // Saturates at the cap for a fresh, heavily-viewed post.
+    expect(many.weight).toBeCloseTo(FEED_CONFIG.viewWeightCap, 10);
+  });
+
+  it("decays view weight with recency", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewRecencyHalfLifeDays: 30 };
+    const [fresh, old] = selectViewSeeds([view(1, 0, 4), view(2, 30, 4)], NOW, config);
+    expect(old.weight).toBeCloseTo(fresh.weight / 2, 10);
+  });
+
+  it("returns nothing when view seeding is disabled", () => {
+    expect(selectViewSeeds([view(1, 0, 3)], NOW, { ...FEED_CONFIG, viewSeedCount: 0 })).toEqual([]);
+    expect(selectViewSeeds([view(1, 0, 3)], NOW, { ...FEED_CONFIG, viewWeightCap: 0 })).toEqual([]);
   });
 });
 

@@ -15,6 +15,7 @@ import { isValidCreatorName } from "@/lib/groups";
 import { NoteCard } from "@/components/note-card";
 import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
+import { RecordView } from "@/components/post/record-view";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 import { dedupeFilmstripGroups } from "@/lib/filmstrip-groups";
 
@@ -230,6 +231,9 @@ export default async function PostPage({ params }: PostPageProps) {
         prevPostHash={prevPostHash}
         nextPostHash={nextPostHash}
       />
+
+      {/* Implicit engagement signal for the "For You" feed */}
+      <RecordView hash={post.hash} />
 
       <div className="order-last lg:order-first">
         <TagSidebar tags={tags} />
