@@ -127,7 +127,23 @@ export interface EmbeddingAdminStatus {
   lastBatchResult: EmbeddingBatchResult | null;
 }
 
-export type Section = "sync" | "thumbnails" | "translation" | "phash" | "embeddings" | "maintenance" | "help";
+export interface OcrStats {
+  enabled: boolean;
+  serviceReachable: boolean;
+  pendingImages: number;
+  completeImages: number;
+  failedImages: number;
+  totalRegions: number;
+  batch: {
+    status: string;
+    totalPosts: number;
+    processedPosts: number;
+    failedPosts: number;
+    errorMessage: string | null;
+  };
+}
+
+export type Section = "sync" | "thumbnails" | "translation" | "phash" | "embeddings" | "ocr" | "maintenance" | "help";
 
 export interface Message {
   type: "success" | "error";

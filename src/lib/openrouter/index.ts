@@ -32,6 +32,8 @@ export {
   type TranslationResult,
   type ImageTranslationRequest,
   type ImageTranslationResult,
+  type TextsTranslationRequest,
+  type TextsTranslationResult,
   type EmbeddingRequest,
   type EmbeddingResponse,
   type EmbeddingResult,

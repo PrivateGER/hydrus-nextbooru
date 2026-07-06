@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import {
   setupTestDatabase,
@@ -14,6 +14,12 @@ import {
   stopQueryCapture,
   countableStatements,
 } from './query-capture';
+// The admin OCR route guards on verifyAdminSession before touching the DB;
+// stub it authorized so the handler's queries actually run. Safe as a
+// whole-module mock: none of the other routes below import from @/lib/auth.
+vi.mock('@/lib/auth', () => ({
+  verifyAdminSession: vi.fn().mockResolvedValue({ authorized: true }),
+}));
 // Route handlers are imported statically: @/lib/db's `prisma` is a per-access
 // Proxy that resolves the injected test client, and these route modules do no
 // top-level DB work, so importing them before setupTestDatabase() runs is safe
@@ -25,6 +31,7 @@ import { GET as recommendationsGET } from '@/app/api/recommendations/[hash]/rout
 import { GET as feedGET } from '@/app/api/feed/route';
 import { PUT as favoritePUT, DELETE as favoriteDELETE } from '@/app/api/posts/[hash]/favorite/route';
 import { PUT as dismissalPUT, DELETE as dismissalDELETE } from '@/app/api/posts/[hash]/dismissal/route';
+import { GET as ocrAdminGET } from '@/app/api/admin/ocr/route';
 
 /**
  * Query-count budgets (N+1 guards).
@@ -48,10 +55,10 @@ const QUERY_BUDGETS = {
   tagCoOccurrence: 2,
   // One findUnique whose nested include tree Prisma loads as constant queries
   // (post, tags->tag, notes->translation, groups->group->posts). Constant in
-  // row count — not an N+1. NB: 11 is the observed count and is unrelated to
-  // this PR (post detail queries no favorite state); the prior 10 predates the
-  // guard suite actually being run.
-  postDetail: 11,
+  // row count — not an N+1. NB: 12 is the observed count and is unrelated to
+  // this PR (post detail queries no favorite state); the prior 11 predates the
+  // current guard calibration.
+  postDetail: 12,
   recommendationsCold: 5,
   // buildFeed cost is O(seeds), NOT O(posts): a constant base (favorites +
   // dismissals + seed group-siblings + embedding-config resolution) plus a
@@ -71,6 +78,10 @@ const QUERY_BUDGETS = {
   favoriteDelete: 2,
   dismissalPut: 1,
   dismissalDelete: 2,
+  // getOcrAdminStatus fans out to a fixed Promise.all of five aggregates
+  // (three post.count by ocrStatus, imageTextRegion.count, ocrBatchState
+  // .findFirst) — constant in row count, so this is a plain N+1 tripwire.
+  ocrAdminStatus: 5,
 } as const;
 
 // Fixed favorite count for the feed guard: small and < recentSeedCount so the
@@ -271,5 +282,12 @@ describe('Query count guards', () => {
 
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.dismissalDelete);
+  });
+
+  it('admin OCR status stays within budget', async () => {
+    const count = await countQueries('admin OCR status', () => ocrAdminGET());
+
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.ocrAdminStatus);
   });
 });

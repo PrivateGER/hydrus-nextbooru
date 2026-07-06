@@ -11,7 +11,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       THUMBNAIL_PATH: /thumbnails
     volumes:
-      - "Z:/Hydrus:/hydrus:ro"
       - thumbnails:/thumbnails
 
     depends_on:
@@ -27,7 +26,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -40,6 +39,25 @@ services:
     #  - "-c"
     #  - "max_connections=200"
     # ...
+
+  # Optional OCR sidecar for positioned text recognition (manga/comics).
+  # ~15 GB image (models baked in), amd64 only.
+  # No published ports on purpose: the API is unauthenticated and must stay
+  # on the internal network. --models-ttl 300 releases GPU/CPU model memory
+  # after 5 minutes idle (lazy reload on next request).
+  ocr:
+    image: zyddnys/manga-image-translator@sha256:261c2d7ee114d9105e11210d6abc31c0552ac91f0cd65a8ef47db9eb345106d8
+    container_name: booru-ocr
+    restart: unless-stopped
+    entrypoint: ["python", "server/main.py", "--host", "0.0.0.0", "--port", "8000", "--start-instance", "--nonce", "None", "--models-ttl", "300"]
+    # For NVIDIA GPU: append "--use-gpu" to the entrypoint list and uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
 volumes:
   postgres_data:

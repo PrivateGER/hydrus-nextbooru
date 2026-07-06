@@ -24,6 +24,9 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         include: { translation: true },
         orderBy: { name: "asc" },
       },
+      imageTextRegions: {
+        orderBy: { readingOrder: "asc" },
+      },
       groups: {
         include: {
           group: {
@@ -133,6 +136,27 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
             translatedAt: post.imageTranslatedAt,
           }
         : null,
+      ocr:
+        post.ocrStatus !== "PENDING" || post.imageTextRegions.length > 0
+          ? {
+              status: post.ocrStatus,
+              scannedAt: post.ocrScannedAt,
+              regions: post.imageTextRegions.map((region) => ({
+                readingOrder: region.readingOrder,
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+                ocrText: region.ocrText,
+                translatedText: region.translatedText,
+                sourceLanguage: region.sourceLanguage,
+                hasCrop: region.hasCrop,
+                textColorFg: region.textColorFg,
+                textColorBg: region.textColorBg,
+                cropVersion: post.ocrScannedAt?.getTime() ?? 0,
+              })),
+            }
+          : null,
       tags,
       notes: post.notes,
       groups,

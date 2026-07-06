@@ -1,6 +1,22 @@
 # Development overrides - exposes PostgreSQL for local tooling
 # This file is automatically loaded by docker compose
 services:
+  booru:
+    environment:
+      HYDRUS_FILES_PATH: /hydrus
+    volumes:
+      - "${HYDRUS_FILES_PATH:?HYDRUS_FILES_PATH is required}:/hydrus:ro"
+  ocr:
+    devices:
+      - "nvidia.com/gpu=all"
+    environment:
+      PIP_ROOT_USER_ACTION: ignore
+    volumes:
+      - ocr_pip_cache:/root/.cache/pip
+    entrypoint: ["sh", "-lc", "python -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 && exec python server/main.py --host 0.0.0.0 --port 8000 --start-instance --nonce None --models-ttl 300 --use-gpu"]
   postgres:
     ports:
       - "5432:5432"
+
+volumes:
+  ocr_pip_cache:

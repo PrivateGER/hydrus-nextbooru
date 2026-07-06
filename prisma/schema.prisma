@@ -64,6 +64,12 @@ enum Orientation {
   square
 }
 
+enum OcrStatus {
+  PENDING // never scanned
+  COMPLETE // scanned; zero regions means "no text found"
+  FAILED // last scan attempt errored (sidecar/IO failure)
+}
+
 // ============================================
 // MODELS
 // ============================================
@@ -103,11 +109,16 @@ model Post {
   imageTargetLanguage String?
   imageTranslatedAt   DateTime?
 
+  // Positioned OCR text regions (sidecar OCR + text-LLM translation)
+  ocrStatus    OcrStatus @default(PENDING)
+  ocrScannedAt DateTime?
+
   // Relations
   tags            PostTag[]
   groups          PostGroup[]
   thumbnails      Thumbnail[]
   notes           Note[]
+  imageTextRegions ImageTextRegion[]
   recommendations PostRecommendation[] @relation("PostRecommendations")
   recommendedBy   PostRecommendation[] @relation("RecommendedTo")
   phashEntry      PhashEntry?
@@ -119,6 +130,7 @@ model Post {
   @@index([importedAt])
   @@index([mimeType])
   @@index([orientation])
+  @@index([ocrStatus])
 }
 
 model Tag {
@@ -209,6 +221,49 @@ model ContentTranslation {
   // Back-relations
   notes  Note[]
   groups Group[]
+}
+
+// ============================================
+// OCR TEXT REGIONS (positioned image text + translation overlay)
+// ============================================
+
+model ImageTextRegion {
+  id             Int      @id @default(autoincrement())
+  postId         Int
+  post           Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  readingOrder   Int // 0-based; sidecar panel-aware reading order
+  x              Float // normalized 0-1, left edge
+  y              Float // normalized 0-1, top edge
+  width          Float // normalized 0-1
+  height         Float // normalized 0-1
+  ocrText        String
+  translatedText String? // null = translation pending/failed; UI falls back to ocrText
+  sourceLanguage String? // per-region langid code ('ja', 'ko', ...)
+  targetLanguage String?
+  confidence     Float? // sidecar OCR prob
+  angle          Float? // rotation degrees; stored, not rendered in v1
+  hasCrop        Boolean  @default(false) // inpainted bubble crop stored on disk
+  textColorFg    String? // hex "#rrggbb" detected text foreground
+  textColorBg    String? // hex detected text background
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([postId, readingOrder])
+}
+
+// Single-row batch state; the atomic lock for admin OCR batches (SyncState pattern).
+// `key` is a fixed unique value so the table can hold at most one (singleton) row.
+model OcrBatchState {
+  id             Int       @id @default(autoincrement())
+  key            String    @unique @default("singleton")
+  status         String    @default("idle") // idle, running, cancelling, completed, error, cancelled
+  totalPosts     Int       @default(0)
+  processedPosts Int       @default(0)
+  failedPosts    Int       @default(0)
+  errorMessage   String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  updatedAt      DateTime  @updatedAt
 }
 
 // ============================================

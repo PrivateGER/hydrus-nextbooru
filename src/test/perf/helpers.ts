@@ -124,7 +124,7 @@ export async function benchmarkWithStats(
  * enforced. PERF_ASSERT=true/false overrides in either direction.
  */
 export function shouldEnforcePerfThresholds(
-  env: { CI?: string; PERF_ASSERT?: string } = process.env
+  env: Record<string, string | undefined> = process.env
 ): boolean {
   if (env.PERF_ASSERT === 'true') return true;
   if (env.PERF_ASSERT === 'false') return false;

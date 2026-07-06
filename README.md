@@ -105,3 +105,20 @@ My personal "production" server running Nextbooru holds 110k files with 140k tag
 
 
 Open for improvements, PRs and whatever of course.
+
+## OCR text overlay (optional)
+
+Positioned text recognition for comic pages: an optional
+[manga-image-translator](https://github.com/zyddnys/manga-image-translator) sidecar detects
+speech-bubble text regions (boxes + text + reading order), the app translates the text with
+your configured LLM provider (text-only, cheap), and translations render as hover notes over
+the image. Enable by uncommenting the `ocr` service in `docker-compose.yml` and setting
+`OCR_SERVICE_URL` in `.env`. Scan per-post from the viewer toolbar, or in bulk from Admin → OCR.
+The sidecar processes one page at a time (~2–10 s each); idle model memory is released after
+5 minutes (`--models-ttl 300`). For zero idle VRAM, move the service behind a compose profile
+and start it on demand.
+Typeset view is a third viewer overlay state: it places LaMa-inpainted bubble crops back over
+the original image and renders the configured LLM's translations as selectable fitted text.
+Inpainting is heavier than hover notes (`lama_large` by default); if VRAM is constrained, tune
+the `inpainter` in `src/lib/ocr/config.ts` to a lighter model such as `lama_mpe`. Posts scanned before
+typeset support need a rescan before the typeset state is available.

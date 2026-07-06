@@ -1,11 +1,14 @@
 import type {
   OpenRouterClientConfig,
+  ChatMessage,
   ChatCompletionRequest,
   ChatCompletionResponse,
   TranslationRequest,
   TranslationResult,
   ImageTranslationRequest,
   ImageTranslationResult,
+  TextsTranslationRequest,
+  TextsTranslationResult,
   EmbeddingRequest,
   EmbeddingResponse,
   EmbeddingResult,
@@ -14,6 +17,7 @@ import type {
   EmbeddingMultimodalInput,
 } from "./types";
 import { DEFAULT_CHAT_MODEL, EMBEDDING_INPUT_TYPES } from "./types";
+import pLimit from "p-limit";
 import { aiLog } from "@/lib/logger";
 import { DEFAULT_BASE_URL, normalizeBaseUrl } from "./base-url";
 
@@ -222,6 +226,133 @@ Preserve the original formatting, line breaks, and tone in the translation.`;
       sourceLang: sourceLangCode,
       targetLang,
     };
+  }
+
+  /**
+   * Translate a batch of texts (comic page regions, reading order) in ONE
+   * text-only completion. Falls back to per-text translate() when the model
+   * cannot produce a parseable aligned JSON array.
+   */
+  async translateTexts(request: TextsTranslationRequest): Promise<TextsTranslationResult> {
+    const targetLang = request.targetLang || this.defaultTargetLang;
+    if (request.texts.length === 0) {
+      return { translations: [], targetLang };
+    }
+    const targetLangName = this.getLanguageName(targetLang);
+
+    const numbered = request.texts.map((text, i) => ({
+      index: i,
+      language: request.sourceLangs?.[i] ?? undefined,
+      text,
+    }));
+
+    const systemPrompt = `You are a professional translator for comics and illustrations.
+You receive the text regions of ONE page in reading order as a JSON array; each region has a numeric "index".
+Translate every region into ${targetLangName}, using surrounding regions as context.
+Keep honorifics and names natural; keep onomatopoeia short.
+
+Respond with ONLY a JSON array of objects shaped exactly like {"index": 0, "translation": "..."}.
+Include exactly one object for every input index, preserve each input "index" value, and put the translated text in "translation".
+No markdown, no code fences, no commentary.`;
+
+    const userPrompt = JSON.stringify(numbered);
+    const messages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ];
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let content: string;
+      try {
+        const completion = await this.chatCompletion({ messages, max_tokens: 4096 });
+        content = completion.choices[0]?.message?.content?.trim() || "";
+      } catch (error) {
+        // 401 is a configuration problem, not a transient failure — abort.
+        if (error instanceof OpenRouterApiError && error.statusCode === 401) {
+          throw error;
+        }
+        aiLog.warn(
+          { attempt, error: error instanceof Error ? error.message : String(error) },
+          "translateTexts: batch request failed; falling back to per-text calls"
+        );
+        break;
+      }
+      const parsed = this.parseIndexedTranslations(content, request.texts.length);
+      if (parsed) {
+        return { translations: parsed, targetLang };
+      }
+      aiLog.warn(
+        { attempt, contentPreview: content.slice(0, 200) },
+        "translateTexts: unparseable batch response"
+      );
+      messages.push(
+        { role: "assistant", content },
+        {
+          role: "user",
+          content: `That was not a valid JSON array of exactly ${request.texts.length} objects shaped {"index": number, "translation": string}, with every index from 0 to ${request.texts.length - 1} present exactly once. Respond with ONLY that JSON array.`,
+        }
+      );
+    }
+
+    // Fallback: per-text translation, bounded concurrency. Preserve partial
+    // successes — one failed individual translation must not lose the others.
+    aiLog.warn({ count: request.texts.length }, "translateTexts: falling back to per-text calls");
+    const limit = pLimit(3);
+    const settled = await Promise.allSettled(
+      request.texts.map((text) =>
+        limit(async () => (await this.translate({ text, targetLang })).translatedText)
+      )
+    );
+    const translations = settled.map((outcome, index) => {
+      if (outcome.status === "fulfilled") {
+        return outcome.value;
+      }
+      aiLog.warn(
+        {
+          index,
+          error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+        },
+        "translateTexts: per-text fallback failed for region"
+      );
+      return null;
+    });
+    return { translations, targetLang };
+  }
+
+  /** Parse strict indexed translation objects; null when invalid. */
+  private parseIndexedTranslations(content: string, expectedLength: number): string[] | null {
+    const unfenced = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    try {
+      const parsed = JSON.parse(unfenced);
+      if (!Array.isArray(parsed) || parsed.length !== expectedLength) {
+        return null;
+      }
+
+      const translations = new Array<string>(expectedLength);
+      const seen = new Set<number>();
+      for (const item of parsed) {
+        if (item === null || typeof item !== "object") {
+          return null;
+        }
+        const { index, translation } = item as { index?: unknown; translation?: unknown };
+        if (
+          typeof index !== "number" ||
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= expectedLength ||
+          seen.has(index) ||
+          typeof translation !== "string"
+        ) {
+          return null;
+        }
+        translations[index] = translation;
+        seen.add(index);
+      }
+
+      return seen.size === expectedLength ? translations : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -121,6 +121,9 @@ async function getPost(hash: string) {
           },
         },
       },
+      imageTextRegions: {
+        orderBy: { readingOrder: "asc" },
+      },
     },
   });
 
@@ -246,6 +249,21 @@ export default async function PostPage({ params }: PostPageProps) {
           nextPostHash={nextPostHash}
           currentPosition={currentPosition}
           totalCount={totalCount}
+          textRegions={post.imageTextRegions.map((region) => ({
+            readingOrder: region.readingOrder,
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+            ocrText: region.ocrText,
+            translatedText: region.translatedText,
+            sourceLanguage: region.sourceLanguage,
+            hasCrop: region.hasCrop,
+            textColorFg: region.textColorFg,
+            textColorBg: region.textColorBg,
+            cropVersion: post.ocrScannedAt?.getTime() ?? 0,
+          }))}
+          ocrEnabled={Boolean(process.env.OCR_SERVICE_URL?.trim())}
         />
 
         {/* Notes */}
