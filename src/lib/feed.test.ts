@@ -3,10 +3,14 @@ import {
   FEED_CONFIG,
   seedWeight,
   selectSeeds,
+  selectNegativeSeeds,
+  selectViewSeeds,
   mulberry32,
   mergeSeedCandidates,
   dedupeRankedByGroup,
   type FavoriteSeedInput,
+  type DismissalSeedInput,
+  type ViewSeedInput,
   type SeedContribution,
   type FeedConfig,
   type FeedPost,
@@ -191,6 +195,82 @@ describe("selectSeeds", () => {
   });
 });
 
+describe("selectNegativeSeeds", () => {
+  function dismissal(postId: number, ageDays: number): DismissalSeedInput {
+    return {
+      postId,
+      hash: postId.toString(16).padStart(64, "0"),
+      dismissedAt: new Date(NOW.getTime() - ageDays * DAY_MS),
+    };
+  }
+
+  it("takes the most-recent dismissals up to negativeSeedCount", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, negativeSeedCount: 2 };
+    const dismissals = [dismissal(1, 0), dismissal(2, 1), dismissal(3, 2)];
+    const seeds = selectNegativeSeeds(dismissals, NOW, config);
+    expect(seeds.map((s) => s.postId)).toEqual([1, 2]);
+  });
+
+  it("weights decay with age at the negative half-life", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, negativeRecencyHalfLifeDays: 60 };
+    const [a, b] = selectNegativeSeeds([dismissal(1, 0), dismissal(2, 60)], NOW, config);
+    expect(a.weight).toBeCloseTo(1, 10);
+    expect(b.weight).toBeCloseTo(0.5, 10);
+  });
+
+  it("returns nothing when negative seeding is disabled", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, negativeSeedCount: 0 };
+    expect(selectNegativeSeeds([dismissal(1, 0)], NOW, config)).toEqual([]);
+  });
+});
+
+describe("selectViewSeeds", () => {
+  function view(postId: number, ageDays: number, viewCount: number): ViewSeedInput {
+    return {
+      postId,
+      hash: postId.toString(16).padStart(64, "0"),
+      viewCount,
+      lastViewedAt: new Date(NOW.getTime() - ageDays * DAY_MS),
+    };
+  }
+
+  it("takes the most-recently-viewed posts up to viewSeedCount", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewSeedCount: 2 };
+    const seeds = selectViewSeeds(
+      [view(1, 0, 1), view(2, 1, 1), view(3, 2, 1)],
+      NOW,
+      config
+    );
+    expect(seeds.map((s) => s.postId)).toEqual([1, 2]);
+  });
+
+  it("keeps a single fresh view well below a fresh favorite's weight", () => {
+    // A favorite made now weighs 1; a single fresh view must be a gentle nudge.
+    const [seed] = selectViewSeeds([view(1, 0, 1)], NOW, FEED_CONFIG);
+    expect(seed.weight).toBeGreaterThan(0);
+    expect(seed.weight).toBeLessThan(FEED_CONFIG.viewWeightCap);
+    expect(seed.weight).toBeLessThan(0.5);
+  });
+
+  it("weights a repeatedly-viewed post above a once-viewed one", () => {
+    const [once, many] = selectViewSeeds([view(1, 0, 1), view(2, 0, 20)], NOW, FEED_CONFIG);
+    expect(many.weight).toBeGreaterThan(once.weight);
+    // Saturates at the cap for a fresh, heavily-viewed post.
+    expect(many.weight).toBeCloseTo(FEED_CONFIG.viewWeightCap, 10);
+  });
+
+  it("decays view weight with recency", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewRecencyHalfLifeDays: 30 };
+    const [fresh, old] = selectViewSeeds([view(1, 0, 4), view(2, 30, 4)], NOW, config);
+    expect(old.weight).toBeCloseTo(fresh.weight / 2, 10);
+  });
+
+  it("returns nothing when view seeding is disabled", () => {
+    expect(selectViewSeeds([view(1, 0, 3)], NOW, { ...FEED_CONFIG, viewSeedCount: 0 })).toEqual([]);
+    expect(selectViewSeeds([view(1, 0, 3)], NOW, { ...FEED_CONFIG, viewWeightCap: 0 })).toEqual([]);
+  });
+});
+
 describe("mergeSeedCandidates", () => {
   const config: FeedConfig = { ...FEED_CONFIG, maxFeedSize: 10 };
   const seed = (postId: number, weight: number) => ({
@@ -256,6 +336,55 @@ describe("mergeSeedCandidates", () => {
     expect(merged).toHaveLength(10);
     // Equal scores tie-break by ascending id
     expect(merged.map((p) => p.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
+  it("subtracts a negative seed's contribution scaled by negativeStrength", () => {
+    // Candidate 100 is pulled by a favorite (+) and pushed by a dislike (-).
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 1)], idf: [], polarity: 1 },
+      { seed: seed(2, 1), embedding: [candidate(100, 0.5)], idf: [], polarity: -1 },
+    ];
+    const merged = mergeSeedCandidates(contributions, new Set(), {
+      ...config,
+      negativeStrength: 0.8,
+    });
+    // +0.7*1  -  0.8*0.7*0.5  = 0.7 - 0.28 = 0.42
+    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.42, 10);
+  });
+
+  it("drops a candidate whose dislike outweighs its like", () => {
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 0.3)], idf: [], polarity: 1 },
+      { seed: seed(2, 1), embedding: [candidate(100, 1)], idf: [], polarity: -1 },
+    ];
+    // +0.7*0.3 = 0.21  vs  -0.8*0.7*1 = -0.56 → net negative → dropped.
+    const merged = mergeSeedCandidates(contributions, new Set(), {
+      ...config,
+      negativeStrength: 0.8,
+    });
+    expect(merged.find((p) => p.id === 100)).toBeUndefined();
+  });
+
+  it("suppresses a candidate reached only from a negative seed", () => {
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 0.9)], idf: [], polarity: 1 },
+      { seed: seed(2, 1), embedding: [candidate(200, 0.9)], idf: [], polarity: -1 },
+    ];
+    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    // Only the liked candidate survives; the disliked-only one is net-negative.
+    expect(merged.map((p) => p.id)).toEqual([100]);
+  });
+
+  it("treats an omitted polarity as positive (backwards compatible)", () => {
+    const withField: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 0.8)], idf: [], polarity: 1 },
+    ];
+    const without: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 0.8)], idf: [] },
+    ];
+    const a = mergeSeedCandidates(withField, new Set(), config);
+    const b = mergeSeedCandidates(without, new Set(), config);
+    expect(a).toEqual(b);
   });
 });
 

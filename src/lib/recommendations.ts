@@ -1,8 +1,17 @@
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 
 // Cache TTL: 24 hours in milliseconds
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_RECOMMENDATION_LIMIT = 20;
+
+/**
+ * Cap on how many of a source post's tags feed the similarity join. Kept in
+ * sync with the p_max_source_tags default in the SQL functions. Only the least
+ * distinctive (lowest-IDF) tags are dropped once a post exceeds this, so
+ * ranking is preserved while the candidate scan stays bounded.
+ */
+const MAX_SOURCE_TAGS = 64;
 
 export interface RecommendedPost {
   id: number;
@@ -221,6 +230,155 @@ async function computeAndCacheRecommendations(
       };
     })
     .filter((p): p is RecommendedPost => p !== null);
+}
+
+/**
+ * Batched tag-similarity neighborhoods for many source posts at once.
+ *
+ * The "For You" feed seeds from dozens of posts (favorites, recently viewed,
+ * dismissals). Calling {@link getOrComputeRecommendations} once per seed fanned
+ * out into N cold `compute_post_recommendations` calls, each spinning up
+ * parallel workers — the batch that pegged the DB at 100% CPU on a cold cache.
+ *
+ * This reuses the same 24h {@link PostRecommendation} cache, but computes every
+ * cold seed in ONE set-based `compute_recommendations_for_posts` call (one scan
+ * of PostTag instead of N). Fresh cache hits are served from the read; only the
+ * misses hit the compute. Newly computed rows are persisted so a later
+ * single-post lookup (detail page) is warm too.
+ *
+ * A seed with no fresh cached rows is treated as cold — mirroring the single-
+ * post path, which never negative-caches an empty result.
+ *
+ * @param seedIds - source post ids (deduped internally)
+ * @param limit - max neighbors returned per seed (cache always stores the top
+ *   {@link MAX_RECOMMENDATION_LIMIT})
+ * @returns Map from seed id to its ranked neighbors (score desc). Seeds with no
+ *   neighbors map to an empty array.
+ */
+export async function getTagNeighborhoodsForSeeds(
+  seedIds: number[],
+  limit = MAX_RECOMMENDATION_LIMIT
+): Promise<Map<number, RecommendedPost[]>> {
+  const clampedLimit = clampRecommendationLimit(limit);
+  const result = new Map<number, RecommendedPost[]>();
+
+  const uniqueIds = [...new Set(seedIds.filter((id) => Number.isInteger(id)))];
+  if (uniqueIds.length === 0) return result;
+
+  // 1. Read whatever is cached for these seeds in one indexed query.
+  const cachedRows = await prisma.postRecommendation.findMany({
+    where: { postId: { in: uniqueIds } },
+    include: {
+      recommended: {
+        select: {
+          id: true,
+          hash: true,
+          width: true,
+          height: true,
+          blurhash: true,
+          mimeType: true,
+        },
+      },
+    },
+    orderBy: { score: "desc" },
+  });
+
+  const cachedBySeed = new Map<number, typeof cachedRows>();
+  for (const row of cachedRows) {
+    const bucket = cachedBySeed.get(row.postId);
+    if (bucket) bucket.push(row);
+    else cachedBySeed.set(row.postId, [row]);
+  }
+
+  const now = Date.now();
+  const coldIds: number[] = [];
+  for (const id of uniqueIds) {
+    const rows = cachedBySeed.get(id);
+    // Fresh iff we have rows and the newest is within the TTL. Absence of rows
+    // is ambiguous (never computed vs. genuinely empty), so — like the single-
+    // post path — we recompute rather than negative-cache.
+    const computedAt = rows?.[0]?.computedAt;
+    if (rows && computedAt && now - computedAt.getTime() < CACHE_TTL_MS) {
+      result.set(id, rows.map(mapRecommendation).slice(0, clampedLimit));
+    } else {
+      coldIds.push(id);
+    }
+  }
+
+  if (coldIds.length === 0) return result;
+
+  // 2. Compute every cold seed in a single set-based query.
+  const idsLiteral = Prisma.raw(
+    `ARRAY[${coldIds.map((id) => Math.trunc(id)).join(",")}]::integer[]`
+  );
+  const rawResults = await prisma.$queryRaw<
+    { source_id: number; recommended_id: number; score: number }[]
+  >`SELECT * FROM compute_recommendations_for_posts(${idsLiteral}, ${MAX_RECOMMENDATION_LIMIT}::int, ${MAX_SOURCE_TAGS}::int)`;
+
+  // 3. Fetch post details for every recommended id in one query.
+  const recommendedIds = [...new Set(rawResults.map((r) => r.recommended_id))];
+  const posts =
+    recommendedIds.length > 0
+      ? await prisma.post.findMany({
+          where: { id: { in: recommendedIds } },
+          select: {
+            id: true,
+            hash: true,
+            width: true,
+            height: true,
+            blurhash: true,
+            mimeType: true,
+          },
+        })
+      : [];
+  const postMap = new Map(posts.map((p) => [p.id, p]));
+
+  // 4. Persist the freshly computed rows so single-post lookups stay warm.
+  //    Interactive transaction (checked-out client) keeps the delete+insert
+  //    atomic per the existing single-post pattern.
+  const computedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.postRecommendation.deleteMany({ where: { postId: { in: coldIds } } });
+    if (rawResults.length > 0) {
+      await tx.postRecommendation.createMany({
+        data: rawResults.map((r) => ({
+          postId: r.source_id,
+          recommendedId: r.recommended_id,
+          score: r.score,
+          computedAt,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  });
+
+  // 5. Assemble per-seed results (score desc). Every cold seed gets an entry,
+  //    empty when it had no neighbors.
+  const freshBySeed = new Map<number, RecommendedPost[]>();
+  for (const r of rawResults) {
+    const post = postMap.get(r.recommended_id);
+    if (!post) continue;
+    const bucket = freshBySeed.get(r.source_id);
+    const entry: RecommendedPost = {
+      id: post.id,
+      hash: post.hash,
+      width: post.width,
+      height: post.height,
+      blurhash: post.blurhash,
+      mimeType: post.mimeType,
+      score: r.score,
+    };
+    if (bucket) bucket.push(entry);
+    else freshBySeed.set(r.source_id, [entry]);
+  }
+  for (const id of coldIds) {
+    const neighbors = (freshBySeed.get(id) ?? [])
+      .sort((a, b) => b.score - a.score)
+      .slice(0, clampedLimit);
+    result.set(id, neighbors);
+  }
+
+  return result;
 }
 
 /**
