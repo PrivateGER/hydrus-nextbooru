@@ -120,7 +120,11 @@ under a multi-worker or multi-replica deployment:
 - **Recommendation compute coalescing** (`src/lib/recommendations.ts`): the
   in-flight promise map that dedupes concurrent recomputes for the same post is
   per-process. The underlying DB writes are transactional and remain safe
-  regardless, but cross-process requests may each recompute.
+  regardless, but cross-process requests may each recompute. Note the feed's
+  batched path (`getTagNeighborhoodsForSeeds`) does not use this map at all —
+  it relies solely on the 24h `PostRecommendation` cache plus its own
+  delete+insert transaction, so concurrent feed builds are safe but may
+  duplicate compute.
 
 If/when moving to multi-process, these need a shared coordination layer
 (distributed lock / shared cache) rather than in-memory state.
