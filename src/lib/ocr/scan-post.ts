@@ -188,11 +188,14 @@ export async function persistScan(
   };
 }
 
-async function renderPostInpaintedPage(post: ScannablePost): Promise<Buffer | null> {
+export async function renderPostInpaintedPage(
+  post: ScannablePost,
+  options?: { signal?: AbortSignal }
+): Promise<Buffer | null> {
   try {
     const image = await readFile(buildFilePath(post.hash, post.extension));
     const prepared = await prepareSidecarImage(image, post.mimeType);
-    return await renderInpaintedPage(prepared.image, prepared.mimeType);
+    return await renderInpaintedPage(prepared.image, prepared.mimeType, { signal: options?.signal });
   } catch (error) {
     aiLog.warn(
       { hash: post.hash, error: error instanceof Error ? error.message : String(error) },
@@ -205,6 +208,29 @@ async function renderPostInpaintedPage(post: ScannablePost): Promise<Buffer | nu
 /** Record a scan failure without touching existing regions. */
 export async function markScanFailed(postId: number): Promise<void> {
   await prisma.post.update({ where: { id: postId }, data: { ocrStatus: "FAILED" } });
+}
+
+/**
+ * Replace a post's crop files and full-page inpaint, then persist regions, all
+ * serialized per post hash. Shared by the interactive and batch scan paths so
+ * both keep the crop directory, page inpaint, and DB row mutually consistent.
+ */
+export async function finalizeScan(
+  post: ScannablePost,
+  regions: NormalizedRegion[],
+  translated: (string | null)[],
+  targetLanguage: string | null,
+  inpaintedPage: Buffer | null
+): Promise<ScanPostOutcome> {
+  return withPostCropWriteLock(post.hash, async () => {
+    const hasCrops = await storeCrops(post.hash, regions);
+    if (inpaintedPage) {
+      await storeInpaintedPage(post.hash, inpaintedPage);
+    } else {
+      await deleteInpaintedPage(post.hash);
+    }
+    return persistScan(post, regions, translated, targetLanguage, hasCrops);
+  });
 }
 
 /**
@@ -222,32 +248,15 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
     throw error;
   }
 
-
   const inpaintedPage = regions.length > 0 ? await renderPostInpaintedPage(post) : null;
   try {
     const { translated, targetLanguage, failed } = await translateRegions(regions, targetLang);
-    const outcome = await withPostCropWriteLock(post.hash, async () => {
-      const hasCrops = await storeCrops(post.hash, regions);
-      if (inpaintedPage) {
-        await storeInpaintedPage(post.hash, inpaintedPage);
-      } else {
-        await deleteInpaintedPage(post.hash);
-      }
-      return persistScan(post, regions, translated, targetLanguage, hasCrops);
-    });
+    const outcome = await finalizeScan(post, regions, translated, targetLanguage, inpaintedPage);
     return { ...outcome, translationFailed: failed && outcome.hasText };
   } catch (error) {
     if (error instanceof OpenRouterApiError && error.statusCode === 401) {
       try {
-        const outcome = await withPostCropWriteLock(post.hash, async () => {
-          const hasCrops = await storeCrops(post.hash, regions);
-          if (inpaintedPage) {
-            await storeInpaintedPage(post.hash, inpaintedPage);
-          } else {
-            await deleteInpaintedPage(post.hash);
-          }
-          return persistScan(post, regions, regions.map(() => null), null, hasCrops);
-        });
+        const outcome = await finalizeScan(post, regions, regions.map(() => null), null, inpaintedPage);
         return { ...outcome, translationFailed: true };
       } catch (recoveryError) {
         // OCR-only persistence itself failed: don't leave the post PENDING.

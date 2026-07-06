@@ -192,7 +192,7 @@ describe("scanPost", () => {
 
     await scanPost(POST);
 
-    expect(mockRenderInpaintedPage).toHaveBeenCalledWith(Buffer.from([1]), "image/png");
+    expect(mockRenderInpaintedPage).toHaveBeenCalledWith(Buffer.from([1]), "image/png", { signal: undefined });
     expect(mockStoreInpaintedPage).toHaveBeenCalledWith(POST.hash, Buffer.from([9, 9, 9]));
   });
 

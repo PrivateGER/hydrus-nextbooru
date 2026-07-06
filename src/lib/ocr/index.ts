@@ -9,6 +9,8 @@ export {
   translateRegions,
   persistScan,
   markScanFailed,
+  finalizeScan,
+  renderPostInpaintedPage,
   OcrFileMissingError,
   type ScannablePost,
   type ScanPostOutcome,
@@ -23,6 +25,7 @@ export type {
 export {
   acquireOcrBatchLock,
   requestOcrBatchCancel,
+  requestOcrBatchReset,
   selectOcrBatchPosts,
   runOcrBatch,
   getOcrAdminStatus,

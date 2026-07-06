@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DocumentMagnifyingGlassIcon, StopIcon } from "@heroicons/react/24/outline";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,17 +8,39 @@ import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import type { OcrStats } from "@/types/admin";
 
+// A running batch with no progress write for this long is likely crashed;
+// surface a force-reset affordance instead of leaving the admin stuck at 409.
+const STALE_SECONDS = 120;
+
 export interface OcrSectionProps {
   ocrStats: OcrStats | null;
   isRunning: boolean;
   onStart: (options: { limit?: number; tags?: string[]; retryFailed?: boolean }) => void;
   onCancel: () => void;
+  onForceReset: () => void;
 }
 
-export function OcrSection({ ocrStats, isRunning, onStart, onCancel }: OcrSectionProps) {
+export function OcrSection({ ocrStats, isRunning, onStart, onCancel, onForceReset }: OcrSectionProps) {
   const [limitInput, setLimitInput] = useState("500");
   const [tagsInput, setTagsInput] = useState("");
   const [retryFailed, setRetryFailed] = useState(false);
+
+  // `Date.now()` is impure during render; read it in an effect on a slow tick so
+  // the "last update" readout and stale gating refresh without breaking purity.
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNowMs(Date.now());
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const lastUpdateMs = ocrStats?.batch.updatedAt ? Date.parse(ocrStats.batch.updatedAt) : null;
+  const secondsSinceUpdate =
+    lastUpdateMs !== null && Number.isFinite(lastUpdateMs) && nowMs !== null
+      ? Math.max(0, Math.round((nowMs - lastUpdateMs) / 1000))
+      : null;
+  const stalled = isRunning && secondsSinceUpdate !== null && secondsSinceUpdate > STALE_SECONDS;
 
   if (ocrStats && !ocrStats.enabled) {
     return (
@@ -83,6 +105,15 @@ export function OcrSection({ ocrStats, isRunning, onStart, onCancel }: OcrSectio
                 total={ocrStats.batch.totalPosts}
                 color="purple"
               />
+              {secondsSinceUpdate !== null && (
+                <p
+                  className={`mt-2 text-xs ${stalled ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}
+                >
+                  {stalled
+                    ? `No progress for ${secondsSinceUpdate}s — the batch may have crashed. Use Force reset to clear the lock.`
+                    : `last update ${secondsSinceUpdate}s ago`}
+                </p>
+              )}
             </div>
           )}
           {ocrStats.batch.errorMessage && (
@@ -130,10 +161,18 @@ export function OcrSection({ ocrStats, isRunning, onStart, onCancel }: OcrSectio
             retry failed
           </label>
           {isRunning ? (
-            <Button onClick={onCancel} variant="danger">
-              <StopIcon className="h-4 w-4" />
-              Cancel
-            </Button>
+            <>
+              <Button onClick={onCancel} variant="danger">
+                <StopIcon className="h-4 w-4" />
+                Cancel
+              </Button>
+              {stalled && (
+                <Button onClick={onForceReset} variant="danger">
+                  <StopIcon className="h-4 w-4" />
+                  Force reset
+                </Button>
+              )}
+            </>
           ) : (
             <Button onClick={handleStart} disabled={!ocrStats}>
               <DocumentMagnifyingGlassIcon className="h-4 w-4" />

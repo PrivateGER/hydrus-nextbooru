@@ -3,14 +3,14 @@ import { prisma } from "@/lib/db";
 import { OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 import {
+  finalizeScan,
   markScanFailed,
   ocrPost,
-  persistScan,
+  renderPostInpaintedPage,
   translateRegions,
-  withPostCropWriteLock,
   type ScannablePost,
 } from "./scan-post";
-import { storeCrops } from "./crops";
+import { getOcrTimeoutMs } from "./config";
 import type { NormalizedRegion } from "./types";
 
 const TRANSLATE_CONCURRENCY = 3;
@@ -18,6 +18,17 @@ const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 10000;
 const MAX_ERROR_ENTRIES = 10;
 const SINGLETON_KEY = "singleton";
+// A running/cancelling batch row whose updatedAt falls older than the stale
+// window is treated as crashed and may be reclaimed by a fresh batch. updatedAt
+// is Prisma-managed and bumped on every progress write, so a live batch stays
+// comfortably fresh within this window.
+const MIN_STALE_BATCH_MS = 10 * 60_000;
+// A background heartbeat refreshes updatedAt on this cadence for the ENTIRE
+// batch lifetime — including the post-loop translation drain, where a slow
+// OpenRouter call would otherwise freeze updatedAt and let a live batch's row
+// look crashed. Must stay well under MIN_STALE_BATCH_MS so acquireOcrBatchLock
+// never reclaims a batch that is merely slow.
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 export interface OcrBatchOptions {
   limit?: number;
@@ -49,10 +60,19 @@ export async function acquireOcrBatchLock(): Promise<boolean> {
     finishedAt: null,
   };
 
-  const claimed = await prisma.ocrBatchState.updateMany({
-    where: { key: SINGLETON_KEY, status: { notIn: ["running", "cancelling"] } },
-    data: runningData,
-  });
+  // Reclaim a terminal row OR a running/cancelling row gone stale (crashed
+  // mid-run with no finalize). The stale window exceeds the worst-case gap
+  // between progress writes, so a healthy batch never matches it.
+  const staleBefore = new Date(Date.now() - Math.max(MIN_STALE_BATCH_MS, getOcrTimeoutMs() * 4));
+  const claimWhere = {
+    key: SINGLETON_KEY,
+    OR: [
+      { status: { notIn: ["running", "cancelling"] } },
+      { updatedAt: { lt: staleBefore } },
+    ],
+  };
+
+  const claimed = await prisma.ocrBatchState.updateMany({ where: claimWhere, data: runningData });
   if (claimed.count > 0) return true;
 
   const existing = await prisma.ocrBatchState.findUnique({
@@ -68,10 +88,7 @@ export async function acquireOcrBatchLock(): Promise<boolean> {
   } catch {
     // Lost the create race (unique violation) or the singleton row appeared
     // between our read and write; re-run the conditional claim against it.
-    const retry = await prisma.ocrBatchState.updateMany({
-      where: { key: SINGLETON_KEY, status: { notIn: ["running", "cancelling"] } },
-      data: runningData,
-    });
+    const retry = await prisma.ocrBatchState.updateMany({ where: claimWhere, data: runningData });
     return retry.count > 0;
   }
 }
@@ -88,6 +105,25 @@ export async function requestOcrBatchCancel(): Promise<boolean> {
   });
   // Abort the in-flight sidecar call for an instant stop instead of waiting
   // out the current OCR request (up to OCR_SERVICE_TIMEOUT_MS on a hung sidecar).
+  if (updated.count > 0) activeBatchAbort?.abort();
+  return updated.count > 0;
+}
+
+/**
+ * Force the singleton batch row back to a terminal state regardless of status.
+ * Escape hatch for a crashed batch stuck `running`/`cancelling` that the normal
+ * cancel path (which only flips running->cancelling) cannot clear. Also aborts
+ * the in-flight sidecar call when the crashed batch is somehow still in-process.
+ */
+export async function requestOcrBatchReset(): Promise<boolean> {
+  const updated = await prisma.ocrBatchState.updateMany({
+    where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
+    data: {
+      status: "cancelled",
+      errorMessage: "Batch force-reset by admin",
+      finishedAt: new Date(),
+    },
+  });
   if (updated.count > 0) activeBatchAbort?.abort();
   return updated.count > 0;
 }
@@ -138,6 +174,21 @@ async function updateProgress(processedDelta: number, failedDelta: number): Prom
   }
 }
 
+// Bump the Prisma-managed updatedAt so a legitimately slow post (serial OCR +
+// page render, each up to the sidecar timeout) is never mistaken for a crashed
+// batch by acquireOcrBatchLock's stale-reclaim check. increment-by-0 is a real
+// UPDATE that refreshes updatedAt without changing any counter.
+async function heartbeat(): Promise<void> {
+  try {
+    await prisma.ocrBatchState.updateMany({
+      where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
+      data: { processedPosts: { increment: 0 } },
+    });
+  } catch (error) {
+    aiLog.error({ error: String(error) }, "OCR batch heartbeat failed");
+  }
+}
+
 async function finalize(result: OcrBatchResult): Promise<void> {
   try {
     await prisma.ocrBatchState.updateMany({
@@ -174,6 +225,13 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
   const pushError = (message: string): void => {
     if (result.errors.length < MAX_ERROR_ENTRIES) result.errors.push(message);
   };
+
+  // Keep the lock fresh for as long as this process is alive — across serial
+  // OCR/render AND the trailing Promise.all translation drain. Cleared in the
+  // finally so only a genuine crash (dead event loop) lets the row go stale.
+  const heartbeatTimer = setInterval(() => {
+    void heartbeat();
+  }, HEARTBEAT_INTERVAL_MS);
 
   try {
     const posts = await selectOcrBatchPosts(options);
@@ -224,6 +282,16 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
         continue;
       }
 
+      // Stage 1b: render the full-page inpaint on the serial path so every
+      // sidecar call stays strictly serial. No regions means no page; a render
+      // failure degrades to per-region crops, but an abort means cancellation.
+      const inpaintedPage =
+        regions.length > 0 ? await renderPostInpaintedPage(post, { signal: batchSignal }) : null;
+      if (batchSignal.aborted) {
+        result.status = "cancelled";
+        break;
+      }
+
       // Stage 2: translate + persist in the pool, overlapping the next OCR.
       pending.push(
         translateLimit(async () => {
@@ -232,20 +300,20 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
               regions,
               options.targetLang
             );
-            await withPostCropWriteLock(post.hash, async () => {
-              const hasCrops = await storeCrops(post.hash, regions);
-              await persistScan(post, regions, translated, targetLanguage, hasCrops);
-            });
+            await finalizeScan(post, regions, translated, targetLanguage, inpaintedPage);
             result.processed++;
             await updateProgress(1, 0);
           } catch (error) {
             if (error instanceof OpenRouterApiError && error.statusCode === 401) {
               abortError = error;
               // Persist OCR-only so the scan work is not lost.
-              await withPostCropWriteLock(post.hash, async () => {
-                const hasCrops = await storeCrops(post.hash, regions);
-                await persistScan(post, regions, regions.map(() => null), null, hasCrops).catch(() => {});
-              });
+              await finalizeScan(
+                post,
+                regions,
+                regions.map(() => null),
+                null,
+                inpaintedPage
+              ).catch(() => {});
               result.processed++;
               await updateProgress(1, 0);
               return;
@@ -271,6 +339,8 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
     result.status = "error";
     pushError(error instanceof Error ? error.message : String(error));
     aiLog.error({ error: String(error) }, "OCR batch failed");
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 
   activeBatchAbort = null;
@@ -303,6 +373,7 @@ export async function getOcrAdminStatus() {
       processedPosts: state?.processedPosts ?? 0,
       failedPosts: state?.failedPosts ?? 0,
       errorMessage: state?.errorMessage ?? null,
+      updatedAt: state?.updatedAt ?? null,
     },
   };
 }

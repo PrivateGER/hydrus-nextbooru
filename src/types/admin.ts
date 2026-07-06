@@ -140,6 +140,7 @@ export interface OcrStats {
     processedPosts: number;
     failedPosts: number;
     errorMessage: string | null;
+    updatedAt: string | null;
   };
 }
 
