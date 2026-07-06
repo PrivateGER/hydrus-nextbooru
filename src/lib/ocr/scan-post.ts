@@ -5,7 +5,7 @@ import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 import { renderInpaintedPage, scanImage } from "./client";
 import { normalizeRegions } from "./normalize";
-import { deleteInpaintedPage, storeCrops, storeInpaintedPage } from "./crops";
+import { deleteInpaintedPage, storeInpaintedPage } from "./crops";
 import { prepareSidecarImage } from "./image-prep";
 import type { NormalizedRegion, OcrRegionDto } from "./types";
 
@@ -134,8 +134,7 @@ export async function persistScan(
   post: { id: number; hash: string },
   regions: NormalizedRegion[],
   translated: (string | null)[],
-  targetLanguage: string | null,
-  hasCrops: boolean[]
+  targetLanguage: string | null
 ): Promise<ScanPostOutcome> {
   const scannedAt = new Date();
   const rows = regions.map((region, i) => ({
@@ -151,7 +150,6 @@ export async function persistScan(
     targetLanguage: translated[i] != null ? targetLanguage : null,
     confidence: region.confidence,
     angle: region.angle,
-    hasCrop: hasCrops[i] ?? false,
     textColorFg: region.textColorFg,
     textColorBg: region.textColorBg,
   }));
@@ -180,7 +178,6 @@ export async function persistScan(
       ocrText: row.ocrText,
       translatedText: row.translatedText,
       sourceLanguage: row.sourceLanguage,
-      hasCrop: row.hasCrop,
       textColorFg: row.textColorFg,
       textColorBg: row.textColorBg,
       cropVersion,
@@ -199,7 +196,7 @@ export async function renderPostInpaintedPage(
   } catch (error) {
     aiLog.warn(
       { hash: post.hash, error: error instanceof Error ? error.message : String(error) },
-      "OCR full-page inpaint unavailable; typeset overlay will use region crops"
+      "OCR full-page inpaint unavailable; typeset overlay will degrade to notes"
     );
     return null;
   }
@@ -211,9 +208,9 @@ export async function markScanFailed(postId: number): Promise<void> {
 }
 
 /**
- * Replace a post's crop files and full-page inpaint, then persist regions, all
- * serialized per post hash. Shared by the interactive and batch scan paths so
- * both keep the crop directory, page inpaint, and DB row mutually consistent.
+ * Replace a post's full-page inpaint, then persist regions, all serialized per
+ * post hash. Shared by the interactive and batch scan paths so both keep the
+ * page inpaint and DB rows mutually consistent.
  */
 export async function finalizeScan(
   post: ScannablePost,
@@ -223,13 +220,12 @@ export async function finalizeScan(
   inpaintedPage: Buffer | null
 ): Promise<ScanPostOutcome> {
   return withPostCropWriteLock(post.hash, async () => {
-    const hasCrops = await storeCrops(post.hash, regions);
     if (inpaintedPage) {
       await storeInpaintedPage(post.hash, inpaintedPage);
     } else {
       await deleteInpaintedPage(post.hash);
     }
-    return persistScan(post, regions, translated, targetLanguage, hasCrops);
+    return persistScan(post, regions, translated, targetLanguage);
   });
 }
 
@@ -264,8 +260,8 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
         throw recoveryError;
       }
     }
-    // storeCrops/persistScan failed for a recoverable-OCR post: mark FAILED so
-    // a stuck PENDING row doesn't hide the error from rescans/monitoring.
+    // Persistence failed for a recoverable-OCR post: mark FAILED so a stuck
+    // PENDING row doesn't hide the error from rescans/monitoring.
     await markScanFailed(post.id).catch(() => {});
     throw error;
   }

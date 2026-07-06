@@ -262,7 +262,6 @@ export default async function PostPage({ params }: PostPageProps) {
             ocrText: region.ocrText,
             translatedText: region.translatedText,
             sourceLanguage: region.sourceLanguage,
-            hasCrop: region.hasCrop,
             textColorFg: region.textColorFg,
             textColorBg: region.textColorBg,
             cropVersion: post.ocrScannedAt?.getTime() ?? 0,

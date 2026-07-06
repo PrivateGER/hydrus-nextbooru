@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isOcrEnabled, getOcrServiceUrl, getOcrTimeoutMs, OCR_PIPELINE_CONFIG } from "./config";
+import { isOcrEnabled, getOcrServiceUrl, getOcrTimeoutMs, OCR_PIPELINE_CONFIG, OCR_PAGE_INPAINT_CONFIG } from "./config";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -39,9 +39,13 @@ describe("ocr config", () => {
     expect(getOcrTimeoutMs()).toBe(30000);
   });
 
-  it("pipeline config disables translation, inpainting and colorizing", () => {
+  it("uses separate sidecar configs for OCR JSON and page inpaint calls", () => {
     expect(OCR_PIPELINE_CONFIG.translator.translator).toBe("original");
-    expect(OCR_PIPELINE_CONFIG.inpainter.inpainter).toBe("lama_large");
+    expect(OCR_PIPELINE_CONFIG.inpainter.inpainter).toBe("none");
     expect(OCR_PIPELINE_CONFIG.colorizer.colorizer).toBe("none");
+
+    expect(OCR_PAGE_INPAINT_CONFIG.translator.translator).toBe("none");
+    expect(OCR_PAGE_INPAINT_CONFIG.inpainter.inpainter).toBe("lama_large");
+    expect(OCR_PAGE_INPAINT_CONFIG.colorizer.colorizer).toBe("none");
   });
 });

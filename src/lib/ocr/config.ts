@@ -5,23 +5,26 @@ const DEFAULT_TIMEOUT_MS = 120000;
  *
  * - translator "original": every key of the response text dict holds the OCR
  *   text and no translation model is ever loaded.
- * - inpainter "lama_large": produces clean text-removed background crops we now
- *   keep; LaMa loads on scan and unloads after models-ttl.
+ * - inpainter "none": the OCR/JSON call no longer needs region background
+ *   crops; the full-page render performs the single LaMa inpaint used by typeset.
  * - upscale_ratio MUST stay unset so returned pixel coords are in the space of
  *   the uploaded image.
  */
 export const OCR_PIPELINE_CONFIG = {
   translator: { translator: "original" },
-  inpainter: { inpainter: "lama_large" },
+  inpainter: { inpainter: "none" },
   colorizer: { colorizer: "none" },
   detector: { detector: "default" },
   ocr: { ocr: "48px" },
 } as const;
 
-/** Full-page inpaint render: same detector/OCR/inpainter, but no text rendering. */
+/** Full-page inpaint render: explicit config keeps LaMa enabled for the page image. */
 export const OCR_PAGE_INPAINT_CONFIG = {
-  ...OCR_PIPELINE_CONFIG,
   translator: { translator: "none" },
+  inpainter: { inpainter: "lama_large" },
+  colorizer: { colorizer: "none" },
+  detector: { detector: "default" },
+  ocr: { ocr: "48px" },
 } as const;
 
 /** Whether the OCR sidecar feature is configured. */
