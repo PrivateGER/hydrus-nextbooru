@@ -49,6 +49,20 @@ export interface FeedConfig {
    * taste a real voice in ranking.
    */
   sampledSeedWeightFloor: number;
+  /**
+   * Most-recent dismissals ("not interested") used as NEGATIVE seeds. Their
+   * tag/embedding neighborhoods subtract from candidate scores, so disliking a
+   * post pushes down posts similar to it — not just that one post.
+   */
+  negativeSeedCount: number;
+  /** Negative-seed weight halves every this many days since the dismissal. */
+  negativeRecencyHalfLifeDays: number;
+  /**
+   * How hard a dislike pushes similar posts down, relative to how hard a like
+   * pulls them up. 1 = symmetric; < 1 keeps the negative signal from steam-
+   * rolling positive taste.
+   */
+  negativeStrength: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
@@ -63,6 +77,9 @@ export const FEED_CONFIG: FeedConfig = {
   recencyHalfLifeDays: 90,
   minEmbeddingScore: 0.25,
   sampledSeedWeightFloor: 0.25,
+  negativeSeedCount: 30,
+  negativeRecencyHalfLifeDays: 60,
+  negativeStrength: 0.8,
   maxFeedSize: 500,
 };
 
@@ -70,6 +87,12 @@ export interface FavoriteSeedInput {
   postId: number;
   hash: string;
   favoritedAt: Date;
+}
+
+export interface DismissalSeedInput {
+  postId: number;
+  hash: string;
+  dismissedAt: Date;
 }
 
 export interface FeedSeed {
@@ -92,6 +115,12 @@ export interface SeedContribution {
   seed: FeedSeed;
   embedding: EmbeddedRelatedPost[];
   idf: RecommendedPost[];
+  /**
+   * +1 for a positive seed (favorite / view) whose neighbors are boosted, -1
+   * for a negative seed (dismissal) whose neighbors are suppressed. Defaults to
+   * +1 when omitted.
+   */
+  polarity?: 1 | -1;
 }
 
 const DAY_MS = 86_400_000;
@@ -256,6 +285,29 @@ export function selectSeeds(
 }
 
 /**
+ * Negative-seed selection from dismissals ("not interested").
+ *
+ * Unlike favorites, dismissals are NOT stratified across taste eras: "not
+ * interested" is a short-horizon correction, so we take the `negativeSeedCount`
+ * most-recent dismissals with plain recency-decayed weights and let older
+ * dislikes fade. A dismissal made now weighs 1; one a half-life old weighs 0.5.
+ *
+ * @param dismissals - MUST be sorted dismissedAt DESC (newest first)
+ */
+export function selectNegativeSeeds(
+  dismissals: DismissalSeedInput[],
+  now: Date,
+  config: FeedConfig = FEED_CONFIG
+): FeedSeed[] {
+  if (config.negativeSeedCount <= 0) return [];
+  return dismissals.slice(0, config.negativeSeedCount).map((d) => ({
+    postId: d.postId,
+    hash: d.hash,
+    weight: seedWeight(d.dismissedAt, now, config.negativeRecencyHalfLifeDays),
+  }));
+}
+
+/**
  * Merge per-seed candidate neighborhoods into one ranked list.
  *
  * Embedding scores are cosine similarities already in [0,1] (clamped
@@ -263,6 +315,11 @@ export function selectSeeds(
  * that seed's maximum (best tag-similar candidate -> 1). Each candidate's
  * contribution is seedWeight * (engineWeight * normalizedScore); candidates
  * reached from several seeds accumulate.
+ *
+ * Negative seeds (polarity -1, from dismissals) subtract their contribution
+ * scaled by `negativeStrength`, so a candidate near a disliked post loses
+ * score. Contributions sum regardless of sign; a candidate whose net score
+ * lands at or below zero — dominated by dislikes — is dropped from the feed.
  */
 export function mergeSeedCandidates(
   contributions: SeedContribution[],
@@ -275,7 +332,7 @@ export function mergeSeedCandidates(
     post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string },
     contribution: number
   ) => {
-    if (contribution <= 0 || excludedPostIds.has(post.id)) return;
+    if (contribution === 0 || excludedPostIds.has(post.id)) return;
     const existing = byId.get(post.id);
     if (existing) {
       existing.score += contribution;
@@ -292,21 +349,26 @@ export function mergeSeedCandidates(
     }
   };
 
-  for (const { seed, embedding, idf } of contributions) {
+  for (const { seed, embedding, idf, polarity = 1 } of contributions) {
+    // A negative seed subtracts, damped by negativeStrength so dislikes shape
+    // the feed without steamrolling the positive taste that generated it.
+    const strength = polarity < 0 ? -config.negativeStrength : 1;
+
     for (const neighbor of embedding) {
       const similarity = Math.max(0, Math.min(1, neighbor.score));
-      add(neighbor, seed.weight * config.embeddingWeight * similarity);
+      add(neighbor, strength * seed.weight * config.embeddingWeight * similarity);
     }
 
     const maxIdf = idf.reduce((max, rec) => Math.max(max, rec.score), 0);
     if (maxIdf > 0) {
       for (const rec of idf) {
-        add(rec, seed.weight * config.idfWeight * (rec.score / maxIdf));
+        add(rec, strength * seed.weight * config.idfWeight * (rec.score / maxIdf));
       }
     }
   }
 
   return [...byId.values()]
+    .filter((post) => post.score > 0)
     .sort((a, b) => b.score - a.score || a.id - b.id)
     .slice(0, config.maxFeedSize);
 }
@@ -399,70 +461,104 @@ async function fetchEmbeddingNeighborhoods(
 function assembleContributions(
   seeds: FeedSeed[],
   embeddingBySeed: Map<number, EmbeddedRelatedPost[]>,
-  idfBySeed: Map<number, RecommendedPost[]>
+  idfBySeed: Map<number, RecommendedPost[]>,
+  polarity: 1 | -1
 ): SeedContribution[] {
   return seeds.map((seed) => ({
     seed,
     embedding: embeddingBySeed.get(seed.postId) ?? [],
     idf: idfBySeed.get(seed.postId) ?? [],
+    polarity,
   }));
 }
 
 /**
  * Build the full ranked feed from scratch.
  *
- * Excludes favorited posts, dismissed posts, and any post sharing a group
- * with a seed (the per-seed engines already exclude the seed's own group;
- * this applies the rule across seeds too). Both engines degrade to empty
- * per-seed results on failure rather than failing the build.
+ * Positive seeds (favorites) pull in similar posts; negative seeds (recent
+ * dismissals) push down posts similar to them. Excludes favorited posts,
+ * dismissed posts, and any post sharing a group with a seed of either sign
+ * (the per-seed engines already exclude the seed's own group; this applies the
+ * rule across seeds too). Both engines degrade to empty per-seed results on
+ * failure rather than failing the build.
  */
 export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
-  const favorites = await prisma.favorite.findMany({
-    orderBy: { favoritedAt: "desc" },
-    select: {
-      postId: true,
-      favoritedAt: true,
-      post: { select: { hash: true } },
-    },
-  });
+  const now = new Date();
 
+  const [favorites, dismissals] = await Promise.all([
+    prisma.favorite.findMany({
+      orderBy: { favoritedAt: "desc" },
+      select: {
+        postId: true,
+        favoritedAt: true,
+        post: { select: { hash: true } },
+      },
+    }),
+    prisma.feedDismissal.findMany({
+      orderBy: { dismissedAt: "desc" },
+      select: {
+        postId: true,
+        dismissedAt: true,
+        post: { select: { hash: true } },
+      },
+    }),
+  ]);
+
+  // Without favorites there is no positive taste to seed from; a feed built
+  // only from dislikes would have nothing to rank.
   if (favorites.length === 0) return [];
 
-  const seeds = selectSeeds(
+  const positiveSeeds = selectSeeds(
     favorites.map((fav) => ({
       postId: fav.postId,
       hash: fav.post.hash,
       favoritedAt: fav.favoritedAt,
     })),
-    new Date(),
+    now,
     config,
     mulberry32(Math.floor(Date.now() / SEED_SAMPLE_BUCKET_MS))
   );
 
+  const negativeSeeds = selectNegativeSeeds(
+    dismissals.map((d) => ({
+      postId: d.postId,
+      hash: d.post.hash,
+      dismissedAt: d.dismissedAt,
+    })),
+    now,
+    config
+  );
+
+  // Both signs feed the same batched tag compute and per-seed embedding fetch,
+  // so the negative signal adds seeds without multiplying query count.
+  const allSeeds = [...positiveSeeds, ...negativeSeeds];
+  const allSeedIds = allSeeds.map((s) => s.postId);
+
   const embeddingConfig = await resolveEmbeddingConfig();
-  const seedIds = seeds.map((s) => s.postId);
 
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
   // neighborhoods are fetched per seed (cheap via the ANN index). Prisma queues
   // work beyond its pool size, so the flat fan-out is safe (single-user).
-  const [dismissals, seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
-    prisma.feedDismissal.findMany({ select: { postId: true } }),
+  const [seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
-        group: { posts: { some: { postId: { in: seedIds } } } },
+        group: { posts: { some: { postId: { in: allSeedIds } } } },
       },
       select: { postId: true },
     }),
-    getTagNeighborhoodsForSeeds(seedIds, config.neighborsPerSeed).catch(
+    getTagNeighborhoodsForSeeds(allSeedIds, config.neighborsPerSeed).catch(
       (error): Map<number, RecommendedPost[]> => {
         console.error("Feed: batched tag recommendations failed:", error);
         return new Map();
       }
     ),
-    fetchEmbeddingNeighborhoods(seeds, embeddingConfig, config),
+    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config),
   ]);
 
-  const contributions = assembleContributions(seeds, embeddingBySeed, idfBySeed);
+  const contributions = [
+    ...assembleContributions(positiveSeeds, embeddingBySeed, idfBySeed, 1),
+    ...assembleContributions(negativeSeeds, embeddingBySeed, idfBySeed, -1),
+  ];
 
   const excluded = new Set<number>([
     ...favorites.map((fav) => fav.postId),
