@@ -14,7 +14,7 @@
 import type { RecommendedPost } from "@/lib/recommendations";
 import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
-import { getOrComputeRecommendations } from "@/lib/recommendations";
+import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
   getEmbeddingOpenRouterSettings,
   toEmbeddingConfig,
@@ -353,32 +353,59 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   }
 }
 
-async function fetchSeedContribution(
-  seed: FeedSeed,
+/**
+ * Image-embedding nearest neighbors for every seed, keyed by seed post id.
+ *
+ * These use the pgvector `vchordrq` ANN index and are cheap individually; the
+ * flat Promise.all is bounded by Prisma's connection pool (single-user
+ * deployment). Returns an empty map when embeddings are unconfigured. Each
+ * seed degrades to an empty neighborhood on failure rather than failing the
+ * whole build.
+ */
+async function fetchEmbeddingNeighborhoods(
+  seeds: FeedSeed[],
   embeddingConfig: EmbeddingConfig | null,
   config: FeedConfig
-): Promise<SeedContribution> {
-  const [embedding, idf] = await Promise.all([
-    embeddingConfig
-      ? findRelatedPostsByEmbedding({
-          hash: seed.hash,
-          config: embeddingConfig,
-          limit: config.neighborsPerSeed,
-          minScore: config.minEmbeddingScore,
-        }).catch((error): EmbeddedRelatedPost[] => {
+): Promise<Map<number, EmbeddedRelatedPost[]>> {
+  const bySeed = new Map<number, EmbeddedRelatedPost[]>();
+  if (!embeddingConfig || seeds.length === 0) return bySeed;
+
+  const results = await Promise.all(
+    seeds.map((seed) =>
+      findRelatedPostsByEmbedding({
+        hash: seed.hash,
+        config: embeddingConfig,
+        limit: config.neighborsPerSeed,
+        minScore: config.minEmbeddingScore,
+      })
+        .catch((error): EmbeddedRelatedPost[] => {
           console.error(`Feed: embedding neighbors failed for seed ${seed.hash}:`, error);
           return [];
         })
-      : Promise.resolve<EmbeddedRelatedPost[]>([]),
-    getOrComputeRecommendations(seed.postId, config.neighborsPerSeed).catch(
-      (error): RecommendedPost[] => {
-        console.error(`Feed: tag recommendations failed for seed ${seed.postId}:`, error);
-        return [];
-      }
-    ),
-  ]);
+        .then((neighbors) => [seed.postId, neighbors] as const)
+    )
+  );
 
-  return { seed, embedding, idf };
+  for (const [postId, neighbors] of results) bySeed.set(postId, neighbors);
+  return bySeed;
+}
+
+/**
+ * Assemble per-seed candidate neighborhoods from the two engines. Tag-IDF
+ * neighborhoods are computed for ALL seeds in one batched query (see
+ * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched
+ * per seed. Missing entries degrade to empty.
+ */
+function assembleContributions(
+  seeds: FeedSeed[],
+  embeddingBySeed: Map<number, EmbeddedRelatedPost[]>,
+  idfBySeed: Map<number, RecommendedPost[]>
+): SeedContribution[] {
+  return seeds.map((seed) => ({
+    seed,
+    embedding: embeddingBySeed.get(seed.postId) ?? [],
+    idf: idfBySeed.get(seed.postId) ?? [],
+  }));
 }
 
 /**
@@ -413,19 +440,29 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   );
 
   const embeddingConfig = await resolveEmbeddingConfig();
+  const seedIds = seeds.map((s) => s.postId);
 
-  // Prisma queues queries beyond its pool size, so a flat Promise.all over
-  // all seeds is safe (single-user deployment).
-  const [dismissals, seedGroupSiblings, contributions] = await Promise.all([
+  // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
+  // neighborhoods are fetched per seed (cheap via the ANN index). Prisma queues
+  // work beyond its pool size, so the flat fan-out is safe (single-user).
+  const [dismissals, seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.feedDismissal.findMany({ select: { postId: true } }),
     prisma.postGroup.findMany({
       where: {
-        group: { posts: { some: { postId: { in: seeds.map((s) => s.postId) } } } },
+        group: { posts: { some: { postId: { in: seedIds } } } },
       },
       select: { postId: true },
     }),
-    Promise.all(seeds.map((seed) => fetchSeedContribution(seed, embeddingConfig, config))),
+    getTagNeighborhoodsForSeeds(seedIds, config.neighborsPerSeed).catch(
+      (error): Map<number, RecommendedPost[]> => {
+        console.error("Feed: batched tag recommendations failed:", error);
+        return new Map();
+      }
+    ),
+    fetchEmbeddingNeighborhoods(seeds, embeddingConfig, config),
   ]);
+
+  const contributions = assembleContributions(seeds, embeddingBySeed, idfBySeed);
 
   const excluded = new Set<number>([
     ...favorites.map((fav) => fav.postId),
@@ -460,7 +497,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
  * get separate module instances) and per-process, so a favorite/dismissal
  * mutation cannot invalidate it reliably: one bundle would serve stale data.
  * A fresh build is cheap for this single-user app — the IDF layer is DB-cached
- * for 24h by getOrComputeRecommendations and embedding k-NN is ms-scale.
+ * for 24h by getTagNeighborhoodsForSeeds (one batched compute for all cold
+ * seeds) and embedding k-NN is ms-scale via the ANN index.
  *
  * Precondition: page and limit are pre-sanitized positive integers.
  */
