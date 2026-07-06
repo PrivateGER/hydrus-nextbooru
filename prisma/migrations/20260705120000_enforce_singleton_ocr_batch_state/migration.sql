@@ -15,5 +15,9 @@ DROP INDEX "ImageTextRegion_postId_idx";
 -- AlterTable
 ALTER TABLE "OcrBatchState" ADD COLUMN     "key" TEXT NOT NULL DEFAULT 'singleton';
 
+-- Enforce singleton key value; the unique index alone only prevents duplicate
+-- keys, not alternate non-singleton rows.
+ALTER TABLE "OcrBatchState" ADD CONSTRAINT "OcrBatchState_key_singleton_check" CHECK ("key" = 'singleton');
+
 -- CreateIndex
 CREATE UNIQUE INDEX "OcrBatchState_key_key" ON "OcrBatchState"("key");
