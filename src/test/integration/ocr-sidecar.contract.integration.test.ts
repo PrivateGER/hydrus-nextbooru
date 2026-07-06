@@ -36,4 +36,20 @@ describe.skipIf(!enabled)("ocr sidecar contract", () => {
       }
     }
   );
+
+  it(
+    "returns zero regions (not an error) for an image with no text",
+    { timeout: 180_000 },
+    async () => {
+      // The sidecar reports a textless image as "No text regions! - Skipping"
+      // rather than an empty result; scanImage MUST absorb that into [].
+      const blank = await sharp({
+        create: { width: 512, height: 512, channels: 3, background: "white" },
+      })
+        .png()
+        .toBuffer();
+
+      await expect(scanImage(blank, "image/png")).resolves.toEqual([]);
+    }
+  );
 });

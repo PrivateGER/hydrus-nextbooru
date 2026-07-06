@@ -9,6 +9,15 @@ const STREAM_RESULT = 0;
 const STREAM_ERROR = 2;
 const STREAM_HEADER_BYTES = 5;
 
+/**
+ * The sidecar reports an image with no detectable text as an *error*
+ * ("No text regions! - Skipping") rather than an empty result. For OCR that is
+ * a successful scan that simply found nothing, so we translate this marker into
+ * zero regions instead of surfacing it as a service failure (which would mark
+ * the post FAILED and count it as a batch error).
+ */
+const NO_TEXT_REGIONS_MARKER = /no text regions/i;
+
 
 /**
  * Run detection + OCR on one image via the manga-image-translator sidecar.
@@ -55,6 +64,13 @@ export async function scanImage(
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
+    if (NO_TEXT_REGIONS_MARKER.test(body)) {
+      aiLog.debug(
+        { status: response.status, durationMs: Date.now() - startTime },
+        "OCR sidecar reported no text regions; treating as an empty scan"
+      );
+      return [];
+    }
     aiLog.error(
       { status: response.status, body: body.slice(0, 500) },
       "OCR sidecar returned an error"
@@ -65,7 +81,21 @@ export async function scanImage(
     );
   }
 
-  const payload = await readStreamJsonPayload(response);
+  let payload: unknown;
+  try {
+    payload = await readStreamJsonPayload(response);
+  } catch (error) {
+    // The sidecar can also deliver the "no text regions" signal as a stream
+    // error frame after a 200 OK; that is still a successful, textless scan.
+    if (error instanceof OcrServiceResponseError && NO_TEXT_REGIONS_MARKER.test(error.message)) {
+      aiLog.debug(
+        { durationMs: Date.now() - startTime },
+        "OCR sidecar reported no text regions; treating as an empty scan"
+      );
+      return [];
+    }
+    throw error;
+  }
 
   const regions = parseSidecarResponse(payload);
   aiLog.debug(

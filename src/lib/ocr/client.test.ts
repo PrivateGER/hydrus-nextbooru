@@ -167,6 +167,47 @@ describe("ocr client", () => {
     );
   });
 
+  it("treats a non-2xx 'No text regions' response as an empty scan, not an error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      json: vi.fn(),
+      text: vi.fn().mockResolvedValue("No text regions! - Skipping"),
+    });
+    await expect(scanImage(Buffer.from([1]), "image/png")).resolves.toEqual([]);
+  });
+
+  it("treats a 'No text regions' stream error frame as an empty scan, not an error", async () => {
+    const buffer = streamFrame(2, "No text regions! - Skipping");
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+      ),
+      text: vi.fn().mockResolvedValue(buffer.toString("binary")),
+    });
+    await expect(scanImage(Buffer.from([1]), "image/png")).resolves.toEqual([]);
+  });
+
+  it("still throws on a stream error frame unrelated to missing text", async () => {
+    const buffer = streamFrame(2, "CUDA out of memory");
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: vi.fn().mockResolvedValue(
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+      ),
+      text: vi.fn().mockResolvedValue(buffer.toString("binary")),
+    });
+    await expect(scanImage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceResponseError
+    );
+  });
+
   it("health check POSTs queue-size and returns false on failure without throwing", async () => {
     fetchMock.mockResolvedValueOnce(okResponse(0));
     await expect(checkOcrServiceHealth()).resolves.toBe(true);
