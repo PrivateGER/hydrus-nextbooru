@@ -422,6 +422,8 @@ model FeedDismissal {
   postId      Int      @id
   post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   dismissedAt DateTime @default(now())
+
+  @@index([dismissedAt(sort: Desc)])
 }
 
 // Implicit engagement signal: opening a post's detail page records a view.

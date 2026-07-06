@@ -549,7 +549,7 @@ function assembleContributions(
 export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
   const now = new Date();
 
-  const [favorites, dismissals, views] = await Promise.all([
+  const [favorites, dismissedIds, recentDismissals, views] = await Promise.all([
     prisma.favorite.findMany({
       orderBy: { favoritedAt: "desc" },
       select: {
@@ -558,14 +558,24 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         post: { select: { hash: true } },
       },
     }),
-    prisma.feedDismissal.findMany({
-      orderBy: { dismissedAt: "desc" },
-      select: {
-        postId: true,
-        dismissedAt: true,
-        post: { select: { hash: true } },
-      },
-    }),
+    // ALL dismissed post ids — needed to exclude every dismissed post from the
+    // feed. Id-only, unordered: a cheap primary-key scan even with thousands of
+    // dismissals.
+    prisma.feedDismissal.findMany({ select: { postId: true } }),
+    // Only the most-recent dismissals become negative seeds, so only these need
+    // the ordered read + Post join for their hash (embedding lookup). Bounded by
+    // negativeSeedCount and served by the dismissedAt index.
+    config.negativeSeedCount > 0
+      ? prisma.feedDismissal.findMany({
+          orderBy: { dismissedAt: "desc" },
+          take: config.negativeSeedCount,
+          select: {
+            postId: true,
+            dismissedAt: true,
+            post: { select: { hash: true } },
+          },
+        })
+      : Promise.resolve([]),
     // Recently-viewed posts that carry no explicit signal yet (not favorited,
     // not dismissed) — the implicit-engagement seeds.
     prisma.postView.findMany({
@@ -608,7 +618,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   );
 
   const negativeSeeds = selectNegativeSeeds(
-    dismissals.map((d) => ({
+    recentDismissals.map((d) => ({
       postId: d.postId,
       hash: d.post.hash,
       dismissedAt: d.dismissedAt,
@@ -654,7 +664,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   const excluded = new Set<number>([
     ...favorites.map((fav) => fav.postId),
-    ...dismissals.map((d) => d.postId),
+    ...dismissedIds.map((d) => d.postId),
     ...seedGroupSiblings.map((g) => g.postId),
   ]);
 
