@@ -32,4 +32,23 @@ describe.skipIf(!enabled)("ocr sidecar contract", () => {
       }
     }
   );
+
+  it(
+    "returns an empty region list for a text-free page instead of erroring",
+    { timeout: 180_000 },
+    async () => {
+      // Canary for the upstream no-text path: manga-image-translator emits a
+      // `skip-no-regions`/`skip-no-text` progress state and then surfaces a
+      // stream ERROR frame (it crashes serializing the empty result). scanImage
+      // MUST treat that as a COMPLETE zero-region scan. If a future sidecar
+      // stops emitting the skip signal, fixes the crash, or renames the state,
+      // this fails loudly instead of silently regressing pages back to FAILED.
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400">
+        <rect width="600" height="400" fill="white"/>
+      </svg>`;
+      const png = await sharp(Buffer.from(svg)).png().toBuffer();
+
+      await expect(scanImage(png, "image/png")).resolves.toEqual([]);
+    }
+  );
 });

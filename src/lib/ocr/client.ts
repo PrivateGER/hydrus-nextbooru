@@ -6,8 +6,17 @@ import { aiLog } from "@/lib/logger";
 
 const HEALTH_TIMEOUT_MS = 3000;
 const STREAM_RESULT = 0;
+const STREAM_PROGRESS = 1;
 const STREAM_ERROR = 2;
 const STREAM_HEADER_BYTES = 5;
+
+// manga-image-translator emits one of these progress states when detection or
+// OCR finds no text. On the JSON scan endpoint the sidecar then crashes while
+// serializing the empty result ("'NoneType' object is not iterable") and
+// surfaces it as a stream ERROR frame — so a genuinely text-free page arrives
+// as an error. The skip state is authoritative: the page simply has no text,
+// which is a COMPLETE scan with zero regions, not a failure.
+const NO_TEXT_PROGRESS_STATES = new Set(["skip-no-regions", "skip-no-text"]);
 
 
 /**
@@ -65,8 +74,24 @@ export async function scanImage(
     );
   }
 
-  const payload = await readStreamJsonPayload(response);
+  const frame = await readScanResultPayload(response);
+  if (frame === null) {
+    aiLog.debug(
+      { durationMs: Date.now() - startTime },
+      "OCR sidecar reported no text regions"
+    );
+    return [];
+  }
 
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(frame));
+  } catch (error) {
+    throw new OcrServiceResponseError(`OCR service returned invalid JSON: ${String(error)}`);
+  }
+
+  // A parsed JSON `null` body is NOT the no-text case (that is signalled by a
+  // null frame above); let parseSidecarResponse reject it as malformed.
   const regions = parseSidecarResponse(payload);
   aiLog.debug(
     { regionCount: regions.length, durationMs: Date.now() - startTime },
@@ -136,16 +161,21 @@ function isAbortLikeError(error: unknown): boolean {
   );
 }
 
-async function readStreamResultPayload(response: Response): Promise<Uint8Array> {
-  let bytes: Uint8Array;
+async function readStreamBytes(response: Response): Promise<Uint8Array> {
   try {
-    bytes = new Uint8Array(await response.arrayBuffer());
+    return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     if (isAbortLikeError(error)) {
       throw new OcrServiceUnavailableError("OCR service timed out", { cause: error });
     }
     throw new OcrServiceResponseError(`OCR service returned unreadable stream: ${String(error)}`);
   }
+}
+
+/** Walk the sidecar's `status(1B) size(4B) data(size)` framing. */
+function* iterateStreamFrames(
+  bytes: Uint8Array
+): Generator<{ status: number; frame: Uint8Array }> {
   let offset = 0;
   while (offset + STREAM_HEADER_BYTES <= bytes.length) {
     const status = bytes[offset];
@@ -162,27 +192,45 @@ async function readStreamResultPayload(response: Response): Promise<Uint8Array> 
 
     const frame = bytes.subarray(offset, offset + size);
     offset += size;
+    yield { status, frame };
+  }
+}
 
+async function readStreamResultPayload(response: Response): Promise<Uint8Array> {
+  const bytes = await readStreamBytes(response);
+  for (const { status, frame } of iterateStreamFrames(bytes)) {
     if (status === STREAM_ERROR) {
-      const message = new TextDecoder().decode(frame);
-      throw new OcrServiceResponseError(`OCR service stream error: ${message}`);
+      throw new OcrServiceResponseError(`OCR service stream error: ${new TextDecoder().decode(frame)}`);
     }
-
-    if (status !== STREAM_RESULT) continue;
-
-    return frame;
+    if (status === STREAM_RESULT) return frame;
   }
 
   throw new OcrServiceResponseError("OCR service stream ended without a result frame");
 }
 
-async function readStreamJsonPayload(response: Response): Promise<unknown> {
-  const frame = await readStreamResultPayload(response);
-  try {
-    return JSON.parse(new TextDecoder().decode(frame));
-  } catch (error) {
-    throw new OcrServiceResponseError(`OCR service returned invalid JSON: ${String(error)}`);
+/**
+ * Read the JSON scan stream. Returns the result payload, or null when the
+ * sidecar signalled a no-text page. Such pages surface as an ERROR frame
+ * (the sidecar crashes serializing the empty result), so a preceding
+ * NO_TEXT_PROGRESS_STATES frame is what distinguishes them from real failures.
+ */
+async function readScanResultPayload(response: Response): Promise<Uint8Array | null> {
+  const bytes = await readStreamBytes(response);
+  let sawNoText = false;
+  for (const { status, frame } of iterateStreamFrames(bytes)) {
+    if (status === STREAM_PROGRESS) {
+      if (NO_TEXT_PROGRESS_STATES.has(new TextDecoder().decode(frame))) sawNoText = true;
+      continue;
+    }
+    if (status === STREAM_ERROR) {
+      if (sawNoText) return null;
+      throw new OcrServiceResponseError(`OCR service stream error: ${new TextDecoder().decode(frame)}`);
+    }
+    if (status === STREAM_RESULT) return frame;
   }
+
+  if (sawNoText) return null;
+  throw new OcrServiceResponseError("OCR service stream ended without a result frame");
 }
 
 /** Cheap reachability probe (POST /queue-size). Never throws. */

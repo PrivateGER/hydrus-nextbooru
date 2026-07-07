@@ -51,6 +51,19 @@ const streamResponse = (body: unknown) => {
   };
 };
 
+const multiFrameResponse = (...buffers: Buffer[]) => {
+  const buffer = Buffer.concat(buffers);
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    arrayBuffer: vi.fn().mockResolvedValue(
+      buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    ),
+    text: vi.fn().mockResolvedValue(buffer.toString("binary")),
+  };
+};
+
 describe("ocr client", () => {
   const originalFetch = global.fetch;
   let fetchMock: Mock;
@@ -112,6 +125,103 @@ describe("ocr client", () => {
     const result = await scanImage(Buffer.from([1]), "image/jpeg");
     expect(result).toHaveLength(1);
     expect(result[0].ocrText).toBe("\u3042");
+  });
+
+  it("returns no regions when the sidecar reports skip-no-regions then errors serializing an empty result", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(
+        streamFrame(1, "skip-no-regions"),
+        streamFrame(2, "Translation failed: 'NoneType' object is not iterable")
+      )
+    );
+
+    await expect(scanImage(Buffer.from([1]), "image/png")).resolves.toEqual([]);
+  });
+
+  it("returns no regions when the sidecar reports skip-no-text then errors serializing an empty result", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(
+        streamFrame(1, "skip-no-text"),
+        streamFrame(2, "Translation failed: 'NoneType' object is not iterable")
+      )
+    );
+
+    await expect(scanImage(Buffer.from([1]), "image/png")).resolves.toEqual([]);
+  });
+
+  it("returns no regions when the scan stream ends after a no-text progress frame", async () => {
+    fetchMock.mockResolvedValueOnce(multiFrameResponse(streamFrame(1, "skip-no-regions")));
+
+    await expect(scanImage(Buffer.from([1]), "image/png")).resolves.toEqual([]);
+  });
+
+  it("rejects parsed null scan results instead of treating them as no-text", async () => {
+    fetchMock.mockResolvedValueOnce(streamResponse(null));
+
+    await expect(scanImage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceResponseError
+    );
+  });
+
+  it("still rejects scan stream errors that are not preceded by a no-text progress frame", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(streamFrame(1, "detection"), streamFrame(2, "some real failure"))
+    );
+
+    await expect(scanImage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceResponseError
+    );
+  });
+
+  it("skips non-terminal progress frames before parsing a scan result", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(
+        streamFrame(1, "running_pre_translation_hooks"),
+        streamFrame(1, "detection"),
+        streamFrame(
+          0,
+          JSON.stringify({
+            translations: [
+              {
+                minX: 0,
+                minY: 0,
+                maxX: 10,
+                maxY: 10,
+                prob: 1,
+                angle: 0,
+                text: { ja: "\u3042" },
+              },
+            ],
+          })
+        )
+      )
+    );
+
+    const result = await scanImage(Buffer.from([1]), "image/jpeg");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      minX: 0,
+      minY: 0,
+      maxX: 10,
+      maxY: 10,
+      confidence: 1,
+      angle: 0,
+      ocrText: "\u3042",
+    });
+  });
+
+  it("keeps no-text progress handling out of the image stream path", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(
+        binaryStreamFrame(1, Buffer.from("skip-no-regions")),
+        binaryStreamFrame(2, Buffer.from("Translation failed: 'NoneType' object is not iterable"))
+      )
+    );
+
+    await expect(renderInpaintedPage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceResponseError
+    );
   });
 
   it("maps network errors to OcrServiceUnavailableError", async () => {
