@@ -199,7 +199,8 @@ export async function cleanDatabase(): Promise<void> {
 }
 
 /**
- * Recalculate postCount and idfWeight for all tags.
+ * Recalculate postCount and idfWeight for all tags, plus each post's
+ * tagIdfNorm (the cosine denominator of the tag-similarity score).
  * Call this in tests after creating posts with tags to ensure
  * recommendation algorithms have accurate data.
  */
@@ -224,4 +225,26 @@ export async function recalculateTagStats(): Promise<void> {
       UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0
     `;
   }
+
+  await recalculatePostTagNorms();
+}
+
+/**
+ * Refresh Post.tagIdfNorm from the CURRENT Tag.idfWeight values — mirrors the
+ * production recalculation in sync. Exported separately for tests that set
+ * idfWeight directly instead of deriving it via recalculateTagStats().
+ */
+export async function recalculatePostTagNorms(): Promise<void> {
+  const p = getTestPrisma();
+  await p.$executeRaw`
+    UPDATE "Post" p SET "tagIdfNorm" = COALESCE(
+      (
+        SELECT SQRT(SUM(t."idfWeight" * t."idfWeight"))
+        FROM "PostTag" pt
+        JOIN "Tag" t ON t.id = pt."tagId"
+        WHERE pt."postId" = p.id
+      ),
+      0
+    )
+  `;
 }

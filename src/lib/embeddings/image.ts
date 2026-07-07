@@ -1,7 +1,7 @@
 import sharp from "sharp";
-import { PHASH_SUPPORTED_MIMES } from "@/lib/phash/compute";
 
-export const EMBEDDING_SUPPORTED_MIMES = PHASH_SUPPORTED_MIMES;
+// Re-exported from the sharp-free module for existing importers.
+export { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/mimes";
 
 export interface ProcessedEmbeddingImage {
   dataUrl: string;

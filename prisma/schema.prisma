@@ -103,6 +103,13 @@ model Post {
   // Thumbnail generation status
   thumbnailStatus ThumbnailStatus @default(PENDING)
 
+  // Length of the post's IDF-weighted tag vector: sqrt(Σ idfWeight²) over its
+  // tags. Denominator of the cosine tag-similarity score (see the
+  // compute_post_recommendations SQL functions). 0 = not yet computed; scores
+  // involving the post are 0 until the post-sync tag-stats recalculation runs
+  // (same staleness semantics as Tag.idfWeight).
+  tagIdfNorm Float @default(0)
+
   // Image text translation (OCR + translate)
   imageTranslatedText String?
   imageSourceLanguage String?

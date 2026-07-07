@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import type { Post } from '@/generated/prisma/client';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from '../setup';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats, recalculatePostTagNorms } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
 // Static route imports are safe here: @/lib/db's prisma is a Proxy resolving the test client per property access, and these modules do no top-level DB work (unlike suites using vi.doMock, which need dynamic imports).
@@ -118,6 +118,7 @@ describe('GET /api/feed (Integration)', () => {
     const unrelated = await createPostWithTags(prisma, ['landscape photo', 'mountain']);
     // IDF weights are precomputed in production by sync; set them directly here.
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
 
     await favorite(seed.hash);
     const data = await fetchFeed();
@@ -134,6 +135,7 @@ describe('GET /api/feed (Integration)', () => {
     const seed = await createPostWithTags(prisma, TASTE_TAGS);
     const similar = await createPostWithTags(prisma, TASTE_TAGS);
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
 
     // Build an empty feed first
     const before = await fetchFeed();
@@ -149,6 +151,7 @@ describe('GET /api/feed (Integration)', () => {
     const seed = await createPostWithTags(prisma, TASTE_TAGS);
     const similar = await createPostWithTags(prisma, TASTE_TAGS);
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
 
     await favorite(seed.hash);
     await dismiss(similar.hash);
@@ -163,6 +166,7 @@ describe('GET /api/feed (Integration)', () => {
     const sibling = await createPostWithTags(prisma, TASTE_TAGS);
     const outsider = await createPostWithTags(prisma, TASTE_TAGS);
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
 
     const group = await prisma.group.create({
       data: { sourceType: 'PIXIV', sourceId: 'feed-test-group' },
@@ -189,6 +193,7 @@ describe('GET /api/feed (Integration)', () => {
     const c = await createPostWithTags(prisma, TASTE_TAGS); // group sibling of b
     const control = await createPostWithTags(prisma, TASTE_TAGS); // ungrouped
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
 
     // B and C form a group that does NOT include the seed A, so neither is
     // excluded as a seed's group sibling — both reach the candidate list and

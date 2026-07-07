@@ -24,9 +24,10 @@ const MAX_SOURCE_TAGS = 64;
  * fraction of few posts without being "massively shared") are left untouched.
  *
  * Both are HARDCODED in the SQL functions (compute_post_recommendations /
- * compute_recommendations_for_posts, migration 20260707000000) and mirrored
- * here for discoverability — the two MUST stay in sync. See that migration for
- * the measured quality/scan tradeoff behind the 0.30 default.
+ * compute_recommendations_for_posts, latest definition in migration
+ * 20260707120000_cosine_tag_similarity) and mirrored here for discoverability
+ * — the two MUST stay in sync. See migration 20260707000000 for the measured
+ * quality/scan tradeoff behind the 0.30 default.
  */
 export const MAX_SOURCE_TAG_FREQUENCY = 0.3;
 
@@ -44,6 +45,10 @@ export interface RecommendedPost {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  /**
+   * IDF-weighted tag cosine similarity in [0, 1]; 1 = tag-identical posts.
+   * Comparable across source posts (see migration 20260707120000).
+   */
   score: number;
 }
 

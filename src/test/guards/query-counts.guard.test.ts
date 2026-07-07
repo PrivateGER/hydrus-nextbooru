@@ -64,7 +64,8 @@ const QUERY_BUDGETS = {
   // recentSeedCount, so every favorite is a seed with no sampling), NO
   // dismissals/views seeded, and NO embedding config. On that path buildFeed's
   // query count is constant in seed count: a fixed base (favorites + dismissed
-  // ids + recent dismissals + recently-viewed + seed group-siblings +
+  // ids + recent dismissals + recently-viewed + signal group memberships for
+  // seed-level group collapse + seed group-siblings +
   // embedding-config resolution) plus a SINGLE batched tag-IDF compute for ALL
   // seeds (getTagNeighborhoodsForSeeds:
   // cache read + one set-based compute + one post-detail fetch; the cache-write
@@ -74,9 +75,10 @@ const QUERY_BUDGETS = {
   // EMBEDDING path is NOT exercised here: when embeddings are configured,
   // fetchEmbeddingNeighborhoods issues one k-NN query PER SEED (O(seeds)), which
   // this favorites-only, embedding-less fixture never triggers. A non-empty
-  // merged list then costs ONE extra postGroup.findMany (per-group feed dedup —
-  // a single indexed `postId IN (...)` batch, not an N+1); it is skipped when
-  // the feed is empty. The budget is a loose ceiling: batching left the real
+  // merged list then costs TWO extra batched `postId IN (...)` lookups
+  // (postGroup for per-group feed dedup + postView for the already-seen
+  // penalty — single indexed batches, not N+1s); both are skipped when the
+  // feed is empty. The budget is a loose ceiling: batching left the real
   // count on this path well under it.
   feed: 21,
   // resolvePostForMutation's getPostIdByHash is the only pool-captured query
