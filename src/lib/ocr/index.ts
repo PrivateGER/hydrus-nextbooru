@@ -9,6 +9,8 @@ export {
   translateRegions,
   persistScan,
   markScanFailed,
+  finalizeScan,
+  renderPostInpaintedPage,
   OcrFileMissingError,
   type ScannablePost,
   type ScanPostOutcome,
@@ -23,10 +25,11 @@ export type {
 export {
   acquireOcrBatchLock,
   requestOcrBatchCancel,
+  requestOcrBatchReset,
   selectOcrBatchPosts,
   runOcrBatch,
   getOcrAdminStatus,
   type OcrBatchOptions,
   type OcrBatchResult,
 } from "./batch";
-export { storeCrops, storeInpaintedPage, deleteCrops, deleteInpaintedPage, buildCropDir, buildCropFilePath, buildInpaintedPageFilePath } from "./crops";
+export { storeInpaintedPage, deleteCrops, deleteInpaintedPage, buildInpaintedPageFilePath } from "./crops";

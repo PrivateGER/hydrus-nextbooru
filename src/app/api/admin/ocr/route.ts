@@ -6,6 +6,7 @@ import {
   getOcrAdminStatus,
   isOcrEnabled,
   requestOcrBatchCancel,
+  requestOcrBatchReset,
   runOcrBatch,
 } from "@/lib/ocr";
 import { apiLog, aiLog } from "@/lib/logger";
@@ -99,11 +100,21 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE - cancel a running batch
-export async function DELETE() {
+// DELETE - cancel a running batch, or force-reset a stuck one with ?force=1
+export async function DELETE(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  const cancelled = await requestOcrBatchCancel();
-  return NextResponse.json({ cancelled });
+  const force = request.nextUrl.searchParams.get("force");
+  const forced = force === "1" || force === "true";
+  try {
+    const cancelled = forced ? await requestOcrBatchReset() : await requestOcrBatchCancel();
+    return NextResponse.json({ cancelled, forced });
+  } catch (error) {
+    apiLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Failed to cancel/reset OCR batch"
+    );
+    return NextResponse.json({ error: "Failed to cancel/reset OCR batch" }, { status: 500 });
+  }
 }

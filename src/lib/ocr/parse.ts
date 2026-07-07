@@ -7,14 +7,6 @@ function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-const DATA_URI = /^data:image\/[a-z+.-]+;base64,(.+)$/i;
-
-function extractCropBase64(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const match = DATA_URI.exec(value);
-  return match ? match[1] : null;
-}
-
 function channelToHex(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const rounded = Math.round(value);
@@ -109,7 +101,6 @@ export function parseSidecarResponse(payload: unknown): ParsedRegion[] {
       sourceLanguage: langidEntry ? langidEntry[0] : null,
       confidence: "prob" in entry ? asFiniteNumber(entry.prob) : null,
       angle: "angle" in entry ? asFiniteNumber(entry.angle) : null,
-      cropBase64: extractCropBase64("background" in entry ? entry.background : undefined),
       textColorFg: colors.fg,
       textColorBg: colors.bg,
     });

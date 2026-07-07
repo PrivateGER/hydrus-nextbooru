@@ -42,7 +42,6 @@ export function normalizeRegions(
       sourceLanguage: region.sourceLanguage,
       confidence: region.confidence,
       angle: region.angle,
-      cropBase64: region.cropBase64,
       textColorFg: region.textColorFg,
       textColorBg: region.textColorBg,
     });

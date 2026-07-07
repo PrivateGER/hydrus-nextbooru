@@ -25,14 +25,13 @@ const region: OverlayRegion = {
   ocrText: '日本語',
   translatedText: 'English',
   sourceLanguage: 'ja',
-  hasCrop: true,
   textColorFg: '#111111',
   textColorBg: '#eeeeee',
   cropVersion: 123,
 };
 
 describe('TextOverlay', () => {
-  it('uses a full-page inpaint layer for typeset mode before per-region crop fallback', async () => {
+  it('uses a full-page inpaint layer for typeset mode', async () => {
     localStorage.clear();
     localStorage.setItem('ocrOverlayMode', 'typeset');
     const host = document.createElement('div');
@@ -44,7 +43,7 @@ describe('TextOverlay', () => {
     });
 
     expect(host.querySelector('img[src="/api/ocr-pages/abcdef?v=123"]')).not.toBeNull();
-    expect(host.querySelector('img[src="/api/ocr-crops/abcdef/0?v=123"]')).toBeNull();
+    expect(host.querySelectorAll('img')).toHaveLength(1);
     expect(host.textContent).toContain('English');
 
     await act(async () => {
@@ -52,7 +51,7 @@ describe('TextOverlay', () => {
     });
   });
 
-  it('uses full-page typeset text even when a region crop is unavailable', async () => {
+  it('typeset degrades to notes when the full-page inpaint image fails to load', async () => {
     localStorage.clear();
     localStorage.setItem('ocrOverlayMode', 'typeset');
     const host = document.createElement('div');
@@ -60,18 +59,20 @@ describe('TextOverlay', () => {
     const root = createRoot(host);
 
     await act(async () => {
-      root.render(
-        <TextOverlay
-          hash="abcdef"
-          initialRegions={[{ ...region, hasCrop: false }]}
-          ocrEnabled={true}
-        />
-      );
+      root.render(<TextOverlay hash="abcdef" initialRegions={[region]} ocrEnabled={true} />);
     });
 
-    expect(host.querySelector('img[src="/api/ocr-pages/abcdef?v=123"]')).not.toBeNull();
-    expect(host.querySelector('img[src="/api/ocr-crops/abcdef/0?v=123"]')).toBeNull();
-    expect(host.textContent).toContain('English');
+    const pageInpaint = host.querySelector<HTMLImageElement>('img[src="/api/ocr-pages/abcdef?v=123"]');
+    expect(pageInpaint).not.toBeNull();
+
+    await act(async () => {
+      pageInpaint?.dispatchEvent(new Event('error', { bubbles: false }));
+    });
+
+    expect(host.querySelectorAll('img')).toHaveLength(0);
+    const noteBox = host.querySelector<HTMLButtonElement>('button[aria-label="English"]');
+    expect(noteBox).not.toBeNull();
+    expect(noteBox?.className).toContain('border-amber-500/70');
 
     await act(async () => {
       root.unmount();
@@ -89,7 +90,7 @@ describe('TextOverlay', () => {
     });
 
     expect(host.querySelector('img[src="/api/ocr-pages/abcdef?v=123"]')).not.toBeNull();
-    expect(host.querySelector('img[src="/api/ocr-crops/abcdef/0?v=123"]')).toBeNull();
+    expect(host.querySelectorAll('img')).toHaveLength(1);
     expect(host.textContent).toContain('English');
 
     await act(async () => {
@@ -111,7 +112,7 @@ describe('TextOverlay', () => {
     expect(localStorage.getItem('ocrOverlayMode')).toBe('typeset');
     expect(localStorage.getItem('ocrOverlayVisible')).toBeNull();
     expect(host.querySelector('img[src="/api/ocr-pages/abcdef?v=123"]')).not.toBeNull();
-    expect(host.querySelector('img[src="/api/ocr-crops/abcdef/0?v=123"]')).toBeNull();
+    expect(host.querySelectorAll('img')).toHaveLength(1);
     expect(host.textContent).toContain('English');
 
     await act(async () => {

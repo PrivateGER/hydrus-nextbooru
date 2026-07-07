@@ -13,7 +13,6 @@ const {
   mockRegionFindMany,
   mockPostUpdate,
   mockTransaction,
-  mockStoreCrops,
   mockStoreInpaintedPage,
   mockDeleteInpaintedPage,
 } = vi.hoisted(() => ({
@@ -28,7 +27,6 @@ const {
   mockRegionFindMany: vi.fn(),
   mockPostUpdate: vi.fn(),
   mockTransaction: vi.fn(async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
-  mockStoreCrops: vi.fn(),
   mockStoreInpaintedPage: vi.fn(),
   mockDeleteInpaintedPage: vi.fn(),
 }));
@@ -69,9 +67,9 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("./crops", () => ({ storeCrops: mockStoreCrops, storeInpaintedPage: mockStoreInpaintedPage, deleteInpaintedPage: mockDeleteInpaintedPage }));
+vi.mock("./crops", () => ({ storeInpaintedPage: mockStoreInpaintedPage, deleteInpaintedPage: mockDeleteInpaintedPage }));
 
-import { scanPost, translateRegions, OcrFileMissingError, withPostCropWriteLock } from "./scan-post";
+import { finalizeScan, scanPost, translateRegions, OcrFileMissingError, withPostCropWriteLock } from "./scan-post";
 import { OcrServiceUnavailableError } from "./errors";
 import { OpenRouterApiError } from "@/lib/openrouter";
 import type { NormalizedRegion } from "./types";
@@ -88,7 +86,6 @@ const normalized = (overrides: Partial<NormalizedRegion> = {}): NormalizedRegion
   sourceLanguage: "ja",
   confidence: 0.9,
   angle: 0,
-  cropBase64: null,
   textColorFg: null,
   textColorBg: null,
   ...overrides,
@@ -107,7 +104,6 @@ beforeEach(() => {
     resized: false,
   });
   mockRegionFindMany.mockResolvedValue([]);
-  mockStoreCrops.mockResolvedValue([true]);
   mockRenderInpaintedPage.mockResolvedValue(Buffer.from([9, 9, 9]));
   mockStoreInpaintedPage.mockResolvedValue(true);
 });
@@ -115,7 +111,7 @@ beforeEach(() => {
 describe("scanPost", () => {
   it("persists regions with translations and marks the post COMPLETE", async () => {
     mockScanImage.mockResolvedValue([
-      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0, textColorFg: "#111111", textColorBg: "#eeeeee" },
     ]);
     mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
 
@@ -126,15 +122,10 @@ describe("scanPost", () => {
     expect(outcome.regions[0]).toMatchObject({
       ocrText: "\u3053\u3093",
       translatedText: "Hey",
-      hasCrop: true,
       textColorFg: "#111111",
       textColorBg: "#eeeeee",
     });
     expect(typeof outcome.regions[0].cropVersion).toBe("number");
-    expect(mockStoreCrops).toHaveBeenCalledWith(
-      POST.hash,
-      expect.arrayContaining([expect.objectContaining({ readingOrder: 0, cropBase64: "abc" })])
-    );
     expect(mockRegionDeleteMany).toHaveBeenCalledWith({ where: { postId: 7 } });
     expect(mockRegionCreateMany).toHaveBeenCalledWith({
       data: [
@@ -143,7 +134,6 @@ describe("scanPost", () => {
           readingOrder: 0,
           translatedText: "Hey",
           targetLanguage: "en",
-          hasCrop: true,
           textColorFg: "#111111",
           textColorBg: "#eeeeee",
         }),
@@ -153,6 +143,36 @@ describe("scanPost", () => {
       where: { id: 7 },
       data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
     });
+    expect(Object.keys(outcome.regions[0]).sort()).toEqual([
+      "cropVersion",
+      "height",
+      "ocrText",
+      "readingOrder",
+      "sourceLanguage",
+      "textColorBg",
+      "textColorFg",
+      "translatedText",
+      "width",
+      "x",
+      "y",
+    ]);
+    const createdRows = mockRegionCreateMany.mock.calls.at(-1)?.[0].data;
+    expect(Object.keys(createdRows[0]).sort()).toEqual([
+      "angle",
+      "confidence",
+      "height",
+      "ocrText",
+      "postId",
+      "readingOrder",
+      "sourceLanguage",
+      "targetLanguage",
+      "textColorBg",
+      "textColorFg",
+      "translatedText",
+      "width",
+      "x",
+      "y",
+    ]);
   });
 
   it("sends a prepared sidecar image and normalizes returned boxes against its dimensions", async () => {
@@ -164,7 +184,7 @@ describe("scanPost", () => {
       resized: true,
     });
     mockScanImage.mockResolvedValue([
-      { minX: 50, minY: 200, maxX: 150, maxY: 500, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
+      { minX: 50, minY: 200, maxX: 150, maxY: 500, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, textColorFg: "#111111", textColorBg: "#eeeeee" },
     ]);
     mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
 
@@ -186,35 +206,16 @@ describe("scanPost", () => {
 
   it("stores a full-page inpaint when text regions are detected", async () => {
     mockScanImage.mockResolvedValue([
-      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: "#111111", textColorBg: "#eeeeee" },
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, textColorFg: "#111111", textColorBg: "#eeeeee" },
     ]);
     mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
 
     await scanPost(POST);
 
-    expect(mockRenderInpaintedPage).toHaveBeenCalledWith(Buffer.from([1]), "image/png");
+    expect(mockRenderInpaintedPage).toHaveBeenCalledWith(Buffer.from([1]), "image/png", { signal: undefined });
     expect(mockStoreInpaintedPage).toHaveBeenCalledWith(POST.hash, Buffer.from([9, 9, 9]));
   });
 
-  it("persists rows with hasCrop false and still COMPLETE when crop storage fails", async () => {
-    mockScanImage.mockResolvedValue([
-      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "\u3053\u3093", sourceLanguage: "ja", confidence: 0.9, angle: 0, cropBase64: "abc", textColorFg: null, textColorBg: null },
-    ]);
-    mockTranslateTexts.mockResolvedValue({ translations: ["Hey"], targetLang: "en" });
-    mockStoreCrops.mockResolvedValue([false]);
-
-    const outcome = await scanPost(POST);
-
-    expect(mockStoreCrops).toHaveBeenCalledWith(POST.hash, expect.any(Array));
-    expect(mockRegionCreateMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ postId: 7, hasCrop: false })],
-    });
-    expect(outcome.regions[0].hasCrop).toBe(false);
-    expect(mockPostUpdate).toHaveBeenCalledWith({
-      where: { id: 7 },
-      data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
-    });
-  });
 
   it("returns hasText false and persists COMPLETE with zero regions", async () => {
     mockScanImage.mockResolvedValue([]);
@@ -253,10 +254,6 @@ describe("scanPost", () => {
     expect(outcome.hasText).toBe(true);
     expect(outcome.translationFailed).toBe(true);
     expect(outcome.regions[0].translatedText).toBeNull();
-    expect(mockStoreCrops).toHaveBeenCalledWith(POST.hash, expect.any(Array));
-    expect(mockRegionCreateMany).toHaveBeenCalledWith({
-      data: [expect.objectContaining({ postId: 7, translatedText: null, targetLanguage: null, hasCrop: true })],
-    });
     expect(mockPostUpdate).toHaveBeenCalledWith({
       where: { id: 7 },
       data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
@@ -320,20 +317,6 @@ describe("scanPost", () => {
     });
   });
 
-  it("marks FAILED and rethrows when crop storage throws", async () => {
-    mockScanImage.mockResolvedValue([
-      { minX: 0, minY: 0, maxX: 10, maxY: 10, ocrText: "\u3042", sourceLanguage: "ja", confidence: 0.9, angle: 0 },
-    ]);
-    mockTranslateTexts.mockResolvedValue({ translations: ["Hi"], targetLang: "en" });
-    const cropError = new Error("disk full");
-    mockStoreCrops.mockRejectedValueOnce(cropError);
-
-    await expect(scanPost(POST)).rejects.toBe(cropError);
-    expect(mockPostUpdate).toHaveBeenCalledWith({
-      where: { id: 7 },
-      data: { ocrStatus: "FAILED" },
-    });
-  });
 
   it("does not mark FAILED on a recoverable 401 translation error", async () => {
     mockScanImage.mockResolvedValue([
@@ -362,6 +345,32 @@ describe("scanPost", () => {
       where: { id: 7 },
       data: { ocrStatus: "FAILED" },
     });
+  });
+});
+
+describe("finalizeScan", () => {
+  it("stores a provided full-page inpaint and persists the scan as COMPLETE", async () => {
+    const page = Buffer.from([9]);
+
+    const outcome = await finalizeScan(POST, [normalized()], ["Hi"], "en", page);
+
+    expect(outcome.hasText).toBe(true);
+    expect(mockStoreInpaintedPage).toHaveBeenCalledWith(POST.hash, page);
+    expect(mockDeleteInpaintedPage).not.toHaveBeenCalled();
+    expect(mockRegionCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ postId: 7, translatedText: "Hi", targetLanguage: "en" })],
+    });
+    expect(mockPostUpdate).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({ ocrStatus: "COMPLETE" }),
+    });
+  });
+
+  it("deletes any stale full-page inpaint when no page was rendered", async () => {
+    await finalizeScan(POST, [normalized()], ["Hi"], "en", null);
+
+    expect(mockDeleteInpaintedPage).toHaveBeenCalledWith(POST.hash);
+    expect(mockStoreInpaintedPage).not.toHaveBeenCalled();
   });
 });
 

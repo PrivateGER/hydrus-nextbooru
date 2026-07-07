@@ -4,7 +4,8 @@ import type * as ScanPostModule from "./scan-post";
 const {
   mockOcrPost,
   mockTranslateRegions,
-  mockPersistScan,
+  mockFinalizeScan,
+  mockRenderPostInpaintedPage,
   mockMarkScanFailed,
   mockBatchUpdateMany,
   mockBatchFindUnique,
@@ -12,11 +13,11 @@ const {
   mockPostFindMany,
   mockPostCount,
   mockRegionCount,
-  mockStoreCrops,
 } = vi.hoisted(() => ({
   mockOcrPost: vi.fn(),
   mockTranslateRegions: vi.fn(),
-  mockPersistScan: vi.fn(),
+  mockFinalizeScan: vi.fn(),
+  mockRenderPostInpaintedPage: vi.fn(),
   mockMarkScanFailed: vi.fn(),
   mockBatchUpdateMany: vi.fn(),
   mockBatchFindUnique: vi.fn(),
@@ -24,7 +25,6 @@ const {
   mockPostFindMany: vi.fn(),
   mockPostCount: vi.fn(),
   mockRegionCount: vi.fn(),
-  mockStoreCrops: vi.fn(),
 }));
 
 vi.mock("./scan-post", async (importOriginal) => {
@@ -33,7 +33,8 @@ vi.mock("./scan-post", async (importOriginal) => {
     ...actual,
     ocrPost: mockOcrPost,
     translateRegions: mockTranslateRegions,
-    persistScan: mockPersistScan,
+    finalizeScan: mockFinalizeScan,
+    renderPostInpaintedPage: mockRenderPostInpaintedPage,
     markScanFailed: mockMarkScanFailed,
   };
 });
@@ -50,12 +51,12 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("./crops", () => ({ storeCrops: mockStoreCrops }));
 
 import {
   acquireOcrBatchLock,
   getOcrAdminStatus,
   requestOcrBatchCancel,
+  requestOcrBatchReset,
   runOcrBatch,
   selectOcrBatchPosts,
 } from "./batch";
@@ -63,19 +64,31 @@ import { OpenRouterApiError } from "@/lib/openrouter";
 
 const post = (id: number) => ({ id, hash: `${id}`.padStart(64, "0"), extension: ".png", mimeType: "image/png" });
 
+const region = () => ({
+  readingOrder: 0,
+  x: 0,
+  y: 0,
+  width: 1,
+  height: 1,
+  ocrText: "t",
+  sourceLanguage: "ja",
+  confidence: null,
+  angle: null,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockBatchUpdateMany.mockResolvedValue({ count: 1 });
   mockBatchFindUnique.mockResolvedValue({ status: "running" });
   mockMarkScanFailed.mockResolvedValue(undefined);
   mockTranslateRegions.mockResolvedValue({ translated: [], targetLanguage: "en", failed: false });
-  mockPersistScan.mockResolvedValue({
+  mockFinalizeScan.mockResolvedValue({
     hasText: false,
     translationFailed: false,
     scannedAt: new Date(),
     regions: [],
   });
-  mockStoreCrops.mockResolvedValue([true]);
+  mockRenderPostInpaintedPage.mockResolvedValue(Buffer.from([9]));
 });
 
 describe("acquireOcrBatchLock", () => {
@@ -84,7 +97,30 @@ describe("acquireOcrBatchLock", () => {
     await expect(acquireOcrBatchLock()).resolves.toBe(true);
     expect(mockBatchUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { key: "singleton", status: { notIn: ["running", "cancelling"] } },
+        where: expect.objectContaining({
+          key: "singleton",
+          OR: expect.arrayContaining([
+            { status: { notIn: ["running", "cancelling"] } },
+            expect.objectContaining({ updatedAt: expect.objectContaining({ lt: expect.any(Date) }) }),
+          ]),
+        }),
+      })
+    );
+  });
+
+  it("claims through a predicate that can reclaim stale running rows", async () => {
+    mockBatchUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    await expect(acquireOcrBatchLock()).resolves.toBe(true);
+
+    const where = mockBatchUpdateMany.mock.calls[0][0].where;
+    // Unit level cannot prove real DB reclaim; this locks the stale-row predicate into the claim.
+    expect(where).toEqual(
+      expect.objectContaining({
+        key: "singleton",
+        OR: expect.arrayContaining([
+          expect.objectContaining({ updatedAt: expect.objectContaining({ lt: expect.any(Date) }) }),
+        ]),
       })
     );
   });
@@ -137,14 +173,44 @@ describe("runOcrBatch", () => {
     expect(result.processed).toBe(2);
     expect(result.failed).toBe(0);
     expect(mockOcrPost).toHaveBeenCalledTimes(2);
-    expect(mockStoreCrops).toHaveBeenCalledWith(post(1).hash, expect.any(Array));
-    expect(mockPersistScan).toHaveBeenCalledWith(
+    expect(mockRenderPostInpaintedPage).not.toHaveBeenCalled();
+    expect(mockFinalizeScan).toHaveBeenCalledWith(
       expect.objectContaining({ id: 1, hash: post(1).hash }),
-      expect.any(Array),
-      expect.any(Array),
+      [],
+      [],
       "en",
-      [true]
+      null
     );
+  });
+
+  it("passes the rendered full-page inpaint into finalizeScan for region-bearing posts", async () => {
+    const first = post(1);
+    const page = Buffer.from([7, 7, 7]);
+    const detected = region();
+    mockPostFindMany.mockResolvedValue([first]);
+    mockOcrPost.mockResolvedValue([detected]);
+    mockTranslateRegions.mockResolvedValue({ translated: ["Hi"], targetLanguage: "en", failed: false });
+    mockRenderPostInpaintedPage.mockResolvedValueOnce(page);
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("completed");
+    expect(result.processed).toBe(1);
+    expect(mockRenderPostInpaintedPage).toHaveBeenCalledWith(first, { signal: expect.anything() });
+    expect(mockFinalizeScan).toHaveBeenCalledWith(first, [detected], ["Hi"], "en", page);
+    expect(mockFinalizeScan.mock.calls[0][4]).toBe(page);
+  });
+
+  it("skips full-page inpaint rendering and finalizes with null when OCR finds no regions", async () => {
+    const first = post(1);
+    mockPostFindMany.mockResolvedValue([first]);
+    mockOcrPost.mockResolvedValue([]);
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("completed");
+    expect(mockRenderPostInpaintedPage).not.toHaveBeenCalled();
+    expect(mockFinalizeScan).toHaveBeenCalledWith(first, [], [], "en", null);
   });
 
   it("continues after per-post OCR failures and counts them", async () => {
@@ -158,27 +224,38 @@ describe("runOcrBatch", () => {
     expect(mockMarkScanFailed).toHaveBeenCalledWith(1);
   });
 
-  it("aborts on 401 auth errors from translation", async () => {
-    mockPostFindMany.mockResolvedValue([post(1), post(2)]);
-    mockOcrPost.mockResolvedValue([
-      { readingOrder: 0, x: 0, y: 0, width: 1, height: 1, ocrText: "t", sourceLanguage: "ja", confidence: null, angle: null },
-    ]);
+  it("aborts on 401 auth errors from translation after preserving OCR-only data with the page", async () => {
+    const first = post(1);
+    const detected = region();
+    const page = Buffer.from([4, 0, 1]);
+    mockPostFindMany.mockResolvedValue([first, post(2)]);
+    mockOcrPost.mockResolvedValue([detected]);
+    mockRenderPostInpaintedPage.mockResolvedValueOnce(page);
     mockTranslateRegions.mockRejectedValue(new OpenRouterApiError("auth", 401));
 
     const result = await runOcrBatch({});
     expect(result.status).toBe("error");
     expect(mockOcrPost).toHaveBeenCalledTimes(1); // second post never scanned
-    expect(mockStoreCrops).toHaveBeenCalledWith(post(1).hash, expect.any(Array));
-    expect(mockPersistScan).toHaveBeenCalledWith(
-      expect.objectContaining({ hash: post(1).hash }),
-      expect.any(Array),
-      [null],
-      null,
-      [true]
-    );
-    expect(mockStoreCrops.mock.invocationCallOrder[0]).toBeLessThan(
-      mockPersistScan.mock.invocationCallOrder[0]
-    );
+    expect(mockFinalizeScan).toHaveBeenCalledWith(first, [detected], [null], null, page);
+    expect(mockFinalizeScan.mock.calls[0][4]).toBe(page);
+  });
+
+  it("marks the post FAILED when 401 OCR-only recovery persistence fails", async () => {
+    const first = post(1);
+    const detected = region();
+    const page = Buffer.from([4, 0, 1]);
+    mockPostFindMany.mockResolvedValue([first]);
+    mockOcrPost.mockResolvedValue([detected]);
+    mockRenderPostInpaintedPage.mockResolvedValueOnce(page);
+    mockTranslateRegions.mockRejectedValue(new OpenRouterApiError("auth", 401));
+    mockFinalizeScan.mockRejectedValue(new Error("db down"));
+
+    const result = await runOcrBatch({});
+    expect(result.status).toBe("error");
+    expect(result.processed).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(mockFinalizeScan).toHaveBeenCalledWith(first, [detected], [null], null, page);
+    expect(mockMarkScanFailed).toHaveBeenCalledWith(first.id);
   });
 
   it("stops between posts when cancellation was requested", async () => {
@@ -196,11 +273,9 @@ describe("runOcrBatch", () => {
 
   it("marks the post FAILED on a non-401 persist error in the pool", async () => {
     mockPostFindMany.mockResolvedValue([post(1)]);
-    mockOcrPost.mockResolvedValue([
-      { readingOrder: 0, x: 0, y: 0, width: 1, height: 1, ocrText: "t", sourceLanguage: "ja", confidence: null, angle: null },
-    ]);
+    mockOcrPost.mockResolvedValue([region()]);
     // Non-401 failure in the translate+persist pool.
-    mockPersistScan.mockRejectedValueOnce(new Error("db down"));
+    mockFinalizeScan.mockRejectedValueOnce(new Error("db down"));
 
     const result = await runOcrBatch({});
     expect(result.status).toBe("completed");
@@ -227,17 +302,38 @@ describe("requestOcrBatchCancel", () => {
   });
 });
 
+describe("requestOcrBatchReset", () => {
+  it("force-resets a running or cancelling singleton row and reports true", async () => {
+    mockBatchUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    await expect(requestOcrBatchReset()).resolves.toBe(true);
+
+    expect(mockBatchUpdateMany).toHaveBeenCalledWith({
+      where: { key: "singleton", status: { in: ["running", "cancelling"] } },
+      data: expect.objectContaining({ status: "cancelled" }),
+    });
+  });
+
+  it("reports false when no running or cancelling row was reset", async () => {
+    mockBatchUpdateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(requestOcrBatchReset()).resolves.toBe(false);
+  });
+});
+
 describe("getOcrAdminStatus", () => {
   it("aggregates post counts with the singleton batch state", async () => {
     // Promise.all order: PENDING, COMPLETE, FAILED counts, then regions.
     mockPostCount.mockResolvedValueOnce(3).mockResolvedValueOnce(5).mockResolvedValueOnce(2);
     mockRegionCount.mockResolvedValueOnce(42);
+    const updatedAt = new Date("2026-07-06T12:34:56.000Z");
     mockBatchFindUnique.mockResolvedValueOnce({
       status: "running",
       totalPosts: 10,
       processedPosts: 4,
       failedPosts: 1,
       errorMessage: null,
+      updatedAt,
     });
 
     const status = await getOcrAdminStatus();
@@ -252,6 +348,7 @@ describe("getOcrAdminStatus", () => {
         processedPosts: 4,
         failedPosts: 1,
         errorMessage: null,
+        updatedAt,
       },
     });
     expect(mockBatchFindUnique).toHaveBeenCalledWith({ where: { key: "singleton" } });
@@ -269,6 +366,7 @@ describe("getOcrAdminStatus", () => {
       processedPosts: 0,
       failedPosts: 0,
       errorMessage: null,
+      updatedAt: null,
     });
   });
 });

@@ -24,9 +24,7 @@ export interface ParsedRegion {
   sourceLanguage: string | null;
   confidence: number | null;
   angle: number | null;
-  /** Inpainted (text-removed) region crop, raw base64 with the data-URI prefix stripped. */
-  cropBase64: string | null;
-  /** Foreground/background text colors as `#rrggbb`, when the sidecar reports them. */
+  /** Text colors as `#rrggbb`, when the sidecar reports them. */
   textColorFg: string | null;
   textColorBg: string | null;
 }
@@ -42,7 +40,6 @@ export interface NormalizedRegion {
   sourceLanguage: string | null;
   confidence: number | null;
   angle: number | null;
-  cropBase64: string | null;
   textColorFg: string | null;
   textColorBg: string | null;
 }
@@ -57,10 +54,8 @@ export interface OcrRegionDto {
   ocrText: string;
   translatedText: string | null;
   sourceLanguage: string | null;
-  /** Whether an inpainted crop was captured for this region. */
-  hasCrop: boolean;
   textColorFg: string | null;
   textColorBg: string | null;
-  /** Schema version of the stored crop, for cache invalidation. */
+  /** Schema version of the stored page inpaint, for cache invalidation. */
   cropVersion: number;
 }

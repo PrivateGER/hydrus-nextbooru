@@ -231,6 +231,7 @@ export default function AdminPage() {
             isRunning={ocr.isRunning}
             onStart={ocr.startBatch}
             onCancel={ocr.cancelBatch}
+            onForceReset={ocr.forceReset}
           />
         );
       case "maintenance":

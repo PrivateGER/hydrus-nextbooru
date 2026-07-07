@@ -6,6 +6,7 @@ const {
   mockAcquire,
   mockRun,
   mockCancel,
+  mockReset,
   mockStatus,
   mockHealth,
   mockEnabled,
@@ -17,6 +18,7 @@ const {
   mockAcquire: vi.fn(),
   mockRun: vi.fn(),
   mockCancel: vi.fn(),
+  mockReset: vi.fn(),
   mockStatus: vi.fn(),
   mockHealth: vi.fn(),
   mockEnabled: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock("@/lib/ocr", () => ({
   acquireOcrBatchLock: mockAcquire,
   runOcrBatch: mockRun,
   requestOcrBatchCancel: mockCancel,
+  requestOcrBatchReset: mockReset,
   getOcrAdminStatus: mockStatus,
   checkOcrServiceHealth: mockHealth,
   isOcrEnabled: mockEnabled,
@@ -52,6 +55,7 @@ const request = (body?: unknown) =>
     headers: { "content-type": "application/json" },
   });
 
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockVerifyAdminSession.mockResolvedValue({ authorized: true });
@@ -62,10 +66,12 @@ beforeEach(() => {
     completeImages: 2,
     failedImages: 1,
     totalRegions: 9,
-    batch: { status: "idle", totalPosts: 0, processedPosts: 0, failedPosts: 0, errorMessage: null },
+    batch: { status: "idle", totalPosts: 0, processedPosts: 0, failedPosts: 0, errorMessage: null, updatedAt: null },
   });
   mockAcquire.mockResolvedValue(true);
   mockRun.mockResolvedValue({ status: "completed", total: 0, processed: 0, failed: 0, errors: [] });
+  mockCancel.mockResolvedValue(false);
+  mockReset.mockResolvedValue(false);
 });
 
 describe("GET /api/admin/ocr", () => {
@@ -128,7 +134,17 @@ describe("POST /api/admin/ocr", () => {
 describe("DELETE /api/admin/ocr", () => {
   it("reports whether a batch was cancelled", async () => {
     mockCancel.mockResolvedValue(true);
-    const body = await (await DELETE()).json();
-    expect(body.cancelled).toBe(true);
+    const body = await (await DELETE(new NextRequest("http://localhost/api/admin/ocr", { method: "DELETE" }))).json();
+    expect(mockCancel).toHaveBeenCalled();
+    expect(mockReset).not.toHaveBeenCalled();
+    expect(body).toEqual({ cancelled: true, forced: false });
+  });
+
+  it("force-resets a stuck batch when requested", async () => {
+    mockReset.mockResolvedValue(true);
+    const body = await (await DELETE(new NextRequest("http://localhost/api/admin/ocr?force=1", { method: "DELETE" }))).json();
+    expect(mockReset).toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(body).toEqual({ cancelled: true, forced: true });
   });
 });

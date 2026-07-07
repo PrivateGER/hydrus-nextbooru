@@ -9,6 +9,7 @@ export interface UseOcrReturn {
   fetchStats: () => Promise<void>;
   startBatch: (options: { limit?: number; tags?: string[]; retryFailed?: boolean }) => Promise<void>;
   cancelBatch: () => Promise<void>;
+  forceReset: () => Promise<void>;
 }
 
 export function useOcr(
@@ -124,5 +125,26 @@ export function useOcr(
     }
   }, [startPolling, fetchStats, setMessage]);
 
-  return { ocrStats, isRunning, fetchStats, startBatch, cancelBatch };
+  const forceReset = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/ocr?force=1", { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to reset OCR batch");
+      }
+      setMessage({
+        type: "success",
+        text: data.cancelled ? "OCR batch reset" : "No stuck batch to reset",
+      });
+      startPolling();
+      await fetchStats();
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to reset OCR batch",
+      });
+    }
+  }, [startPolling, fetchStats, setMessage]);
+
+  return { ocrStats, isRunning, fetchStats, startBatch, cancelBatch, forceReset };
 }

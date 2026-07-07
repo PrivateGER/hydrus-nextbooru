@@ -21,7 +21,6 @@ export interface OverlayRegion {
   ocrText: string;
   translatedText: string | null;
   sourceLanguage: string | null;
-  hasCrop: boolean;
   textColorFg: string | null;
   textColorBg: string | null;
   cropVersion: number;
@@ -158,14 +157,12 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
             />
           )}
           {regions.map((region) =>
-            mode === "typeset" && (usePageInpaint || region.hasCrop) ? (
+            mode === "typeset" && usePageInpaint ? (
               <TypesetRegion
                 key={`${region.readingOrder}-${region.cropVersion}`}
-                hash={hash}
                 region={region}
                 activeRegion={activeRegion}
                 setActiveRegion={setActiveRegion}
-                useRegionCrop={!usePageInpaint}
               />
             ) : (
               <NotesRegion
@@ -283,18 +280,11 @@ function NotesRegion({ region, activeRegion, setActiveRegion }: RegionProps) {
 }
 
 /**
- * Typeset mode: the inpainted crop composited under centered, auto-fitted
- * translated text. Falls back to text-only if the crop image fails to load.
+ * Typeset mode: centered, auto-fitted translated text over the shared
+ * full-page inpaint image rendered by TextOverlay.
  */
-function TypesetRegion({
-  hash,
-  region,
-  activeRegion,
-  setActiveRegion,
-  useRegionCrop,
-}: RegionProps & { hash: string; useRegionCrop: boolean }) {
+function TypesetRegion({ region, activeRegion, setActiveRegion }: RegionProps) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const [cropFailed, setCropFailed] = useState(false);
   const text = region.translatedText ?? region.ocrText;
   const fontSize = useFittedText(text, boxRef);
 
@@ -310,17 +300,6 @@ function TypesetRegion({
         if (e.pointerType !== "touch") setActiveRegion(null);
       }}
     >
-      {useRegionCrop && !cropFailed && (
-        // eslint-disable-next-line @next/next/no-img-element -- versioned, immutable API crop that must fill an absolutely-positioned box
-        <img
-          src={`/api/ocr-crops/${hash}/${region.readingOrder}?v=${region.cropVersion}`}
-          alt=""
-          draggable={false}
-          loading="lazy"
-          onError={() => setCropFailed(true)}
-          className="pointer-events-none absolute inset-0 h-full w-full"
-        />
-      )}
       <button
         type="button"
         aria-label={text}

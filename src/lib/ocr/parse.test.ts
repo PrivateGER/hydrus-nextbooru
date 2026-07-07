@@ -10,7 +10,6 @@ const region = (overrides: Record<string, unknown> = {}) => ({
   angle: 0,
   prob: 0.97,
   text: { ENG: "\u3053\u3093\u306b\u3061\u306f", ja: "\u3053\u3093\u306b\u3061\u306f" },
-  background: "data:image/png;base64,AAAA",
   ...overrides,
 });
 
@@ -27,7 +26,6 @@ describe("parseSidecarResponse", () => {
       sourceLanguage: "ja",
       confidence: 0.97,
       angle: 0,
-      cropBase64: "AAAA",
       textColorFg: null,
       textColorBg: null,
     });
@@ -66,39 +64,34 @@ describe("parseSidecarResponse", () => {
     expect(result[0].angle).toBeNull();
   });
 
-  it("extracts crop base64 and text colors when present", () => {
+  it("extracts text colors when present", () => {
     const result = parseSidecarResponse({
       translations: [
         region({
-          background: "data:image/png;base64,aGVsbG8=",
           text_color: { fg: [0, 0, 0], bg: [255, 255, 255] },
         }),
       ],
     });
-    expect(result[0].cropBase64).toBe("aGVsbG8=");
     expect(result[0].textColorFg).toBe("#000000");
     expect(result[0].textColorBg).toBe("#ffffff");
   });
 
-  it("tolerates missing background and text_color", () => {
+  it("tolerates missing text_color", () => {
     const result = parseSidecarResponse({
-      translations: [region({ background: undefined })],
+      translations: [region()],
     });
-    expect(result[0].cropBase64).toBeNull();
     expect(result[0].textColorFg).toBeNull();
     expect(result[0].textColorBg).toBeNull();
   });
 
-  it("tolerates malformed background and color values without throwing", () => {
+  it("tolerates malformed color values without throwing", () => {
     const result = parseSidecarResponse({
       translations: [
         region({
-          background: "not-a-data-uri",
           text_color: { fg: [999, -1, "x"], bg: "nope" },
         }),
       ],
     });
-    expect(result[0].cropBase64).toBeNull();
     expect(result[0].textColorFg).toBeNull();
     expect(result[0].textColorBg).toBeNull();
   });
