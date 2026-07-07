@@ -12,6 +12,7 @@ import {
 } from "@/lib/embeddings";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
+import { invalidateFeedCache } from "@/lib/feed";
 
 type EmbeddingBatchStatus = "idle" | "running" | "completed" | "failed";
 type EmbeddingBatchResult = { processed: number; succeeded: number; failed: number };
@@ -71,6 +72,9 @@ export async function PUT(request: NextRequest) {
       dimensions: typeof body.dimensions === "number" ? body.dimensions : undefined,
       imageMaxResolution: typeof body.imageMaxResolution === "number" ? body.imageMaxResolution : undefined,
     });
+    // Switching the active embedding config changes which PostEmbedding rows the
+    // feed's k-NN reads, reshaping neighborhoods — drop the cached feed.
+    invalidateFeedCache();
 
     return NextResponse.json({ message: "Embedding settings saved" });
   } catch (error) {
@@ -131,6 +135,9 @@ export async function POST(request: NextRequest) {
       })
       .finally(() => {
         batchRunning = false;
+        // A batch — even one that failed partway — commits new embeddings that
+        // feed the "For You" k-NN, so drop the cached feed regardless of outcome.
+        invalidateFeedCache();
       });
 
     return NextResponse.json({
@@ -160,6 +167,7 @@ export async function DELETE(request: NextRequest) {
 
     if (body.clearCurrent === true) {
       const count = await clearEmbeddingsForConfig(config);
+      invalidateFeedCache();
       return NextResponse.json({ message: `Deleted ${count} embeddings`, count });
     }
 

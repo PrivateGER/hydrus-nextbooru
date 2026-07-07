@@ -603,7 +603,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     })),
     now,
     config,
-    mulberry32(Math.floor(Date.now() / SEED_SAMPLE_BUCKET_MS))
+    mulberry32(currentSeedBucket())
   );
 
   const viewSeeds = selectViewSeeds(
@@ -689,14 +689,123 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 }
 
 /**
- * Paginated slice of the feed. Rebuilds the full ranked feed on every call —
- * there is intentionally no in-process cache. A module-level cache is
- * per-bundle under Next.js (the /recommended page and the API-route bundles
- * get separate module instances) and per-process, so a favorite/dismissal
- * mutation cannot invalidate it reliably: one bundle would serve stale data.
- * A fresh build is cheap for this single-user app — the IDF layer is DB-cached
- * for 24h by getTagNeighborhoodsForSeeds (one batched compute for all cold
- * seeds) and embedding k-NN is ms-scale via the ANN index.
+ * Full ranked feed cached per seed-sample bucket, shared across Next.js route
+ * bundles via globalThis.
+ *
+ * getFeedPage previously rebuilt the entire ranked feed from scratch on every
+ * request — up to ~145 seed neighborhoods (favorites + views + dismissals),
+ * one embedding k-NN query each. Pagination clicks and repeat visits all paid
+ * that full build. But the ranked feed is DETERMINISTIC within a seed-sample
+ * bucket ({@link SEED_SAMPLE_BUCKET_MS}): the sampler reseeds identically, so a
+ * rebuild inside the same bucket reproduces the same order for the same data.
+ * Caching the built feed keyed by that bucket serves every page within a bucket
+ * from a single build.
+ *
+ * A module-level `let` is per-bundle under Next.js (the /recommended page and
+ * the /api/feed route are separate module instances), which is why an earlier
+ * cache was abandoned. Stashing it on globalThis gives one instance per
+ * process, shared across bundles — the same pattern @/lib/db uses for the
+ * Prisma client. Favorite/dismissal writes call {@link invalidateFeedCache} to
+ * drop it immediately (explicit taste the user expects reflected at once);
+ * views deliberately do not (a weak signal that can wait for the bucket to
+ * roll). A monotonic generation counter makes an invalidation that races an
+ * in-flight build discard that build's result rather than cache stale data.
+ *
+ * Invalidation is per-process: the cache and its generation counter live on
+ * this process's globalThis, so a single Node instance is load-bearing for the
+ * "reflected immediately" guarantee. This app already deploys as one instance
+ * (see @/lib/embeddings and sync). Under horizontal scaling, a favorite handled
+ * by worker A would not bust worker B's cache — B would serve a feed up to one
+ * bucket (SEED_SAMPLE_BUCKET_MS) stale — so cross-worker invalidation would then
+ * need a shared signal (pub/sub or a shared store).
+ */
+interface FeedCacheState {
+  entry: { bucket: number; generation: number; feed: FeedPost[] } | null;
+  inFlight: Promise<FeedPost[]> | null;
+  inFlightBucket: number | null;
+  generation: number;
+}
+
+const globalForFeed = globalThis as unknown as { __feedCache?: FeedCacheState };
+
+function feedCache(): FeedCacheState {
+  if (!globalForFeed.__feedCache) {
+    globalForFeed.__feedCache = {
+      entry: null,
+      inFlight: null,
+      inFlightBucket: null,
+      generation: 0,
+    };
+  }
+  return globalForFeed.__feedCache;
+}
+
+function currentSeedBucket(): number {
+  return Math.floor(Date.now() / SEED_SAMPLE_BUCKET_MS);
+}
+
+/**
+ * Drop the cached feed so the next {@link getFeedPage} rebuilds from fresh
+ * data. Called by favorite/dismissal mutations (see @/lib/favorites) — the
+ * explicit taste signals a user expects reflected immediately. Bumping the
+ * generation also invalidates any build already in flight, so a rebuild that
+ * started before the write cannot repopulate the cache with pre-write data.
+ */
+export function invalidateFeedCache(): void {
+  const cache = feedCache();
+  cache.generation++;
+  cache.entry = null;
+  cache.inFlight = null;
+  cache.inFlightBucket = null;
+}
+
+/**
+ * The full ranked feed, cached per seed-sample bucket. Concurrent callers in
+ * the same bucket share one in-flight build; on completion the result is cached
+ * only if no invalidation raced it (generation unchanged).
+ */
+async function getCachedFeed(): Promise<FeedPost[]> {
+  const cache = feedCache();
+  const bucket = currentSeedBucket();
+
+  const entry = cache.entry;
+  if (entry && entry.bucket === bucket && entry.generation === cache.generation) {
+    return entry.feed;
+  }
+
+  if (cache.inFlight && cache.inFlightBucket === bucket) {
+    return cache.inFlight;
+  }
+
+  const generation = cache.generation;
+  const build = buildFeed()
+    .then((feed) => {
+      // Cache only if nothing invalidated or superseded this build (generation
+      // unchanged) AND the bucket has not rolled mid-build — otherwise a build
+      // that straddled a bucket boundary could clobber the newer bucket's entry
+      // with a stale-labeled one (harmless to reads, but wastes a rebuild).
+      if (cache.generation === generation && currentSeedBucket() === bucket) {
+        cache.entry = { bucket, generation, feed };
+      }
+      return feed;
+    })
+    .finally(() => {
+      if (cache.inFlight === build) {
+        cache.inFlight = null;
+        cache.inFlightBucket = null;
+      }
+    });
+
+  cache.inFlight = build;
+  cache.inFlightBucket = bucket;
+  return build;
+}
+
+/**
+ * Paginated slice of the feed, served from the per-bucket cache
+ * ({@link getCachedFeed}). The full ranked feed is built at most once per
+ * seed-sample bucket (or until a favorite/dismissal invalidates it), so
+ * pagination and repeat visits are array slices, not rebuilds.
  *
  * Precondition: page and limit are pre-sanitized positive integers.
  */
@@ -704,7 +813,7 @@ export async function getFeedPage(
   page: number,
   limit: number
 ): Promise<{ posts: FeedPost[]; totalCount: number; totalPages: number }> {
-  const posts = await buildFeed();
+  const posts = await getCachedFeed();
   const start = (page - 1) * limit;
   return {
     posts: posts.slice(start, start + limit),

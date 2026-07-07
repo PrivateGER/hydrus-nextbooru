@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
+import type { Post } from '@/generated/prisma/client';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags } from '../factories';
 // Static route imports are safe here: @/lib/db's prisma is a Proxy resolving the test client per property access, and these modules do no top-level DB work (unlike suites using vi.doMock, which need dynamic imports).
 import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
+import * as viewRoute from '@/app/api/posts/[hash]/view/route';
+import { invalidateFeedCache } from '@/lib/feed';
+import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
 
 const TASTE_TAGS = ['1girl', 'blue hair', 'school uniform'];
 
@@ -30,10 +34,57 @@ async function dismiss(hash: string) {
   expect(response.status).toBe(200);
 }
 
-async function fetchFeed() {
-  const response = await feedRoute.GET(get('http://localhost/api/feed'));
+async function view(hash: string) {
+  const response = await viewRoute.POST(
+    new NextRequest(`http://localhost/api/posts/${hash}/view`, { method: 'POST' }),
+    { params: Promise.resolve({ hash }) }
+  );
+  expect(response.status).toBe(200);
+}
+
+async function fetchFeed(url = 'http://localhost/api/feed') {
+  const response = await feedRoute.GET(get(url));
   expect(response.status).toBe(200);
   return response.json();
+}
+
+async function captureCountedStatements<T>(fn: () => Promise<T>): Promise<{ result: T; count: number }> {
+  startQueryCapture();
+  try {
+    const result = await fn();
+    const count = countableStatements(stopQueryCapture()).length;
+    return { result, count };
+  } catch (error) {
+    stopQueryCapture();
+    throw error;
+  }
+}
+
+async function captureFeedFetch(url = 'http://localhost/api/feed') {
+  return captureCountedStatements(() => fetchFeed(url));
+}
+
+function feedHashes(data: { posts: Array<{ hash: string }> }) {
+  return data.posts.map((post) => post.hash);
+}
+
+async function createTasteCluster(tags: string[], candidateCount = 1) {
+  const prisma = getTestPrisma();
+  const seed = await createPostWithTags(prisma, tags);
+  const similar: Post[] = [];
+  for (let i = 0; i < candidateCount; i++) {
+    similar.push(await createPostWithTags(prisma, tags));
+  }
+  return { seed, similar };
+}
+
+async function seedCacheableFeed(tags: string[], candidateCount = 2) {
+  const prisma = getTestPrisma();
+  const cluster = await createTasteCluster(tags, candidateCount);
+  await createPostWithTags(prisma, [`unrelated ${tags[0]}`]);
+  await recalculateTagStats();
+  await favorite(cluster.seed.hash);
+  return cluster;
 }
 
 describe('GET /api/feed (Integration)', () => {
@@ -160,5 +211,90 @@ describe('GET /api/feed (Integration)', () => {
     expect(survivingSiblings).toHaveLength(1); // one group representative only
     expect(hashes).toContain(control.hash); // ungrouped taste-sharing post kept
     expect(hashes).not.toContain(a.hash); // never the favorite itself
+  });
+
+  describe('feed cache regression behavior', () => {
+    it('serves subsequent pages in the same seed bucket without DB statements', async () => {
+      const { similar } = await seedCacheableFeed(['bucket cache taste', 'bucket cache style'], 2);
+
+      const first = await captureFeedFetch('http://localhost/api/feed?page=1&limit=1');
+      expect(first.count).toBeGreaterThan(0);
+      expect(first.result.totalCount).toBe(similar.length);
+      expect(first.result.posts).toHaveLength(1);
+
+      const second = await captureFeedFetch('http://localhost/api/feed?page=2&limit=1');
+      expect(second.count).toBe(0);
+      expect(second.result.totalCount).toBe(similar.length);
+      expect(second.result.posts).toHaveLength(1);
+
+      const third = await captureFeedFetch('http://localhost/api/feed?page=1&limit=1');
+      expect(third.count).toBe(0);
+      expect(third.result).toEqual(first.result);
+    });
+
+    it('rebuilds the cached feed after a favorite mutation route', async () => {
+      const prisma = getTestPrisma();
+      const firstCluster = await createTasteCluster(['favorite cache taste a', 'favorite cache style a']);
+      const secondCluster = await createTasteCluster(['favorite cache taste b', 'favorite cache style b']);
+      await createPostWithTags(prisma, ['favorite cache unrelated']);
+      await recalculateTagStats();
+
+      await favorite(firstCluster.seed.hash);
+      const warm = await fetchFeed('http://localhost/api/feed?limit=10');
+      expect(feedHashes(warm)).toContain(firstCluster.similar[0].hash);
+      expect(feedHashes(warm)).not.toContain(secondCluster.similar[0].hash);
+
+      await favorite(secondCluster.seed.hash);
+      const rebuilt = await captureFeedFetch('http://localhost/api/feed?limit=10');
+      expect(rebuilt.count).toBeGreaterThan(0);
+      expect(feedHashes(rebuilt.result)).toContain(secondCluster.similar[0].hash);
+      expect(feedHashes(rebuilt.result)).not.toContain(secondCluster.seed.hash);
+    });
+
+    it('rebuilds the cached feed after a dismissal mutation route', async () => {
+      const { similar } = await seedCacheableFeed(['dismissal cache taste', 'dismissal cache style'], 1);
+
+      const warm = await fetchFeed('http://localhost/api/feed?limit=10');
+      expect(feedHashes(warm)).toContain(similar[0].hash);
+
+      await dismiss(similar[0].hash);
+      const rebuilt = await captureFeedFetch('http://localhost/api/feed?limit=10');
+      expect(rebuilt.count).toBeGreaterThan(0);
+      expect(feedHashes(rebuilt.result)).not.toContain(similar[0].hash);
+    });
+
+    it('keeps the cached feed warm after recording a view route', async () => {
+      const { similar } = await seedCacheableFeed(['view cache taste', 'view cache style'], 2);
+      const warm = await fetchFeed('http://localhost/api/feed?limit=10');
+
+      await view(similar[0].hash);
+      const afterView = await captureFeedFetch('http://localhost/api/feed?limit=10');
+      expect(afterView.count).toBe(0);
+      expect(afterView.result).toEqual(warm);
+    });
+
+    it('coalesces concurrent feed requests in the same seed bucket onto one build', async () => {
+      await seedCacheableFeed(['concurrent cache taste', 'concurrent cache style'], 2);
+      const url = 'http://localhost/api/feed?limit=10';
+
+      const firstColdBuild = await captureFeedFetch(url);
+      expect(firstColdBuild.count).toBeGreaterThan(0);
+
+      invalidateFeedCache();
+      const singleBuild = await captureFeedFetch(url);
+      expect(singleBuild.count).toBeGreaterThan(0);
+
+      invalidateFeedCache();
+      const concurrent = await captureCountedStatements(() =>
+        Promise.all(Array.from({ length: 5 }, () => fetchFeed(url)))
+      );
+
+      expect(concurrent.count).toBe(singleBuild.count);
+      const firstConcurrentResponse = concurrent.result[0];
+      expect(feedHashes(firstConcurrentResponse)).toEqual(feedHashes(singleBuild.result));
+      for (const response of concurrent.result) {
+        expect(response).toEqual(firstConcurrentResponse);
+      }
+    });
   });
 });
