@@ -1,16 +1,26 @@
+import type * as RecommendationsModule from '@/lib/recommendations';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from './setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPostWithTags, createGroup, createPostInGroup, createTag } from './factories';
+import {
+  createPostWithTags,
+  createGroup,
+  createPostInGroup,
+  createTag,
+  createPostsBulk,
+  createTagsBulk,
+  linkPostsToTagsBulk,
+} from './factories';
 import { SourceType } from '@/generated/prisma/client';
 
-let getOrComputeRecommendations: typeof import('@/lib/recommendations').getOrComputeRecommendations;
-let getOrComputeRecommendationsByHash: typeof import('@/lib/recommendations').getOrComputeRecommendationsByHash;
-let computeRecommendationsForPost: typeof import('@/lib/recommendations').computeRecommendationsForPost;
-let invalidateRecommendationsForPost: typeof import('@/lib/recommendations').invalidateRecommendationsForPost;
-let invalidateAllRecommendations: typeof import('@/lib/recommendations').invalidateAllRecommendations;
-let hasRecommendations: typeof import('@/lib/recommendations').hasRecommendations;
-let getRecommendationStats: typeof import('@/lib/recommendations').getRecommendationStats;
+let getOrComputeRecommendations: typeof RecommendationsModule.getOrComputeRecommendations;
+let getOrComputeRecommendationsByHash: typeof RecommendationsModule.getOrComputeRecommendationsByHash;
+let computeRecommendationsForPost: typeof RecommendationsModule.computeRecommendationsForPost;
+let getTagNeighborhoodsForSeeds: typeof RecommendationsModule.getTagNeighborhoodsForSeeds;
+let invalidateRecommendationsForPost: typeof RecommendationsModule.invalidateRecommendationsForPost;
+let invalidateAllRecommendations: typeof RecommendationsModule.invalidateAllRecommendations;
+let hasRecommendations: typeof RecommendationsModule.hasRecommendations;
+let getRecommendationStats: typeof RecommendationsModule.getRecommendationStats;
 
 describe('Recommendations Module (Integration)', () => {
   beforeAll(async () => {
@@ -20,6 +30,7 @@ describe('Recommendations Module (Integration)', () => {
     getOrComputeRecommendations = routeModule.getOrComputeRecommendations;
     getOrComputeRecommendationsByHash = routeModule.getOrComputeRecommendationsByHash;
     computeRecommendationsForPost = routeModule.computeRecommendationsForPost;
+    getTagNeighborhoodsForSeeds = routeModule.getTagNeighborhoodsForSeeds;
     invalidateRecommendationsForPost = routeModule.invalidateRecommendationsForPost;
     invalidateAllRecommendations = routeModule.invalidateAllRecommendations;
     hasRecommendations = routeModule.hasRecommendations;
@@ -299,6 +310,99 @@ describe('Recommendations Module (Integration)', () => {
 
       const cached = await prisma.postRecommendation.count({ where: { postId: source.id } });
       expect(cached).toBe(4);
+    });
+  });
+
+  describe('distinctiveness floor', () => {
+    it('keeps common tags active for small corpora in single and batch paths', async () => {
+      const prisma = getTestPrisma();
+
+      const singleSource = await createPostWithTags(prisma, ['small-common-tag', 'single-source']);
+      const singleTarget = await createPostWithTags(prisma, ['small-common-tag', 'single-target']);
+      const batchSource = await createPostWithTags(prisma, ['small-common-tag', 'batch-source']);
+      const batchTarget = await createPostWithTags(prisma, ['small-common-tag', 'batch-target']);
+
+      for (let i = 0; i < 6; i++) {
+        await createPostWithTags(prisma, ['small-common-tag', `small-common-extra-${i}`]);
+      }
+      for (let i = 0; i < 10; i++) {
+        await createPostWithTags(prisma, [`small-filler-${i}`]);
+      }
+
+      await recalculateTagStats();
+
+      const singleRecommendations = await getOrComputeRecommendations(singleSource.id, 20);
+      expect(singleRecommendations.map((post) => post.id)).toContain(singleTarget.id);
+
+      const batchRecommendations = await getTagNeighborhoodsForSeeds([batchSource.id], 20);
+      expect(batchRecommendations.get(batchSource.id)?.map((post) => post.id)).toContain(batchTarget.id);
+    });
+
+    it('prunes ubiquitous source tags for large corpora in single and batch paths', async () => {
+      const prisma = getTestPrisma();
+
+      const ubiquitousTag = await createTag(prisma, 'floor-ubiquitous-tag');
+      const singleDistinctiveTag = await createTag(prisma, 'single-distinctive-tag');
+      const singleMidTag = await createTag(prisma, 'single-mid-tag');
+      const batchDistinctiveTag = await createTag(prisma, 'batch-distinctive-tag');
+      const batchMidTag = await createTag(prisma, 'batch-mid-tag');
+
+      const postIds = await createPostsBulk(prisma, 840, { hashSeed: 'distinctiveness-floor' });
+      const [
+        singleUbiquitousSourceId,
+        singleUbiquitousOnlyCandidateId,
+        singleRichSourceId,
+        singleDistinctiveCandidateId,
+        singleMidCandidateId,
+        batchUbiquitousSourceId,
+        batchUbiquitousOnlyCandidateId,
+        batchRichSourceId,
+        batchDistinctiveCandidateId,
+        batchMidCandidateId,
+      ] = postIds;
+
+      await linkPostsToTagsBulk(prisma, [
+        { postId: singleUbiquitousSourceId, tagId: ubiquitousTag.id },
+        { postId: singleUbiquitousOnlyCandidateId, tagId: ubiquitousTag.id },
+        { postId: singleRichSourceId, tagId: ubiquitousTag.id },
+        { postId: singleRichSourceId, tagId: singleDistinctiveTag.id },
+        { postId: singleRichSourceId, tagId: singleMidTag.id },
+        { postId: singleDistinctiveCandidateId, tagId: singleDistinctiveTag.id },
+        { postId: singleMidCandidateId, tagId: singleMidTag.id },
+        { postId: batchUbiquitousSourceId, tagId: ubiquitousTag.id },
+        { postId: batchUbiquitousOnlyCandidateId, tagId: ubiquitousTag.id },
+        { postId: batchRichSourceId, tagId: ubiquitousTag.id },
+        { postId: batchRichSourceId, tagId: batchDistinctiveTag.id },
+        { postId: batchRichSourceId, tagId: batchMidTag.id },
+        { postId: batchDistinctiveCandidateId, tagId: batchDistinctiveTag.id },
+        { postId: batchMidCandidateId, tagId: batchMidTag.id },
+        ...postIds.slice(10, 610).map((postId) => ({ postId, tagId: ubiquitousTag.id })),
+        ...postIds.slice(610, 618).map((postId) => ({ postId, tagId: singleMidTag.id })),
+        ...postIds.slice(618, 626).map((postId) => ({ postId, tagId: batchMidTag.id })),
+      ]);
+
+      await recalculateTagStats();
+
+      const singleUbiquitousOnlyRecommendations = await getOrComputeRecommendations(singleUbiquitousSourceId, 20);
+      expect(singleUbiquitousOnlyRecommendations).toEqual([]);
+
+      const singleRichRecommendations = await getOrComputeRecommendations(singleRichSourceId, 20);
+      const singleRichRecommendationIds = singleRichRecommendations.map((post) => post.id);
+      expect(singleRichRecommendationIds).toContain(singleDistinctiveCandidateId);
+      expect(singleRichRecommendationIds).toContain(singleMidCandidateId);
+      expect(singleRichRecommendationIds).not.toContain(singleUbiquitousOnlyCandidateId);
+
+      const batchRecommendations = await getTagNeighborhoodsForSeeds([
+        batchUbiquitousSourceId,
+        batchRichSourceId,
+      ], 20);
+
+      expect(batchRecommendations.get(batchUbiquitousSourceId)).toEqual([]);
+
+      const batchRichRecommendationIds = batchRecommendations.get(batchRichSourceId)?.map((post) => post.id) ?? [];
+      expect(batchRichRecommendationIds).toContain(batchDistinctiveCandidateId);
+      expect(batchRichRecommendationIds).toContain(batchMidCandidateId);
+      expect(batchRichRecommendationIds).not.toContain(batchUbiquitousOnlyCandidateId);
     });
   });
 

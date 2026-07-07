@@ -4,6 +4,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { execSync } from 'child_process';
 import { instrumentPool } from '../guards/query-capture';
+import { invalidateFeedCache } from '@/lib/feed';
 
 type DockerApiError = Error & {
   statusCode?: number;
@@ -190,6 +191,11 @@ export async function cleanDatabase(): Promise<void> {
       ],
     },
   });
+
+  // The feed cache lives on globalThis and survives table truncation; drop it
+  // so a prior test's cached feed cannot leak into the next (tests run within
+  // one seed-sample bucket).
+  invalidateFeedCache();
 }
 
 /**
