@@ -310,7 +310,7 @@ function TypesetRegion({ region, activeRegion, setActiveRegion }: RegionProps) {
         className="pointer-events-auto absolute inset-0 flex h-full w-full items-center justify-center overflow-hidden focus:outline-none"
       >
         <span
-          className="pointer-events-none w-full text-center leading-tight"
+          className="pointer-events-none w-full text-center leading-tight break-words"
           style={typesetTextStyle(region, fontSize)}
         >
           {text}
