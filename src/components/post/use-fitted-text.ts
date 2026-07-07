@@ -5,6 +5,9 @@ import { useEffect, useState, type RefObject } from "react";
 const MIN_PX = 9;
 const MAX_PX = 28;
 
+// Must match the rendered span's `leading-tight`.
+const LINE_HEIGHT = 1.25;
+
 /** Largest integer font size in [9,28] whose measured text fits the box; floor 9. */
 export function pickFittedFontSize(opts: {
   boxWidthPx: number;
@@ -42,8 +45,19 @@ export function useFittedText<T extends HTMLElement>(
       const rect = box.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
 
+      // Mirror the rendered span so the measured layout matches what paints:
+      // the box's own font metrics (family/weight/style/tracking), normal
+      // word-breaking so an over-wide word forces a smaller size instead of
+      // breaking mid-word, and overflow:hidden so scrollWidth's overflow
+      // report is well-defined across engines (spec ties it to the scroll
+      // container). break-words on the span is only a floor-case safety net.
+      const cs = getComputedStyle(box);
       const probe = document.createElement("div");
-      probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;width:${rect.width}px;word-break:break-word;line-height:1.25;padding:2px;`;
+      probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;box-sizing:border-box;overflow:hidden;white-space:normal;word-break:normal;overflow-wrap:normal;line-height:${LINE_HEIGHT};width:${rect.width}px;`;
+      probe.style.fontFamily = cs.fontFamily;
+      probe.style.fontWeight = cs.fontWeight;
+      probe.style.fontStyle = cs.fontStyle;
+      probe.style.letterSpacing = cs.letterSpacing;
       probe.textContent = text;
       document.body.appendChild(probe);
       try {
@@ -64,7 +78,18 @@ export function useFittedText<T extends HTMLElement>(
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(box);
-    return () => observer.disconnect();
+    // A late webfont swap (next/font Geist uses font-display:swap) changes glyph
+    // metrics without changing box geometry, so ResizeObserver never fires for
+    // it; re-fit once fonts settle so the initial fallback-metric size is
+    // corrected instead of lingering as a break-words fallback.
+    let cancelled = false;
+    document.fonts?.ready.then(() => {
+      if (!cancelled) fit();
+    });
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
   }, [text, boxRef]);
 
   return fontSize;
