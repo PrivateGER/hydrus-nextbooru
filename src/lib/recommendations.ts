@@ -13,6 +13,30 @@ export const MAX_RECOMMENDATION_LIMIT = 20;
  */
 const MAX_SOURCE_TAGS = 64;
 
+/**
+ * Distinctiveness floor: a source tag present on more than this FRACTION of the
+ * corpus is dropped from the similarity match before the candidate scan. Such
+ * near-ubiquitous tags carry ~0 IDF (they contribute almost nothing to the
+ * score) but have the largest posting lists, so dropping them preserves ranking
+ * while bounding the scan to a fraction of the table.
+ * A tag must also exceed {@link MIN_SOURCE_TAG_PRUNE_COUNT} posts in absolute
+ * terms to be pruned, so small libraries (where a tag can sit on a large
+ * fraction of few posts without being "massively shared") are left untouched.
+ *
+ * Both are HARDCODED in the SQL functions (compute_post_recommendations /
+ * compute_recommendations_for_posts, migration 20260707000000) and mirrored
+ * here for discoverability — the two MUST stay in sync. See that migration for
+ * the measured quality/scan tradeoff behind the 0.30 default.
+ */
+export const MAX_SOURCE_TAG_FREQUENCY = 0.3;
+
+/**
+ * Absolute floor paired with {@link MAX_SOURCE_TAG_FREQUENCY}: a tag is pruned
+ * only when it is on more than both this many posts AND that fraction of the
+ * corpus. Keeps the frequency prune dormant on small corpora.
+ */
+export const MIN_SOURCE_TAG_PRUNE_COUNT = 500;
+
 export interface RecommendedPost {
   id: number;
   hash: string;
