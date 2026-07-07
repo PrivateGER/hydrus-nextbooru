@@ -62,14 +62,18 @@ export function useOcr(
       const response = await fetch("/api/admin/ocr");
       if (!response.ok) return;
       const data = (await response.json()) as OcrStats;
-      if (mountedRef.current) {
-        setOcrStats(data);
-        setIsRunning(data.batch.status === "running" || data.batch.status === "cancelling");
-      }
+      if (!mountedRef.current) return;
+      const active = data.batch.status === "running" || data.batch.status === "cancelling";
+      setOcrStats(data);
+      setIsRunning(active);
+      // If a batch is already active when this mounts (e.g. started in another
+      // tab), start polling so updatedAt keeps refreshing and the stalled gate
+      // isn't tripped by an aging one-shot fetch.
+      if (active) startPolling();
     } catch (error) {
       console.error("Error fetching OCR stats:", error);
     }
-  }, []);
+  }, [startPolling]);
 
   useEffect(() => {
     fetchStats();
