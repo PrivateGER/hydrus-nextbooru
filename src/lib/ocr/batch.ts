@@ -50,6 +50,10 @@ export interface OcrBatchResult {
  * write decides the winner, never a prior read).
  */
 export async function acquireOcrBatchLock(): Promise<boolean> {
+  // A batch is already live in THIS process; never let the stale-reclaim below
+  // start a second one over it during a transient heartbeat/DB gap.
+  if (activeBatchAbort) return false;
+
   const runningData = {
     status: "running",
     totalPosts: 0,
@@ -306,16 +310,21 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
           } catch (error) {
             if (error instanceof OpenRouterApiError && error.statusCode === 401) {
               abortError = error;
-              // Persist OCR-only so the scan work is not lost.
-              await finalizeScan(
-                post,
-                regions,
-                regions.map(() => null),
-                null,
-                inpaintedPage
-              ).catch(() => {});
-              result.processed++;
-              await updateProgress(1, 0);
+              activeBatchAbort?.abort();
+              // Persist OCR-only so the scan work is not lost, but only count it
+              // processed when that persistence actually succeeds.
+              try {
+                await finalizeScan(post, regions, regions.map(() => null), null, inpaintedPage);
+                result.processed++;
+                await updateProgress(1, 0);
+              } catch (recoveryError) {
+                result.failed++;
+                pushError(
+                  `${post.hash.slice(0, 8)}: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`
+                );
+                await markScanFailed(post.id).catch(() => {});
+                await updateProgress(0, 1);
+              }
               return;
             }
             result.failed++;

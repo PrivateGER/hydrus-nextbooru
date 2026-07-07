@@ -240,6 +240,24 @@ describe("runOcrBatch", () => {
     expect(mockFinalizeScan.mock.calls[0][4]).toBe(page);
   });
 
+  it("marks the post FAILED when 401 OCR-only recovery persistence fails", async () => {
+    const first = post(1);
+    const detected = region();
+    const page = Buffer.from([4, 0, 1]);
+    mockPostFindMany.mockResolvedValue([first]);
+    mockOcrPost.mockResolvedValue([detected]);
+    mockRenderPostInpaintedPage.mockResolvedValueOnce(page);
+    mockTranslateRegions.mockRejectedValue(new OpenRouterApiError("auth", 401));
+    mockFinalizeScan.mockRejectedValue(new Error("db down"));
+
+    const result = await runOcrBatch({});
+    expect(result.status).toBe("error");
+    expect(result.processed).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(mockFinalizeScan).toHaveBeenCalledWith(first, [detected], [null], null, page);
+    expect(mockMarkScanFailed).toHaveBeenCalledWith(first.id);
+  });
+
   it("stops between posts when cancellation was requested", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
     mockOcrPost.mockResolvedValue([]);

@@ -18,13 +18,11 @@ export const OCR_PIPELINE_CONFIG = {
   ocr: { ocr: "48px" },
 } as const;
 
-/** Full-page inpaint render: explicit config keeps LaMa enabled for the page image. */
+/** Full-page inpaint render: shares the pipeline config but re-enables LaMa and disables text rendering. */
 export const OCR_PAGE_INPAINT_CONFIG = {
+  ...OCR_PIPELINE_CONFIG,
   translator: { translator: "none" },
   inpainter: { inpainter: "lama_large" },
-  colorizer: { colorizer: "none" },
-  detector: { detector: "default" },
-  ocr: { ocr: "48px" },
 } as const;
 
 /** Whether the OCR sidecar feature is configured. */

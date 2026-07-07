@@ -105,8 +105,16 @@ export async function DELETE(request: NextRequest) {
   const auth = await verifyAdminSession();
   if (!auth.authorized) return auth.response;
 
-  const force = new URL(request.url).searchParams.get("force");
+  const force = request.nextUrl.searchParams.get("force");
   const forced = force === "1" || force === "true";
-  const cancelled = forced ? await requestOcrBatchReset() : await requestOcrBatchCancel();
-  return NextResponse.json({ cancelled, forced });
+  try {
+    const cancelled = forced ? await requestOcrBatchReset() : await requestOcrBatchCancel();
+    return NextResponse.json({ cancelled, forced });
+  } catch (error) {
+    apiLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Failed to cancel/reset OCR batch"
+    );
+    return NextResponse.json({ error: "Failed to cancel/reset OCR batch" }, { status: 500 });
+  }
 }

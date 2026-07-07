@@ -128,11 +128,14 @@ export function useOcr(
   const forceReset = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/ocr?force=1", { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "Failed to reset OCR batch");
       }
-      setMessage({ type: "success", text: "OCR batch reset" });
+      setMessage({
+        type: "success",
+        text: data.cancelled ? "OCR batch reset" : "No stuck batch to reset",
+      });
       startPolling();
       await fetchStats();
     } catch (error) {
