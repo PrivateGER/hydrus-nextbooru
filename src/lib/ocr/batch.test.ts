@@ -271,6 +271,19 @@ describe("runOcrBatch", () => {
     expect(mockOcrPost).toHaveBeenCalledTimes(1);
   });
 
+  it("stops when a force-reset marks the batch cancelled", async () => {
+    mockPostFindMany.mockResolvedValue([post(1), post(2)]);
+    mockOcrPost.mockResolvedValue([]);
+    // First status poll: running; second: cancelled by an external reset.
+    mockBatchFindUnique
+      .mockResolvedValueOnce({ status: "running" })
+      .mockResolvedValueOnce({ status: "cancelled" });
+
+    const result = await runOcrBatch({});
+    expect(result.status).toBe("cancelled");
+    expect(mockOcrPost).toHaveBeenCalledTimes(1);
+  });
+
   it("marks the post FAILED on a non-401 persist error in the pool", async () => {
     mockPostFindMany.mockResolvedValue([post(1)]);
     mockOcrPost.mockResolvedValue([region()]);

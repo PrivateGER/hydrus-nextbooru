@@ -158,7 +158,11 @@ async function isCancelling(): Promise<boolean> {
     where: { key: SINGLETON_KEY },
     select: { status: true },
   });
-  return state?.status === "cancelling";
+  // "cancelling" is a graceful cancel; "cancelled" means an admin force-reset (or
+  // another process) already cleared the lock. Either way this worker must stop —
+  // otherwise a reset that lands between posts, or in a different process, is
+  // ignored and the batch keeps writing after the lock reads free.
+  return state?.status === "cancelling" || state?.status === "cancelled";
 }
 
 async function updateProgress(processedDelta: number, failedDelta: number): Promise<void> {
