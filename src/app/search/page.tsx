@@ -27,6 +27,7 @@ import { TagCategory } from "@/generated/prisma/client";
 import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
 import { mergeFavoritedState } from "@/lib/favorites";
 import { isFavoriteTag } from "@/lib/meta-tags-shared";
+import { searchContextQuery } from "@/lib/post-navigation";
 
 export const metadata: Metadata = {
   title: "Search - Booru",
@@ -377,7 +378,18 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
         <div className="flex flex-col gap-6 lg:flex-row">
           <RelatedTagsSidebar relatedTags={relatedTags} currentTags={tags} />
           <div className="min-w-0 flex-1">
-            <PostGrid posts={posts} />
+            {/* Tag searches are deterministic (importedAt, id keyset), so post
+                links carry the query as navigation context — the post page's
+                prev/next then follow these results. Semantic results are
+                ranked per-request and can't be replayed, so they get none. */}
+            <PostGrid
+              posts={posts}
+              postHrefQuery={
+                !isSemanticSearch && tags.length > 0
+                  ? searchContextQuery({ tags, page })
+                  : undefined
+              }
+            />
           </div>
         </div>
       )}

@@ -442,25 +442,32 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
  * @param options - Optional search configuration
  * @returns Paginated posts with resolved wildcard information
  */
-export async function searchPosts(
-  tags: string[],
-  page: number,
-  options?: SearchPostsOptions
-): Promise<TagSearchResult> {
-  // Validate and apply limits.
-  // normalizePositiveInteger coerces NaN/Infinity/non-finite values to the
-  // fallback so they can never reach Prisma take/skip.
-  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
-  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
-  const validatedPage = normalizePositiveInteger(requestedPage, 1, MAX_PAGE);
-  const skip = (validatedPage - 1) * limit;
+/**
+ * Outcome of translating a tag query into a Prisma where clause.
+ *
+ * `empty` means the result set is provably empty (no criteria, invalid
+ * wildcard, wildcard matching no tags, or notes filter matching no notes)
+ * without running the main query.
+ */
+type PostSearchWhere =
+  | {
+      status: "ok";
+      where: Prisma.PostWhereInput;
+      resolvedWildcards: ResolvedWildcard[];
+      /** Non-wildcard tag names from the query (used to exclude them from related-tags). */
+      plainTagNames: string[];
+    }
+  | { status: "empty"; resolvedWildcards: ResolvedWildcard[]; error?: string };
 
-  // Early return if page exceeds maximum
-  if (requestedPage > MAX_PAGE) {
-    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
-  }
-
-  const notesQuery = options?.notesQuery?.trim() ?? "";
+/**
+ * Translate a tag query (regular tags, negations, wildcards, meta tags,
+ * optional notes fulltext filter) into a Prisma where clause.
+ *
+ * Shared by `searchPosts` (the listing) and `findSearchNeighbors` (the
+ * post page's prev/next within a search context) so both interpret a query
+ * identically.
+ */
+async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise<PostSearchWhere> {
   const hasNotesFilter = notesQuery.length >= 2;
 
   // Separate meta tags from regular tags (also handles negation parsing)
@@ -472,7 +479,7 @@ export async function searchPosts(
   // Check if we have any search criteria (tags, meta tags, or notes)
   const hasMetaTags = metaTags.include.length > 0 || metaTags.exclude.length > 0;
   if (includeTags.length === 0 && excludeTags.length === 0 && !hasMetaTags && !hasNotesFilter) {
-    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
+    return { status: "empty", resolvedWildcards: [] };
   }
 
   // Categorize regular tags into regular and wildcard
@@ -499,7 +506,7 @@ export async function searchPosts(
   }
 
   if (errors.length > 0) {
-    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [], error: errors[0] };
+    return { status: "empty", resolvedWildcards: [], error: errors[0] };
   }
 
   // Resolve wildcards
@@ -520,7 +527,7 @@ export async function searchPosts(
   }
 
   // Build Prisma where clause
-  const conditions: object[] = [];
+  const conditions: Prisma.PostWhereInput[] = [];
 
   // Add regular tag conditions
   for (const name of regular.include) {
@@ -529,7 +536,7 @@ export async function searchPosts(
 
   for (const ids of includeWildcardIds) {
     if (ids.length === 0) {
-      return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards };
+      return { status: "empty", resolvedWildcards };
     }
     conditions.push({ tags: { some: { tagId: { in: ids } } } });
   }
@@ -567,15 +574,9 @@ export async function searchPosts(
     `;
     const noteMatchingPostIds = matchingNotes.map((n) => n.postId);
 
-    // If no notes match, return empty results early
+    // If no notes match, the result set is empty
     if (noteMatchingPostIds.length === 0) {
-      return {
-        posts: [],
-        totalCount: 0,
-        totalPages: 0,
-        queryTimeMs: 0,
-        resolvedWildcards,
-      };
+      return { status: "empty", resolvedWildcards };
     }
 
     conditions.push({
@@ -585,7 +586,44 @@ export async function searchPosts(
     });
   }
 
-  const where = conditions.length > 0 ? { AND: conditions } : {};
+  return {
+    status: "ok",
+    where: conditions.length > 0 ? { AND: conditions } : {},
+    resolvedWildcards,
+    plainTagNames: [...regular.include, ...regular.exclude],
+  };
+}
+
+export async function searchPosts(
+  tags: string[],
+  page: number,
+  options?: SearchPostsOptions
+): Promise<TagSearchResult> {
+  // Validate and apply limits.
+  // normalizePositiveInteger coerces NaN/Infinity/non-finite values to the
+  // fallback so they can never reach Prisma take/skip.
+  const limit = normalizePositiveInteger(options?.limit, DEFAULT_LIMIT, MAX_LIMIT);
+  const requestedPage = Number.isFinite(page) ? Math.floor(page) : 1;
+  const validatedPage = normalizePositiveInteger(requestedPage, 1, MAX_PAGE);
+  const skip = (validatedPage - 1) * limit;
+
+  // Early return if page exceeds maximum
+  if (requestedPage > MAX_PAGE) {
+    return { posts: [], totalPages: 0, totalCount: 0, queryTimeMs: 0, resolvedWildcards: [] };
+  }
+
+  const built = await buildPostSearchWhere(tags, options?.notesQuery?.trim() ?? "");
+  if (built.status === "empty") {
+    return {
+      posts: [],
+      totalPages: 0,
+      totalCount: 0,
+      queryTimeMs: 0,
+      resolvedWildcards: built.resolvedWildcards,
+      ...(built.error !== undefined && { error: built.error }),
+    };
+  }
+  const { where, resolvedWildcards } = built;
 
   const startTime = performance.now();
 
@@ -593,7 +631,10 @@ export async function searchPosts(
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
       where,
-      orderBy: { importedAt: "desc" },
+      // id breaks importedAt ties so the listing is a total order — required
+      // for stable pagination and for findSearchNeighbors' keyset queries to
+      // agree with the listing.
+      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
       skip,
       take: limit,
       select: {
@@ -613,7 +654,7 @@ export async function searchPosts(
   const relatedTags = options?.includeRelatedTags
     ? await getRelatedTags(
         posts.map((p) => p.id),
-        [...regular.include, ...regular.exclude]
+        built.plainTagNames
       )
     : undefined;
 
@@ -625,6 +666,72 @@ export async function searchPosts(
     resolvedWildcards,
     ...(relatedTags !== undefined && { relatedTags }),
   };
+}
+
+/** Prev/next hashes of a post within a tag-search result listing. */
+export interface SearchNeighbors {
+  /** Post shown before the anchor in the listing (toward page 1), if any. */
+  prevHash: string | null;
+  /** Post shown after the anchor in the listing, if any. */
+  nextHash: string | null;
+}
+
+/**
+ * Find a post's immediate neighbors within a tag-search listing without
+ * paginating through it: two keyset lookups around the anchor's
+ * (importedAt, id) sort position, using the same where clause and total
+ * order as `searchPosts`.
+ *
+ * The anchor itself does not need to match the query (e.g. its tag was
+ * removed since the listing was rendered) — neighbors are computed purely
+ * from its sort position, so navigation still lands on the adjacent
+ * matching posts.
+ */
+export async function findSearchNeighbors(
+  anchor: { id: number; importedAt: Date },
+  tags: string[]
+): Promise<SearchNeighbors> {
+  const built = await buildPostSearchWhere(tags, "");
+  if (built.status === "empty") {
+    return { prevHash: null, nextHash: null };
+  }
+
+  // The listing sorts by (importedAt desc, id desc); "prev" is the closest
+  // post greater than the anchor in that order, "next" the closest smaller.
+  const [prev, next] = await Promise.all([
+    prisma.post.findFirst({
+      where: {
+        AND: [
+          built.where,
+          {
+            OR: [
+              { importedAt: { gt: anchor.importedAt } },
+              { importedAt: anchor.importedAt, id: { gt: anchor.id } },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ importedAt: "asc" }, { id: "asc" }],
+      select: { hash: true },
+    }),
+    prisma.post.findFirst({
+      where: {
+        AND: [
+          built.where,
+          {
+            OR: [
+              { importedAt: { lt: anchor.importedAt } },
+              { importedAt: anchor.importedAt, id: { lt: anchor.id } },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
+      select: { hash: true },
+    }),
+  ]);
+
+  return { prevHash: prev?.hash ?? null, nextHash: next?.hash ?? null };
 }
 
 /** Cap on co-occurring tags returned for the search drill-down sidebar */

@@ -11,6 +11,9 @@ import { PageHeaderSkeleton, FiltersSkeleton, GroupCardSkeleton } from "@/compon
 import { GroupsSearchControls } from "@/components/groups-search-controls";
 import { searchGroups, OrderOption } from "@/lib/groups";
 import { parseGroupsPageParams, type GroupsPageRawParams } from "@/lib/groups-page-params";
+import { readerHref } from "@/lib/reader";
+import { buildPostUrl } from "@/lib/post-navigation";
+import { BookOpenIcon } from "@heroicons/react/24/outline";
 
 export const metadata: Metadata = {
   title: "Groups - Booru",
@@ -261,8 +264,22 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                     );
                   })}
                 </div>
-                {/* Post count and creators */}
+                {/* Read button, post count and creators */}
                 <div className="flex items-center gap-3">
+                  {postCount > 1 && (
+                    <Link
+                      href={readerHref(primaryGroup.id, 1)}
+                      // The reader route loads every member of its group; up to
+                      // 50 of these links render per page, so viewport prefetch
+                      // would fan out that many all-member queries unclicked.
+                      prefetch={false}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-500/20 dark:text-blue-400"
+                      title="Open in reader"
+                    >
+                      <BookOpenIcon className="h-4 w-4" />
+                      Read
+                    </Link>
+                  )}
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-200 px-3 py-1 text-sm font-medium text-zinc-700 dark:bg-zinc-700/80 dark:text-zinc-300">
                     <svg className="h-4 w-4 text-zinc-400 dark:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -295,7 +312,9 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                 {mergedGroup.posts.map((pg, index) => (
                   <Link
                     key={pg.post.hash}
-                    href={`/post/${pg.post.hash}`}
+                    // ?in= pins the post page's arrows to this card's group,
+                    // so navigation follows the sequence the user clicked from.
+                    href={buildPostUrl(pg.post.hash, primaryGroup.id)}
                     className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/20 dark:hover:shadow-black/30"
                   >
                     <img

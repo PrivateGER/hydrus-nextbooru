@@ -78,6 +78,16 @@ export async function setupTestDatabase(): Promise<{
     max: 10,
   });
 
+  // pg emits 'error' on the pool for idle-client failures; without a
+  // listener Node escalates it to an uncaught exception and Vitest fails the
+  // run even when every test passed. Container shutdown during teardown can
+  // terminate a lingering idle connection ("terminating connection due to
+  // administrator command"), so log-and-continue is the right response —
+  // same guard the production pool in src/lib/db.ts has.
+  pool.on('error', (error) => {
+    console.warn(`[integration setup] idle pool connection error (teardown race?): ${error.message}`);
+  });
+
   // No-op passthrough unless a guard test starts capture.
   instrumentPool(pool);
 

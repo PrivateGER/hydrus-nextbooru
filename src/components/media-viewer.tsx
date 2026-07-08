@@ -13,8 +13,10 @@ interface MediaViewerProps {
   width?: number | null;
   height?: number | null;
   blurhash?: string | null;
-  prevPostHash?: string;
-  nextPostHash?: string;
+  /** Full destination URL for the previous post (may carry ?in= group context). */
+  prevUrl?: string;
+  /** Full destination URL for the next post (may carry ?in= group context). */
+  nextUrl?: string;
   currentPosition?: number;
   totalCount?: number;
   textRegions?: OverlayRegion[];
@@ -30,8 +32,8 @@ interface MediaViewerProps {
  * @param width - Optional intrinsic image width used to calculate aspect ratio and sizing
  * @param height - Optional intrinsic image height used to calculate aspect ratio and sizing
  * @param blurhash - Optional blurhash string rendered to a canvas as a low-resolution placeholder until the preview/full image loads
- * @param prevPostHash - Optional hash for the previous post; when provided shows a previous navigation control and enables swipe-right navigation
- * @param nextPostHash - Optional hash for the next post; when provided shows a next navigation control and enables swipe-left navigation
+ * @param prevUrl - Optional URL for the previous post; when provided shows a previous navigation control and enables swipe-right navigation
+ * @param nextUrl - Optional URL for the next post; when provided shows a next navigation control and enables swipe-left navigation
  * @param currentPosition - Optional 1-based position of current post in the group
  * @param totalCount - Optional total number of posts in the group
  * @returns The React element representing the media viewer
@@ -43,8 +45,8 @@ export function MediaViewer({
   width,
   height,
   blurhash,
-  prevPostHash,
-  nextPostHash,
+  prevUrl,
+  nextUrl,
   currentPosition,
   totalCount,
   textRegions,
@@ -59,8 +61,8 @@ export function MediaViewer({
       width={width}
       height={height}
       blurhash={blurhash}
-      prevPostHash={prevPostHash}
-      nextPostHash={nextPostHash}
+      prevUrl={prevUrl}
+      nextUrl={nextUrl}
       currentPosition={currentPosition}
       totalCount={totalCount}
       textRegions={textRegions}
@@ -76,8 +78,8 @@ function MediaViewerContent({
   width,
   height,
   blurhash,
-  prevPostHash,
-  nextPostHash,
+  prevUrl,
+  nextUrl,
   currentPosition,
   totalCount,
   textRegions,
@@ -86,7 +88,7 @@ function MediaViewerContent({
   const router = useRouter();
   const isVideo = mimeType.startsWith("video/");
   const isImage = mimeType.startsWith("image/");
-  const hasNavigation = prevPostHash !== undefined || nextPostHash !== undefined;
+  const hasNavigation = prevUrl !== undefined || nextUrl !== undefined;
 
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
@@ -161,10 +163,10 @@ function MediaViewerContent({
 
     // Only trigger if horizontal swipe > threshold and more horizontal than vertical
     if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
-      if (deltaX < 0 && nextPostHash) {
-        router.push(`/post/${nextPostHash}`);
-      } else if (deltaX > 0 && prevPostHash) {
-        router.push(`/post/${prevPostHash}`);
+      if (deltaX < 0 && nextUrl) {
+        router.push(nextUrl);
+      } else if (deltaX > 0 && prevUrl) {
+        router.push(prevUrl);
       }
     }
     swipeStartRef.current = null;
@@ -254,9 +256,9 @@ function MediaViewerContent({
       onPointerLeave={handlePointerCancel}
     >
       {/* Previous button */}
-      {prevPostHash !== undefined && (
+      {prevUrl !== undefined && (
         <Link
-          href={`/post/${prevPostHash}`}
+          href={prevUrl}
           className="absolute left-2 lg:left-4 top-1/2 z-10 flex h-10 w-10 lg:h-12 lg:w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity hover:bg-black/80 lg:opacity-0 lg:group-hover:opacity-100"
           aria-label="Previous image"
         >
@@ -359,9 +361,9 @@ function MediaViewerContent({
       )}
 
       {/* Next button */}
-      {nextPostHash !== undefined && (
+      {nextUrl !== undefined && (
         <Link
-          href={`/post/${nextPostHash}`}
+          href={nextUrl}
           className="absolute right-2 lg:right-4 top-1/2 z-10 flex h-10 w-10 lg:h-12 lg:w-12 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-opacity hover:bg-black/80 lg:opacity-0 lg:group-hover:opacity-100"
           aria-label="Next image"
         >
