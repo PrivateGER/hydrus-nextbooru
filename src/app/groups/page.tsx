@@ -12,6 +12,7 @@ import { GroupsSearchControls } from "@/components/groups-search-controls";
 import { searchGroups, OrderOption } from "@/lib/groups";
 import { parseGroupsPageParams, type GroupsPageRawParams } from "@/lib/groups-page-params";
 import { readerHref } from "@/lib/reader";
+import { buildPostUrl } from "@/lib/post-navigation";
 import { BookOpenIcon } from "@heroicons/react/24/outline";
 
 export const metadata: Metadata = {
@@ -311,7 +312,9 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                 {mergedGroup.posts.map((pg, index) => (
                   <Link
                     key={pg.post.hash}
-                    href={`/post/${pg.post.hash}`}
+                    // ?in= pins the post page's arrows to this card's group,
+                    // so navigation follows the sequence the user clicked from.
+                    href={buildPostUrl(pg.post.hash, primaryGroup.id)}
                     className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/20 dark:hover:shadow-black/30"
                   >
                     <img
