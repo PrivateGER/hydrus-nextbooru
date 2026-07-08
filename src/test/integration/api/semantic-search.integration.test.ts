@@ -5,6 +5,7 @@ import { SourceType } from "@/generated/prisma/client";
 import { createGroup, createPost, createPostsBulk } from "../factories";
 import {
   findRelatedPostsByEmbedding,
+  findRelatedPostsByEmbeddingForPosts,
   searchPostsByEmbedding,
   upsertCompleteEmbedding,
 } from "@/lib/embeddings/store";
@@ -275,6 +276,126 @@ describe("semantic image embedding search", () => {
     expect(related.map((post) => post.id)).not.toContain(sourcePost.id);
     expect(related.map((post) => post.id)).not.toContain(noEmbeddingPost.id);
     expect(related[0].distance).toBeLessThan(related[1].distance);
+  });
+
+  it("finds related posts for embedding seeds in chunks with per-seed exclusions and score filters", async () => {
+    const prisma = getTestPrisma();
+    const seedA = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const seedB = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const seedWithoutEmbedding = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const missingEmbeddingSeedIds = await createPostsBulk(prisma, 15, {
+      mimeType: "image/png",
+      extension: ".png",
+    });
+    const aBest = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const aSecond = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const aGroupSibling = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const bBest = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const bSecond = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
+    const sharedGroup = await createGroup(prisma, SourceType.PIXIV, "batched-related-shared-group");
+
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: seedA.id, groupId: sharedGroup.id, position: 0 },
+        { postId: aGroupSibling.id, groupId: sharedGroup.id, position: 1 },
+      ],
+    });
+
+    const embeddingsToWrite: Array<[number, number[]]> = [
+      [seedA.id, embedding(1, 0)],
+      [seedB.id, embedding(0, 1)],
+      [aBest.id, embedding(0.99, 0.01)],
+      [aSecond.id, embedding(0.9, 0.1)],
+      [aGroupSibling.id, embedding(1, 0)],
+      [bBest.id, embedding(0.01, 0.99)],
+      [bSecond.id, embedding(0.1, 0.9)],
+    ];
+
+    for (const [postId, vector] of embeddingsToWrite) {
+      await upsertCompleteEmbedding({
+        postId,
+        config,
+        embedding: vector,
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+    }
+
+    const seedIds = [seedWithoutEmbedding.id, ...missingEmbeddingSeedIds, seedA.id, seedB.id];
+    const related = await findRelatedPostsByEmbeddingForPosts({
+      postIds: seedIds,
+      config,
+      limit: 2,
+    });
+
+    expect(seedIds).toHaveLength(18);
+    expect(seedIds.slice(16)).toEqual([seedA.id, seedB.id]);
+    expect(related.get(seedA.id)?.map((post) => post.id)).toEqual([aBest.id, aSecond.id]);
+    expect(related.get(seedA.id)?.map((post) => post.id)).not.toContain(aGroupSibling.id);
+    expect(related.get(seedB.id)?.map((post) => post.id)).toEqual([bBest.id, bSecond.id]);
+    expect(related.get(seedA.id)?.[0].score).toBeGreaterThan(related.get(seedA.id)![1].score);
+    expect(related.get(seedB.id)?.[0].score).toBeGreaterThan(related.get(seedB.id)![1].score);
+    expect(related.has(seedWithoutEmbedding.id)).toBe(false);
+
+    const filtered = await findRelatedPostsByEmbeddingForPosts({
+      postIds: seedIds,
+      config,
+      limit: 5,
+      minScore: 0.998,
+    });
+
+    expect(filtered.get(seedA.id)?.map((post) => post.id)).toEqual([aBest.id]);
+    expect(filtered.get(seedB.id)?.map((post) => post.id)).toEqual([bBest.id]);
+    expect(filtered.has(seedWithoutEmbedding.id)).toBe(false);
+
+    // This hand-written EXPLAIN mirrors the production LATERAL shape closely
+    // enough to prove the expression/partial vchordrq index is usable with the
+    // same filters. It is not a production-plan parity assertion.
+    const planRows = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL enable_seqscan = off`;
+      await tx.$executeRaw`SET LOCAL enable_sort = off`;
+      return tx.$queryRaw<{ "QUERY PLAN": string }[]>`
+        EXPLAIN (COSTS OFF)
+        WITH seed_embeddings AS (
+          SELECT pe."postId" AS source_id, pe.embedding::vector(768) AS embedding
+          FROM "PostEmbedding" pe
+          WHERE pe."postId" = ANY(${[seedA.id, seedB.id]}::int[])
+            AND pe."baseUrl" = ${config.baseUrl}
+            AND pe.model = ${config.model}
+            AND pe.dimensions = ${config.dimensions}
+            AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+            AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+            AND pe.embedding IS NOT NULL
+        )
+        SELECT nearest."postId"
+        FROM seed_embeddings se
+        CROSS JOIN LATERAL (
+          SELECT pe."postId"
+          FROM "PostEmbedding" pe
+          WHERE pe."baseUrl" = ${config.baseUrl}
+            AND pe.model = ${config.model}
+            AND pe.dimensions = ${config.dimensions}
+            AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+            AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+            AND pe.embedding IS NOT NULL
+            AND pe."postId" <> se.source_id
+            AND (pe.embedding::vector(768) <=> se.embedding)::float8 <= ${0.002}
+            AND NOT EXISTS (
+              SELECT 1
+              FROM "PostGroup" source_group
+              JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
+              WHERE source_group."postId" = se.source_id
+                AND related_group."postId" = pe."postId"
+            )
+          ORDER BY pe.embedding::vector(768) <=> se.embedding
+          LIMIT ${2}
+        ) nearest
+      `;
+    });
+    const planText = planRows.map((row) => row["QUERY PLAN"]).join("\n");
+    expect(planText).toContain("PostEmbedding_embedding_768_vchord_idx");
   });
 
   it("excludes embedding-related posts that share a group with the source post", async () => {

@@ -72,6 +72,10 @@ export interface EmbeddedRelatedPost {
 
 export const DEFAULT_EMBEDDING_MIN_SCORE = 0.25;
 const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
+// Prod measurements showed one mega-query for ~109 seeds stays single-backend
+// bound, while per-seed fan-out burns round trips and pool slots. Sixteen seeds
+// per LATERAL query keeps multi-core parallelism with about seven round trips.
+const RELATED_EMBEDDING_SEED_CHUNK_SIZE = 16;
 
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
@@ -432,6 +436,138 @@ export async function getPostEmbeddingVector(options: {
     postId: Number(row.postId),
     embedding: validateEmbeddingVector(parseVectorLiteral(row.embedding), config.dimensions),
   };
+}
+
+export async function findRelatedPostsByEmbeddingForPosts(options: {
+  postIds: number[];
+  config: EmbeddingConfig;
+  limit: number;
+  minScore?: number;
+}): Promise<Map<number, EmbeddedRelatedPost[]>> {
+  const { config } = options;
+  const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : 10;
+  const limit = Math.min(Math.max(1, requestedLimit), 20);
+
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const uniquePostIds = new Set<number>();
+  for (const postId of options.postIds) {
+    if (Number.isInteger(postId)) uniquePostIds.add(postId);
+  }
+  const postIds = [...uniquePostIds];
+  const bySeed = new Map<number, EmbeddedRelatedPost[]>();
+  if (postIds.length === 0) return bySeed;
+
+  const vectorTypeSql = vectorType(config.dimensions);
+  const minScore = normalizeEmbeddingMinScore(options.minScore);
+  const maxDistance = minScore === null ? null : 1 - minScore;
+  const maxDistanceFilter = maxDistance === null
+    ? Prisma.empty
+    : Prisma.sql`AND (pe.embedding::${vectorTypeSql} <=> seed.embedding)::float8 <= ${maxDistance}`;
+
+  type ResultRow = {
+    sourceId: number;
+    id: number | null;
+    hash: string | null;
+    width: number | null;
+    height: number | null;
+    blurhash: string | null;
+    mimeType: string | null;
+    distance: number | null;
+  };
+
+  const chunks: number[][] = [];
+  for (let index = 0; index < postIds.length; index += RELATED_EMBEDDING_SEED_CHUNK_SIZE) {
+    chunks.push(postIds.slice(index, index + RELATED_EMBEDDING_SEED_CHUNK_SIZE));
+  }
+
+  const chunkRows = await Promise.all(
+    chunks.map(async (chunk): Promise<ResultRow[]> => {
+      try {
+        return await prisma.$queryRaw<ResultRow[]>`
+          WITH seed_embeddings AS (
+            SELECT pe."postId" AS source_id, pe.embedding::${vectorTypeSql} AS embedding
+            FROM "PostEmbedding" pe
+            WHERE pe."postId" = ANY(${chunk}::int[])
+              AND pe."baseUrl" = ${config.baseUrl}
+              AND pe.model = ${config.model}
+              AND pe.dimensions = ${config.dimensions}
+              AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+              AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+              AND pe.embedding IS NOT NULL
+          )
+          SELECT
+            seed.source_id AS "sourceId",
+            related.id,
+            related.hash,
+            related.width,
+            related.height,
+            related.blurhash,
+            related."mimeType",
+            nearest.distance
+          FROM seed_embeddings seed
+          LEFT JOIN LATERAL (
+            SELECT
+              pe."postId",
+              (pe.embedding::${vectorTypeSql} <=> seed.embedding)::float8 AS distance
+            FROM "PostEmbedding" pe
+            WHERE pe."baseUrl" = ${config.baseUrl}
+              AND pe.model = ${config.model}
+              AND pe.dimensions = ${config.dimensions}
+              AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+              AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+              AND pe.embedding IS NOT NULL
+              AND pe."postId" <> seed.source_id
+              ${maxDistanceFilter}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM "PostGroup" source_group
+                JOIN "PostGroup" related_group ON related_group."groupId" = source_group."groupId"
+                WHERE source_group."postId" = seed.source_id
+                  AND related_group."postId" = pe."postId"
+              )
+            ORDER BY pe.embedding::${vectorTypeSql} <=> seed.embedding
+            LIMIT ${limit}
+          ) nearest ON TRUE
+          LEFT JOIN "Post" related ON related.id = nearest."postId"
+          ORDER BY seed.source_id, nearest.distance
+        `;
+      } catch (error) {
+        console.error(`Embedding related-post chunk failed for seeds ${chunk.join(",")}:`, error);
+        return [];
+      }
+    })
+  );
+
+  for (const rows of chunkRows) {
+    for (const row of rows) {
+      if (row.id === null || row.hash === null || row.mimeType === null || row.distance === null) {
+        if (!bySeed.has(row.sourceId)) bySeed.set(row.sourceId, []);
+        continue;
+      }
+
+      const neighbors = bySeed.get(row.sourceId);
+      const related = {
+        id: row.id,
+        hash: row.hash,
+        width: row.width,
+        height: row.height,
+        blurhash: row.blurhash,
+        mimeType: row.mimeType,
+        distance: Number(row.distance),
+        score: 1 - Number(row.distance),
+      };
+      if (neighbors) {
+        neighbors.push(related);
+      } else {
+        bySeed.set(row.sourceId, [related]);
+      }
+    }
+  }
+
+  return bySeed;
 }
 
 export async function findRelatedPostsByEmbedding(options: {

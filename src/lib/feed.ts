@@ -16,7 +16,10 @@
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
-import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
+import {
+  type EmbeddedRelatedPost,
+  findRelatedPostsByEmbeddingForPosts,
+} from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
@@ -24,7 +27,6 @@ import {
   toEmbeddingConfig,
   type EmbeddingConfig,
 } from "@/lib/embeddings/settings";
-import { findRelatedPostsByEmbedding } from "@/lib/embeddings/store";
 
 export interface FeedConfig {
   /** Most recent favorites always used as seeds (current taste). */
@@ -95,6 +97,19 @@ export interface FeedConfig {
    * already opened without permanently burying it. 1 disables the penalty.
    */
   viewedCandidatePenaltyFloor: number;
+  /**
+   * Geometric discount for additional positive seeds reaching the same
+   * candidate: 1 preserves linear accumulation; lower values reward focused
+   * agreement without letting generic hubs compound across many weak seeds.
+   */
+  convergenceDiscount: number;
+  /**
+   * Maximum fractional score lift for a just-imported candidate. Kept small so
+   * freshness creates a first-look window without overriding relevance.
+   */
+  freshnessBoost: number;
+  /** Freshness boost halves every this many days since import. */
+  freshnessHalfLifeDays: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
@@ -117,6 +132,9 @@ export const FEED_CONFIG: FeedConfig = {
   viewWeightCap: 0.35,
   viewCountSaturation: 8,
   viewedCandidatePenaltyFloor: 0.3,
+  convergenceDiscount: 0.8,
+  freshnessBoost: 0.15,
+  freshnessHalfLifeDays: 7,
   maxFeedSize: 500,
 };
 
@@ -445,17 +463,23 @@ export function selectViewSeeds(
  * 20260707120000). Tag scores are therefore blended DIRECTLY — the old
  * per-seed max normalization (which inflated every seed's best tag match to
  * 1.0, making a barely-related best match look like a near-duplicate) is
- * gone. Each candidate's contribution is seedWeight * engineWeight * score;
- * candidates reached from several seeds accumulate.
+ * gone. For one seed/candidate pair, embedding + tag channels are
+ * complementary evidence and remain additive after per-pair achievable-weight
+ * normalization.
+ *
+ * Positive seeds do NOT then add linearly across every seed. For each
+ * candidate, positive per-seed contributions are sorted descending and summed
+ * with `convergenceDiscount^i`: 1 preserves the old linear sum exactly, while
+ * lower values damp generic hubs that are weakly similar to many seeds.
  *
  * Negative seeds (polarity -1, from dismissals) subtract their contribution
- * scaled by `negativeStrength`, so a candidate near a disliked post loses
- * score. Contributions sum regardless of sign; a candidate whose net score
- * lands at or below zero — dominated by dislikes — is dropped from the feed.
+ * scaled by `negativeStrength` and stay linear — repeated dislike evidence
+ * must not be convergence-discounted. A candidate whose final score lands at
+ * or below zero — dominated by dislikes — is dropped from the feed.
  *
- * Each contribution is renormalized by the engine weight its (seed,
- * candidate) PAIR could possibly have earned: the embedding channel is live
- * only when both the seed and the candidate have a stored embedding
+ * Each per-seed/channel contribution is renormalized by the engine weight its
+ * (seed, candidate) PAIR could possibly have earned: the embedding channel is
+ * live only when both the seed and the candidate have a stored embedding
  * (`embeddedPostIds`), so a tag-only contribution over a pair with no
  * possible embedding evidence — video or unembedded post on EITHER end —
  * divides by idfWeight alone instead of idfWeight + embeddingWeight.
@@ -468,6 +492,9 @@ export function selectViewSeeds(
  * `embeddedPostIds` is null/empty (embeddings unconfigured or store empty)
  * every pair is tag-only and the renormalization is a uniform rescale
  * (ranking unchanged).
+ *
+ * This returns the full ranked candidate pool. The final `maxFeedSize` slice
+ * belongs after freshness, viewed-candidate penalty, and group dedupe.
  */
 export function mergeSeedCandidates(
   contributions: SeedContribution[],
@@ -475,40 +502,59 @@ export function mergeSeedCandidates(
   config: FeedConfig = FEED_CONFIG,
   embeddedPostIds: ReadonlySet<number> | null = null
 ): FeedPost[] {
-  const byId = new Map<number, FeedPost>();
+  type CandidateAccumulator = FeedPost & {
+    positiveContributions: number[];
+    negativeScore: number;
+  };
 
-  const add = (
-    post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string },
-    contribution: number
-  ) => {
-    if (contribution === 0 || excludedPostIds.has(post.id)) return;
+  const byId = new Map<number, CandidateAccumulator>();
+
+  const ensureCandidate = (
+    post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string }
+  ): CandidateAccumulator => {
     const existing = byId.get(post.id);
-    if (existing) {
-      existing.score += contribution;
-    } else {
-      byId.set(post.id, {
-        id: post.id,
-        hash: post.hash,
-        width: post.width,
-        height: post.height,
-        blurhash: post.blurhash,
-        mimeType: post.mimeType,
-        score: contribution,
-      });
-    }
+    if (existing) return existing;
+
+    const next: CandidateAccumulator = {
+      id: post.id,
+      hash: post.hash,
+      width: post.width,
+      height: post.height,
+      blurhash: post.blurhash,
+      mimeType: post.mimeType,
+      score: 0,
+      positiveContributions: [],
+      negativeScore: 0,
+    };
+    byId.set(post.id, next);
+    return next;
   };
 
   for (const { seed, embedding, idf, polarity = 1 } of contributions) {
-    // A negative seed subtracts, damped by negativeStrength so dislikes shape
-    // the feed without steamrolling the positive taste that generated it.
-    const strength = polarity < 0 ? -config.negativeStrength : 1;
+    const perSeed = new Map<
+      number,
+      {
+        post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string };
+        score: number;
+      }
+    >();
+
+    const addPerSeed = (
+      post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string },
+      contribution: number
+    ) => {
+      if (contribution === 0 || excludedPostIds.has(post.id)) return;
+      const existing = perSeed.get(post.id);
+      if (existing) existing.score += contribution;
+      else perSeed.set(post.id, { post, score: contribution });
+    };
 
     // The embedding channel is live for a (seed, candidate) PAIR only when
     // BOTH ends have a stored embedding — findRelatedPostsByEmbedding returns
     // nothing for an embedding-less seed no matter the candidate, and an
     // embedding-less candidate can appear in no seed's k-NN results. Each
-    // contribution divides by ITS pair's achievable weight, so normalization
-    // is per contribution and cross-seed convergence still sums untouched.
+    // channel contribution divides by ITS pair's achievable weight before the
+    // seed's channels are combined.
     const seedEmbedded = embeddedPostIds?.has(seed.postId) ?? false;
     const achievableFor = (candidateId: number): number => {
       const pairEmbedded =
@@ -522,27 +568,70 @@ export function mergeSeedCandidates(
 
     for (const neighbor of embedding) {
       const similarity = Math.max(0, Math.min(1, neighbor.score));
-      add(
+      addPerSeed(
         neighbor,
-        (strength * seed.weight * config.embeddingWeight * similarity) /
+        (seed.weight * config.embeddingWeight * similarity) /
           achievableFor(neighbor.id)
       );
     }
 
     for (const rec of idf) {
       const similarity = Math.max(0, Math.min(1, rec.score));
-      add(
+      addPerSeed(
         rec,
-        (strength * seed.weight * config.idfWeight * similarity) /
+        (seed.weight * config.idfWeight * similarity) /
           achievableFor(rec.id)
       );
     }
+
+    const negativeMultiplier = -config.negativeStrength;
+    for (const { post, score } of perSeed.values()) {
+      const candidate = ensureCandidate(post);
+      if (polarity < 0) candidate.negativeScore += negativeMultiplier * score;
+      else candidate.positiveContributions.push(score);
+    }
   }
 
+  const discount = config.convergenceDiscount;
   return [...byId.values()]
+    .map(({ positiveContributions, negativeScore, ...post }) => {
+      const positiveScore = positiveContributions
+        .sort((a, b) => b - a)
+        .reduce((sum, contribution, index) => sum + contribution * discount ** index, 0);
+      return { ...post, score: positiveScore + negativeScore };
+    })
     .filter((post) => post.score > 0)
-    .sort((a, b) => b.score - a.score || a.id - b.id)
-    .slice(0, config.maxFeedSize);
+    .sort((a, b) => b.score - a.score || a.id - b.id);
+}
+
+/**
+ * Give newly-imported candidates a small, time-decayed first-look window.
+ *
+ * Candidates only enter this feed through similarity to established taste, so
+ * freshness is a multiplier on relevance rather than an independent ranking
+ * source: a just-imported post gets at most `freshnessBoost`, and the boost
+ * halves every `freshnessHalfLifeDays`. Missing import timestamps leave posts
+ * unchanged.
+ */
+export function applyFreshnessBoost(
+  posts: FeedPost[],
+  importedAtByPostId: ReadonlyMap<number, Date>,
+  now: Date,
+  config: FeedConfig = FEED_CONFIG
+): FeedPost[] {
+  if (config.freshnessBoost <= 0 || importedAtByPostId.size === 0) return posts;
+
+  return posts
+    .map((post) => {
+      const importedAt = importedAtByPostId.get(post.id);
+      if (!importedAt) return post;
+      const ageDays = Math.max(0, (now.getTime() - importedAt.getTime()) / DAY_MS);
+      const recency = Math.exp(
+        (-Math.LN2 * ageDays) / config.freshnessHalfLifeDays
+      );
+      return { ...post, score: post.score * (1 + config.freshnessBoost * recency) };
+    })
+    .sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
 /**
@@ -557,9 +646,9 @@ export function mergeSeedCandidates(
  * 1 as the view ages (same half-life as view seeding), letting old favorites
  * of the eye resurface later.
  *
- * Runs on the merged ranked list (post-cap): penalized posts sink within the
- * feed but posts below the maxFeedSize cutoff are not promoted — an accepted
- * tail effect that keeps the penalty a cheap O(feed) pass.
+ * Runs before group dedupe and the final `maxFeedSize` slice: penalized posts
+ * can now fall out of the returned feed, letting unviewed candidates from the
+ * unsliced tail rise in after re-sorting.
  */
 export function applyViewedPenalty(
   posts: FeedPost[],
@@ -626,45 +715,35 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
 /**
  * Image-embedding nearest neighbors for every seed, keyed by seed post id.
  *
- * These use the pgvector `vchordrq` ANN index and are cheap individually; the
- * flat Promise.all is bounded by Prisma's connection pool (single-user
- * deployment). Returns an empty map when embeddings are unconfigured. Each
- * seed degrades to an empty neighborhood on failure rather than failing the
- * whole build.
+ * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
+ * avoid per-seed round trips, small enough to keep Postgres parallelism across
+ * chunks. Returns an empty map when embeddings are unconfigured. Missing source
+ * embeddings are absent from the map, and chunk-level failures degrade to empty
+ * neighborhoods rather than failing the whole build.
  */
 async function fetchEmbeddingNeighborhoods(
   seeds: FeedSeed[],
   embeddingConfig: EmbeddingConfig | null,
   config: FeedConfig
 ): Promise<Map<number, EmbeddedRelatedPost[]>> {
-  const bySeed = new Map<number, EmbeddedRelatedPost[]>();
-  if (!embeddingConfig || seeds.length === 0) return bySeed;
+  if (!embeddingConfig || seeds.length === 0) return new Map();
 
-  const results = await Promise.all(
-    seeds.map((seed) =>
-      findRelatedPostsByEmbedding({
-        hash: seed.hash,
-        config: embeddingConfig,
-        limit: config.neighborsPerSeed,
-        minScore: config.minEmbeddingScore,
-      })
-        .catch((error): EmbeddedRelatedPost[] => {
-          console.error(`Feed: embedding neighbors failed for seed ${seed.hash}:`, error);
-          return [];
-        })
-        .then((neighbors) => [seed.postId, neighbors] as const)
-    )
-  );
-
-  for (const [postId, neighbors] of results) bySeed.set(postId, neighbors);
-  return bySeed;
+  return findRelatedPostsByEmbeddingForPosts({
+    postIds: seeds.map((seed) => seed.postId),
+    config: embeddingConfig,
+    limit: config.neighborsPerSeed,
+    minScore: config.minEmbeddingScore,
+  }).catch((error): Map<number, EmbeddedRelatedPost[]> => {
+    console.error("Feed: batched embedding neighbors failed:", error);
+    return new Map();
+  });
 }
 
 /**
  * Assemble per-seed candidate neighborhoods from the two engines. Tag-IDF
  * neighborhoods are computed for ALL seeds in one batched query (see
- * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched
- * per seed. Missing entries degrade to empty.
+ * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched in
+ * chunked batches. Missing entries degrade to empty.
  */
 function assembleContributions(
   seeds: FeedSeed[],
@@ -689,10 +768,11 @@ function assembleContributions(
  * set is ONE seed, not one per page). Excludes favorited posts, dismissed
  * posts, and any post sharing a group with a seed of either sign (the
  * per-seed engines already exclude the seed's own group; this applies the
- * rule across seeds too). After merging, already-viewed candidates are
- * downweighted (decaying with view age) and group siblings among candidates
- * collapse to one representative. Both engines degrade to empty per-seed
- * results on failure rather than failing the build.
+ * rule across seeds too). After merging, candidates receive a small freshness
+ * boost, already-viewed candidates are downweighted (decaying with view age),
+ * group siblings among candidates collapse to one representative, and only
+ * then is the final feed sliced to `maxFeedSize`. Both engines degrade to
+ * empty per-seed results on failure rather than failing the build.
  */
 export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
   const now = new Date();
@@ -812,8 +892,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   // Favorites and views are positive (boost neighbors); dismissals are negative
   // (suppress neighbors). All three feed the same batched tag compute and
-  // per-seed embedding fetch, so extra signals add seeds without multiplying
-  // query count. Seed sets are disjoint by construction (views exclude
+  // chunked embedding fetch, so extra signals add seeds without multiplying
+  // query count per seed. Seed sets are disjoint by construction (views exclude
   // favorited/dismissed; favorites and dismissals are mutually exclusive).
   const positiveSeeds = [...favoriteSeeds, ...viewSeeds];
   const allSeeds = [...positiveSeeds, ...negativeSeeds];
@@ -822,8 +902,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const embeddingConfig = await resolveEmbeddingConfig();
 
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
-  // neighborhoods are fetched per seed (cheap via the ANN index). Prisma queues
-  // work beyond its pool size, so the flat fan-out is safe (single-user).
+  // neighborhoods are fetched in bounded chunks so the ANN work can use several
+  // backends without one round trip per seed.
   const [seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
@@ -886,11 +966,17 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);
   if (merged.length === 0) return merged;
 
-  // Two batched lookups over the merged candidates, only when there is a
-  // feed: group memberships (per-group dedup below) and view state (the
-  // already-seen penalty).
+  // Up to three batched lookups over the merged candidates, only when there is
+  // a feed: import timestamps (freshness boost), group memberships (per-group
+  // dedup below), and view state (the already-seen penalty).
   const mergedIds = merged.map((p) => p.id);
-  const [groupRows, candidateViews] = await Promise.all([
+  const [importedRows, groupRows, candidateViews] = await Promise.all([
+    config.freshnessBoost > 0
+      ? prisma.post.findMany({
+          where: { id: { in: mergedIds } },
+          select: { id: true, importedAt: true },
+        })
+      : Promise.resolve([]),
     prisma.postGroup.findMany({
       where: { postId: { in: mergedIds } },
       select: { postId: true, groupId: true },
@@ -908,18 +994,26 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     if (existing) existing.push(groupId);
     else groupIdsByPostId.set(postId, [groupId]);
   }
+  const importedAtByPostId = new Map<number, Date>(
+    importedRows.map((p) => [p.id, p.importedAt])
+  );
   const lastViewedByPostId = new Map<number, Date>(
     candidateViews.map((v) => [v.postId, v.lastViewedAt])
   );
 
+  // Freshness runs before the viewed penalty: the first-look window applies to
+  // new candidates, but a candidate the user already opened can still sink.
+  const freshened = applyFreshnessBoost(merged, importedAtByPostId, now, config);
+
   // Penalize already-viewed candidates BEFORE choosing group representatives,
   // so an unviewed sibling can represent its set over a just-viewed one.
-  const penalized = applyViewedPenalty(merged, lastViewedByPostId, now, config);
+  const penalized = applyViewedPenalty(freshened, lastViewedByPostId, now, config);
 
   // Collapse multi-post sets (a candidate whose group sibling is also a
   // candidate) to one representative each, so a large set near the user's
-  // taste cannot flood the feed.
-  return dedupeRankedByGroup(penalized, groupIdsByPostId);
+  // taste cannot flood the feed. Slice only after collapse so group siblings
+  // cannot leave fillable holes.
+  return dedupeRankedByGroup(penalized, groupIdsByPostId).slice(0, config.maxFeedSize);
 }
 
 /**
