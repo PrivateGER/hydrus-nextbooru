@@ -4,8 +4,10 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getCanonicalSourceUrl } from "@/lib/hydrus/url-parser";
 import { isValidCreatorName } from "@/lib/groups";
+import { buildPostUrl } from "@/lib/post-navigation";
 import { SourceBadge } from "@/components/source-badge";
 import { PostCard } from "@/components/post-card";
+import { ReadGroupButton } from "@/components/reader/read-group-button";
 import { TranslateTitleButton } from "@/components/translate-title-button";
 import { GridSkeleton, Skeleton } from "@/components/skeletons";
 import { SourceType, TagCategory } from "@/generated/prisma/client";
@@ -55,7 +57,9 @@ async function getGroup(id: number) {
             },
           },
         },
-        orderBy: { position: "asc" },
+        // postId breaks position ties (position defaults to 0) so reading
+        // order is stable and matches the post page and reader.
+        orderBy: [{ position: "asc" }, { postId: "asc" }],
       },
     },
   });
@@ -177,25 +181,30 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
             </div>
           </div>
 
-          {/* Right section: View source link */}
-          {canonicalUrl && (
-            <a
-              href={canonicalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
-            >
-              View source
-              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-            </a>
-          )}
+          {/* Right section: Read button + View source link */}
+          <div className="flex flex-wrap items-center gap-2">
+            <ReadGroupButton groupId={group.id} postCount={group.posts.length} />
+            {canonicalUrl && (
+              <a
+                href={canonicalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
+              >
+                View source
+                <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              </a>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Posts grid - uniform layout */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
         {group.posts.map((pg, index) => (
-          <div key={pg.post.hash} className="group/post relative">
+          // id anchors let the reader's exit link (#p<n>) scroll back to the
+          // page the user was on. scroll-mt clears the sticky header.
+          <div key={pg.post.hash} id={`p${index + 1}`} className="group/post relative scroll-mt-20">
             <PostCard
               key={pg.post.hash}
               hash={pg.post.hash}
@@ -204,10 +213,11 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
               blurhash={pg.post.blurhash}
               mimeType={pg.post.mimeType}
               layout="grid"
+              href={buildPostUrl(pg.post.hash, group.id)}
             />
-            {/* Position indicator - enhanced styling */}
+            {/* Ordinal indicator (1-based reading order) */}
             <span className="absolute top-2 left-2 rounded-md bg-black/80 px-2 py-1 text-xs font-bold text-white pointer-events-none z-10 backdrop-blur-sm shadow-sm">
-              {pg.position ?? index + 1}
+              {index + 1}
             </span>
           </div>
         ))}

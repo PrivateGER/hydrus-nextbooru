@@ -20,12 +20,14 @@ interface PostCardProps {
   favorited?: boolean;
   /** Feed-only "not interested" control; fires only after the dismissal PUT succeeds. */
   onDismiss?: (hash: string) => void;
+  /** Optional href override, e.g. to carry ?in= group navigation context. */
+  href?: string;
 }
 
 // Timeout before showing error (starts when image enters viewport)
 const LOAD_TIMEOUT_MS = 15000;
 
-export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry", favorited, onDismiss }: PostCardProps) {
+export function PostCard({ hash, width, height, blurhash, mimeType, layout = "masonry", favorited, onDismiss, href }: PostCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
@@ -195,7 +197,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
 
   return (
     <Link
-      href={`/post/${hash}`}
+      href={href ?? `/post/${hash}`}
       className={`group relative block overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-800 transition-transform hover:scale-[1.02] hover:ring-2 hover:ring-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900 ${
         isMasonry ? "mb-3 break-inside-avoid" : ""
       }`}

@@ -18,9 +18,13 @@ import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-po
 import { RecordView } from "@/components/post/record-view";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 import { dedupeFilmstripGroups } from "@/lib/filmstrip-groups";
+import { selectNavigationGroup, buildPostUrl, parseGroupIdParam } from "@/lib/post-navigation";
+import { readerHref } from "@/lib/reader";
+import { BookOpenIcon } from "@heroicons/react/24/outline";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
+  searchParams: Promise<{ in?: string | string[] }>;
 }
 
 export async function generateMetadata({ params }: PostPageProps): Promise<Metadata> {
@@ -116,11 +120,16 @@ async function getPost(hash: string) {
                     },
                   },
                 },
-                orderBy: { position: "asc" },
+                // postId breaks position ties (position defaults to 0), so
+                // reading order is stable across renders and matches the
+                // group page and reader.
+                orderBy: [{ position: "asc" }, { postId: "asc" }],
               },
             },
           },
         },
+        // Stable group order so filmstrips don't reshuffle between posts.
+        orderBy: { groupId: "asc" },
       },
       imageTextRegions: {
         orderBy: { readingOrder: "asc" },
@@ -149,8 +158,8 @@ async function getPost(hash: string) {
  * @param params - An object (awaitable) that resolves to route parameters containing `hash`, the 64-character post identifier.
  * @returns The React element representing the post detail page.
  */
-export default async function PostPage({ params }: PostPageProps) {
-  const { hash } = await params;
+export default async function PostPage({ params, searchParams }: PostPageProps) {
+  const [{ hash }, { in: inParam }] = await Promise.all([params, searchParams]);
 
   // Validate hash format (64 hex characters)
   if (!/^[a-fA-F0-9]{64}$/i.test(hash)) {
@@ -174,24 +183,26 @@ export default async function PostPage({ params }: PostPageProps) {
     }))
   );
 
-  // Calculate prev/next posts from the first group with multiple posts
-  let prevPostHash: string | undefined;
-  let nextPostHash: string | undefined;
+  // Prev/next follow ONE deterministic group: the one named by ?in= when the
+  // post belongs to it, otherwise the best-ranked multi-post group. The
+  // context is carried on every navigation URL so arrows keep following the
+  // same group across posts.
+  const navGroup = selectNavigationGroup(groups, parseGroupIdParam(inParam));
+
+  let prevUrl: string | undefined;
+  let nextUrl: string | undefined;
   let currentPosition: number | undefined;
   let totalCount: number | undefined;
 
-  for (const group of groups) {
-    if (group.posts.length > 1) {
-      const currentIndex = group.posts.findIndex((pg) => pg.post.hash === post.hash);
-      currentPosition = currentIndex + 1; // 1-based position
-      totalCount = group.posts.length;
-      if (currentIndex > 0) {
-        prevPostHash = group.posts[currentIndex - 1].post.hash;
-      }
-      if (currentIndex < group.posts.length - 1) {
-        nextPostHash = group.posts[currentIndex + 1].post.hash;
-      }
-      break; // Use only the first group with multiple posts
+  if (navGroup) {
+    const currentIndex = navGroup.posts.findIndex((pg) => pg.post.hash === post.hash);
+    currentPosition = currentIndex + 1; // 1-based position
+    totalCount = navGroup.posts.length;
+    if (currentIndex > 0) {
+      prevUrl = buildPostUrl(navGroup.posts[currentIndex - 1].post.hash, navGroup.id);
+    }
+    if (currentIndex < navGroup.posts.length - 1) {
+      nextUrl = buildPostUrl(navGroup.posts[currentIndex + 1].post.hash, navGroup.id);
     }
   }
 
@@ -228,8 +239,8 @@ export default async function PostPage({ params }: PostPageProps) {
     <div className="flex flex-col lg:flex-row gap-6">
       {/* Keyboard navigation handler */}
       <KeyboardNavigation
-        prevPostHash={prevPostHash}
-        nextPostHash={nextPostHash}
+        prevUrl={prevUrl}
+        nextUrl={nextUrl}
       />
 
       {/* Implicit engagement signal for the "For You" feed */}
@@ -249,8 +260,8 @@ export default async function PostPage({ params }: PostPageProps) {
           width={post.width}
           height={post.height}
           blurhash={post.blurhash}
-          prevPostHash={prevPostHash}
-          nextPostHash={nextPostHash}
+          prevUrl={prevUrl}
+          nextUrl={nextUrl}
           currentPosition={currentPosition}
           totalCount={totalCount}
           textRegions={post.imageTextRegions.map((region) => ({
@@ -334,6 +345,7 @@ export default async function PostPage({ params }: PostPageProps) {
           if (group.posts.length <= 1) return null;
 
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
+          const ordinalInGroup = group.posts.findIndex((pg) => pg.post.hash === post.hash) + 1;
 
           return (
             <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -374,8 +386,21 @@ export default async function PostPage({ params }: PostPageProps) {
                 >
                   {group.posts.length} images
                 </Link>
+                <Link
+                  href={readerHref(group.id, Math.max(ordinalInGroup, 1))}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-500/10 px-3 py-1.5 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-500/20 dark:text-blue-400"
+                  title="Open this group in the reader from the current image"
+                >
+                  <BookOpenIcon className="h-4 w-4" />
+                  Read
+                </Link>
               </div>
-              <GroupFilmstrip posts={group.posts} currentHash={post.hash} />
+              <GroupFilmstrip
+                posts={group.posts}
+                currentHash={post.hash}
+                groupId={group.id}
+                isActiveNav={navGroup?.id === group.id}
+              />
             </div>
           );
         })}
@@ -391,13 +416,13 @@ export default async function PostPage({ params }: PostPageProps) {
             &larr; Back to gallery
           </Link>
           <div className="flex items-center gap-4 text-zinc-400 dark:text-zinc-500">
-            {prevPostHash && (
-              <Link href={`/post/${prevPostHash}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
+            {prevUrl && (
+              <Link href={prevUrl} className="hover:text-zinc-700 dark:hover:text-zinc-300">
                 &larr; Prev
               </Link>
             )}
-            {nextPostHash && (
-              <Link href={`/post/${nextPostHash}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
+            {nextUrl && (
+              <Link href={nextUrl} className="hover:text-zinc-700 dark:hover:text-zinc-300">
                 Next &rarr;
               </Link>
             )}
