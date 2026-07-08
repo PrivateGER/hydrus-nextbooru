@@ -170,6 +170,19 @@ export interface SeedContribution {
 const DAY_MS = 86_400_000;
 
 /**
+ * Over-fetch factor for the bounded seed-signal reads (recent views and
+ * dismissals). Group collapse runs AFTER the fetch, so fetching exactly
+ * seed-count rows would let one freshly-viewed/dismissed multi-page set
+ * collapse the whole window into a single seed while older unrelated signals
+ * were never fetched. Fetching a few multiples keeps the window meaningful
+ * even when sets dominate the newest rows; the seed selectors still cap the
+ * final seed counts (selectViewSeeds / selectNegativeSeeds slice to their
+ * configured counts), so this only widens the candidate window — reads stay
+ * bounded and index-served. Favorites are unaffected (loaded in full).
+ */
+const SEED_COLLAPSE_OVERFETCH = 4;
+
+/**
  * Time-bucket width for the seed sampler's PRNG seed. Builds within the same
  * bucket reseed mulberry32 identically, so the 60 sampled older seeds — and
  * thus feed order — stay stable across a session's page requests; the seed
@@ -678,12 +691,14 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     // dismissals.
     prisma.feedDismissal.findMany({ select: { postId: true } }),
     // Only the most-recent dismissals become negative seeds, so only these need
-    // the ordered read + Post join for their hash (embedding lookup). Bounded by
-    // negativeSeedCount and served by the dismissedAt index.
+    // the ordered read + Post join for their hash (embedding lookup). Served by
+    // the dismissedAt index; over-fetched so group collapse cannot starve the
+    // signal (see SEED_COLLAPSE_OVERFETCH) — selectNegativeSeeds still caps
+    // seeds at negativeSeedCount.
     config.negativeSeedCount > 0
       ? prisma.feedDismissal.findMany({
           orderBy: { dismissedAt: "desc" },
-          take: config.negativeSeedCount,
+          take: config.negativeSeedCount * SEED_COLLAPSE_OVERFETCH,
           select: {
             postId: true,
             dismissedAt: true,
@@ -692,11 +707,12 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         })
       : Promise.resolve([]),
     // Recently-viewed posts that carry no explicit signal yet (not favorited,
-    // not dismissed) — the implicit-engagement seeds.
+    // not dismissed) — the implicit-engagement seeds. Over-fetched like the
+    // dismissals above; selectViewSeeds caps seeds at viewSeedCount.
     prisma.postView.findMany({
       where: { post: { favorite: { is: null }, feedDismissal: { is: null } } },
       orderBy: { lastViewedAt: "desc" },
-      take: config.viewSeedCount,
+      take: config.viewSeedCount * SEED_COLLAPSE_OVERFETCH,
       select: {
         postId: true,
         viewCount: true,
@@ -882,8 +898,14 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
  * Prisma client. Favorite/dismissal writes call {@link invalidateFeedCache} to
  * drop it immediately (explicit taste the user expects reflected at once);
  * views deliberately do not (a weak signal that can wait for the bucket to
- * roll). A monotonic generation counter makes an invalidation that races an
- * in-flight build discard that build's result rather than cache stale data.
+ * roll). That means the already-seen penalty ({@link applyViewedPenalty})
+ * also lags a fresh view by up to one bucket: a post opened from the feed
+ * keeps its pre-view rank until the bucket rolls. Accepted deliberately —
+ * invalidating (or re-penalizing at read time) on every view would reshuffle
+ * the ranking mid-scroll, breaking the stable pagination this cache exists to
+ * provide, and would rebuild the feed on every post open. A monotonic
+ * generation counter makes an invalidation that races an in-flight build
+ * discard that build's result rather than cache stale data.
  *
  * Invalidation is per-process: the cache and its generation counter live on
  * this process's globalThis, so a single Node instance is load-bearing for the
