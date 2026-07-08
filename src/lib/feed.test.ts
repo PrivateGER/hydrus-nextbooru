@@ -10,6 +10,7 @@ import {
   dedupeRankedByGroup,
   collapseSignalsByGroup,
   applyViewedPenalty,
+  applyFreshnessBoost,
   type FavoriteSeedInput,
   type DismissalSeedInput,
   type ViewSeedInput,
@@ -283,19 +284,49 @@ describe("mergeSeedCandidates", () => {
   /** Posts (seeds and candidates) that have a stored embedding. */
   const embedded = (...postIds: number[]) => new Set(postIds);
 
-  it("accumulates scores for candidates reached from multiple seeds", () => {
-    const contributions: SeedContribution[] = [
-      { seed: seed(1, 1), embedding: [candidate(100, 0.8)], idf: [] },
-      { seed: seed(2, 1), embedding: [candidate(100, 0.6)], idf: [] },
-      { seed: seed(3, 1), embedding: [candidate(200, 0.9)], idf: [] },
-    ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 2, 3, 100, 200));
+  const convergenceFixture = (): SeedContribution[] => {
+    const contribution = (seedId: number, candidateId: number, score: number): SeedContribution => ({
+      seed: seed(seedId, 1),
+      embedding: [candidate(candidateId, score)],
+      idf: [candidate(candidateId, score)],
+    });
 
-    const convergent = merged.find((p) => p.id === 100)!;
-    const single = merged.find((p) => p.id === 200)!;
-    expect(convergent.score).toBeCloseTo(0.7 * (0.8 + 0.6), 10);
-    expect(single.score).toBeCloseTo(0.7 * 0.9, 10);
-    expect(merged[0].id).toBe(100); // convergent evidence ranks first
+    return [
+      contribution(1, 100, 0.3),
+      contribution(2, 100, 0.3),
+      contribution(3, 100, 0.3),
+      contribution(4, 100, 0.3),
+      contribution(5, 200, 0.55),
+      contribution(6, 200, 0.55),
+    ];
+  };
+
+  it("discounts positive convergence so a focused candidate outranks a weak hub", () => {
+    const merged = mergeSeedCandidates(
+      convergenceFixture(),
+      new Set(),
+      { ...config, convergenceDiscount: 0.8 },
+      embedded(1, 2, 3, 4, 5, 6, 100, 200)
+    );
+
+    const weakHub = merged.find((p) => p.id === 100)!;
+    const focused = merged.find((p) => p.id === 200)!;
+    expect(merged.map((p) => p.id).slice(0, 2)).toEqual([200, 100]);
+    expect(focused.score).toBeCloseTo(0.55 * (1 + 0.8), 10);
+    expect(weakHub.score).toBeCloseTo(0.3 * (1 + 0.8 + 0.8 ** 2 + 0.8 ** 3), 10);
+  });
+
+  it("keeps convergenceDiscount 1 equivalent to the linear positive sum", () => {
+    const merged = mergeSeedCandidates(
+      convergenceFixture(),
+      new Set(),
+      { ...config, convergenceDiscount: 1 },
+      embedded(1, 2, 3, 4, 5, 6, 100, 200)
+    );
+
+    expect(merged.map((p) => p.id).slice(0, 2)).toEqual([100, 200]);
+    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 4, 10);
+    expect(merged.find((p) => p.id === 200)!.score).toBeCloseTo(0.55 * 2, 10);
   });
 
   it("blends IDF cosine scores directly at the idf weight (no per-seed max normalization)", () => {
@@ -397,16 +428,17 @@ describe("mergeSeedCandidates", () => {
     expect(merged.map((p) => p.id)).toEqual([200]);
   });
 
-  it("caps the feed at maxFeedSize with deterministic ordering", () => {
+  it("does not cap merged candidates before downstream dedupe and final slicing", () => {
     const embedding = Array.from({ length: 20 }, (_, i) => candidate(i + 1, 0.5));
     const merged = mergeSeedCandidates(
       [{ seed: seed(1, 1), embedding, idf: [] }],
       new Set(),
       config
     );
-    expect(merged).toHaveLength(10);
-    // Equal scores tie-break by ascending id
-    expect(merged.map((p) => p.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(merged).toHaveLength(20);
+    // Equal scores tie-break by ascending id, but the whole ranked candidate
+    // pool remains available for later group collapse and final slicing.
+    expect(merged.map((p) => p.id)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
   });
 
   it("subtracts a negative seed's contribution scaled by negativeStrength", () => {
@@ -423,6 +455,22 @@ describe("mergeSeedCandidates", () => {
     );
     // +0.7*1  -  0.8*0.7*0.5  = 0.7 - 0.28 = 0.42
     expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.42, 10);
+  });
+
+  it("keeps multiple negative seed contributions linear under convergence discount", () => {
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [candidate(100, 1)], idf: [], polarity: 1 },
+      { seed: seed(2, 1), embedding: [candidate(100, 0.3)], idf: [], polarity: -1 },
+      { seed: seed(3, 1), embedding: [candidate(100, 0.3)], idf: [], polarity: -1 },
+    ];
+    const merged = mergeSeedCandidates(
+      contributions,
+      new Set(),
+      { ...config, convergenceDiscount: 0.8, embeddingWeight: 1, idfWeight: 0, negativeStrength: 1 },
+      embedded(1, 2, 3, 100)
+    );
+
+    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(1 - 0.3 - 0.3, 10);
   });
 
   it("drops a candidate whose dislike outweighs its like", () => {
@@ -512,6 +560,53 @@ describe("dedupeRankedByGroup", () => {
   });
 });
 
+describe("feed ranking pipeline", () => {
+  const config: FeedConfig = {
+    ...FEED_CONFIG,
+    embeddingWeight: 1,
+    idfWeight: 0,
+    maxFeedSize: 3,
+  };
+  const seed = (postId: number, weight: number) => ({
+    postId,
+    hash: postId.toString(16).padStart(64, "0"),
+    weight,
+  });
+  const embedded = (...postIds: number[]) => new Set(postIds);
+
+  it("dedupes before the final slice so collapsed groups do not leave holes", () => {
+    const merged = mergeSeedCandidates(
+      [
+        {
+          seed: seed(99, 1),
+          embedding: [
+            candidate(1, 0.99),
+            candidate(2, 0.98),
+            candidate(3, 0.97),
+            candidate(4, 0.96),
+            candidate(5, 0.95),
+            candidate(6, 0.94),
+          ],
+          idf: [],
+        },
+      ],
+      new Set(),
+      config,
+      embedded(99, 1, 2, 3, 4, 5, 6)
+    );
+    const groupIdsByPostId = new Map<number, number[]>([
+      [1, [10]],
+      [2, [10]],
+      [3, [10]],
+    ]);
+
+    const final = dedupeRankedByGroup(merged, groupIdsByPostId).slice(0, config.maxFeedSize);
+
+    expect(final).toHaveLength(config.maxFeedSize);
+    expect(final.map((p) => p.id)).toEqual([1, 4, 5]);
+  });
+});
+
 describe("collapseSignalsByGroup", () => {
   const signal = (postId: number) => ({ postId });
 
@@ -573,6 +668,45 @@ describe("collapseSignalsByGroup", () => {
     ];
     const result = collapseSignalsByGroup(signals, new Map());
     expect(result).toEqual(signals);
+  });
+});
+
+describe("applyFreshnessBoost", () => {
+  const NOW_ = new Date("2026-07-03T00:00:00Z");
+  const post = (id: number, score: number): FeedPost => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width: 100,
+    height: 100,
+    blurhash: null,
+    mimeType: "image/png",
+    score,
+  });
+  const createdAt = (ageDays: number) => new Date(NOW_.getTime() - ageDays * DAY_MS);
+
+  it("boosts fresh posts by recency, leaves missing timestamps unchanged, and sorts by score then id", () => {
+    const config: FeedConfig = {
+      ...FEED_CONFIG,
+      freshnessBoost: 0.15,
+      freshnessHalfLifeDays: 7,
+    };
+    const posts = [post(4, 1.1), post(2, 1), post(3, 1.1), post(1, 1)];
+    const result = applyFreshnessBoost(
+      posts,
+      new Map([
+        [1, createdAt(0)],
+        [2, createdAt(7)],
+      ]),
+      NOW_,
+      config
+    );
+
+    expect(result.map((p) => p.id)).toEqual([1, 3, 4, 2]);
+    expect(result.find((p) => p.id === 1)!.score).toBeCloseTo(1.15, 10);
+    expect(result.find((p) => p.id === 2)!.score).toBeCloseTo(1.075, 10);
+    expect(result.find((p) => p.id === 3)!.score).toBe(1.1);
+    expect(result.find((p) => p.id === 4)!.score).toBe(1.1);
+    expect(posts.map((p) => p.score)).toEqual([1.1, 1, 1.1, 1]);
   });
 });
 
