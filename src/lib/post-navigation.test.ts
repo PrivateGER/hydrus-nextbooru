@@ -40,6 +40,17 @@ describe("selectNavigationGroup", () => {
     expect(selectNavigationGroup(groups, 99)?.id).toBe(1);
   });
 
+  it("resolves a requested id absorbed during filmstrip dedupe to its survivor", () => {
+    // Group 9 was deduped into group 1 (identical ordered members); group 2
+    // is bigger and would win the heuristic, but the request must stay with
+    // group 9's behaviorally-identical survivor.
+    const groups = [
+      { ...group(1, SourceType.PIXIV, 5), duplicateGroupIds: [9] },
+      group(2, SourceType.TWITTER, 10),
+    ];
+    expect(selectNavigationGroup(groups, 9)?.id).toBe(1);
+  });
+
   it("ignores a requested group with a single post", () => {
     const groups = [group(1, SourceType.PIXIV, 5), group(2, SourceType.TITLE, 1)];
     expect(selectNavigationGroup(groups, 2)?.id).toBe(1);

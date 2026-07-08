@@ -12,6 +12,8 @@ interface NavigationGroupShape {
   id: number;
   sourceType: SourceType;
   posts: Array<{ post: { hash: string } }>;
+  /** Ids of order-identical groups this one absorbed during filmstrip dedupe. */
+  duplicateGroupIds?: number[];
 }
 
 /**
@@ -21,7 +23,8 @@ interface NavigationGroupShape {
  * 1. The group named by the URL's `?in=` param, when the post actually
  *    belongs to it and it has more than one member. This keeps navigation
  *    pinned to the group the user entered through, so arrows never silently
- *    switch groups mid-browse.
+ *    switch groups mid-browse. A group absorbed during filmstrip dedupe
+ *    resolves to its survivor, which orders the same posts identically.
  * 2. Otherwise the "best" multi-post group by a deterministic ranking:
  *    non-TITLE source groups first (they carry the canonical source
  *    ordering), then larger groups, then lowest id as a stable tiebreak.
@@ -36,7 +39,9 @@ export function selectNavigationGroup<G extends NavigationGroupShape>(
   if (candidates.length === 0) return undefined;
 
   if (requestedGroupId !== undefined) {
-    const requested = candidates.find((g) => g.id === requestedGroupId);
+    const requested = candidates.find(
+      (g) => g.id === requestedGroupId || g.duplicateGroupIds?.includes(requestedGroupId)
+    );
     if (requested) return requested;
   }
 
