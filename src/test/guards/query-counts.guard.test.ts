@@ -77,9 +77,10 @@ const QUERY_BUDGETS = {
   // batched tag-IDF compute for ALL seeds (getTagNeighborhoodsForSeeds: cache
   // read + one set-based compute + one post-detail fetch; the cache-write runs
   // in an interactive transaction the pool-level capture does not observe).
-  // A non-empty merged list then costs TWO extra batched `postId IN (...)`
+  // A non-empty merged list then costs THREE extra batched `postId IN (...)`
   // lookups (postGroup for per-group feed dedup + postView for the already-seen
-  // penalty — single indexed batches, not N+1s). The budget is a loose ceiling:
+  // penalty + post importedAt for the freshness boost, which is on by default
+  // — single indexed batches, not N+1s). The budget is a loose ceiling:
   // batching left the real count on this path well under it.
   feed: 21,
   // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
