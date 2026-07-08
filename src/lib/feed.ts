@@ -844,10 +844,11 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   ]);
 
   // Exact embedding availability for the merge's per-pair achievable-weight
-  // normalization: which seeds and candidates actually have usable embedding
-  // evidence under the active config. Seed availability is gated by
-  // embeddingBySeed.has(seedId), so a failed kNN chunk degrades like an
-  // unavailable embedding rather than diluting tag-only scores.
+  // normalization: which of the seeds AND candidates actually have a stored
+  // embedding under the active config (mirrors findRelatedPostsByEmbedding's
+  // source filter). One batched indexed read over ~seeds + all distinct
+  // candidates; skipped entirely when embeddings are unconfigured (null makes
+  // the normalization a uniform, ranking-neutral rescale).
   let embeddedPostIds: ReadonlySet<number> | null = null;
   if (embeddingConfig) {
     const probeIds = new Set<number>(allSeedIds);
@@ -871,11 +872,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
             select: { postId: true },
           })
         : [];
-    const availableEmbeddingPostIds = new Set(embeddedRows.map((row) => row.postId));
-    for (const seedId of allSeedIds) {
-      if (!embeddingBySeed.has(seedId)) availableEmbeddingPostIds.delete(seedId);
-    }
-    embeddedPostIds = availableEmbeddingPostIds;
+    embeddedPostIds = new Set(embeddedRows.map((row) => row.postId));
   }
 
   const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);

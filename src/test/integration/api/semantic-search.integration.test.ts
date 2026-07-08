@@ -283,7 +283,7 @@ describe("semantic image embedding search", () => {
     const seedA = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
     const seedB = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
     const seedWithoutEmbedding = await createPost(prisma, { mimeType: "image/png", extension: ".png" });
-    const missingEmbeddingSeedIds = await createPostsBulk(prisma, 14, {
+    const missingEmbeddingSeedIds = await createPostsBulk(prisma, 15, {
       mimeType: "image/png",
       extension: ".png",
     });
@@ -323,14 +323,15 @@ describe("semantic image embedding search", () => {
       });
     }
 
-    const seedIds = [seedA.id, seedB.id, seedWithoutEmbedding.id, ...missingEmbeddingSeedIds];
+    const seedIds = [seedWithoutEmbedding.id, ...missingEmbeddingSeedIds, seedA.id, seedB.id];
     const related = await findRelatedPostsByEmbeddingForPosts({
       postIds: seedIds,
       config,
       limit: 2,
     });
 
-    expect(seedIds).toHaveLength(17);
+    expect(seedIds).toHaveLength(18);
+    expect(seedIds.slice(16)).toEqual([seedA.id, seedB.id]);
     expect(related.get(seedA.id)?.map((post) => post.id)).toEqual([aBest.id, aSecond.id]);
     expect(related.get(seedA.id)?.map((post) => post.id)).not.toContain(aGroupSibling.id);
     expect(related.get(seedB.id)?.map((post) => post.id)).toEqual([bBest.id, bSecond.id]);
@@ -349,6 +350,9 @@ describe("semantic image embedding search", () => {
     expect(filtered.get(seedB.id)?.map((post) => post.id)).toEqual([bBest.id]);
     expect(filtered.has(seedWithoutEmbedding.id)).toBe(false);
 
+    // This hand-written EXPLAIN mirrors the production LATERAL shape closely
+    // enough to prove the expression/partial vchordrq index is usable with the
+    // same filters. It is not a production-plan parity assertion.
     const planRows = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SET LOCAL enable_seqscan = off`;
       await tx.$executeRaw`SET LOCAL enable_sort = off`;

@@ -67,26 +67,20 @@ const QUERY_BUDGETS = {
   recommendationsCold: 5,
   // This budget measures the fixture below: FEED_GUARD_SEEDS favorites (<
   // recentSeedCount, so every favorite is a seed with no sampling), NO
-  // dismissals/views seeded, and NO embedding config. On that path buildFeed's
-  // query count is constant in seed count: a fixed base (favorites + dismissed
-  // ids + recent dismissals + recently-viewed + signal group memberships for
-  // seed-level group collapse + seed group-siblings +
-  // embedding-config resolution) plus a SINGLE batched tag-IDF compute for ALL
-  // seeds (getTagNeighborhoodsForSeeds:
-  // cache read + one set-based compute + one post-detail fetch; the cache-write
-  // runs in an interactive transaction the pool-level capture does not observe).
-  // The tag side stays O(1) as signals scale — dismissals (negative seeds) and
-  // views (positive seeds) flow through the same batched compute — but note the
-  // EMBEDDING path is NOT exercised here: when embeddings are configured,
-  // fetchEmbeddingNeighborhoods issues one k-NN query per 16-seed chunk plus
-  // one batched embedding-availability read over seeds+candidates (for the
-  // merge's per-pair renormalization), which this favorites-only,
-  // embedding-less fixture never triggers. A non-empty
-  // merged list then costs TWO extra batched `postId IN (...)` lookups
-  // (postGroup for per-group feed dedup + postView for the already-seen
-  // penalty — single indexed batches, not N+1s); both are skipped when the
-  // feed is empty. The budget is a loose ceiling: batching left the real
-  // count on this path well under it.
+  // dismissals/views seeded, and no explicit embedding settings. The feed still
+  // resolves a default embedding config, so the embedding path is exercised as
+  // one 3-seed kNN chunk plus the batched embedding-availability read; the
+  // PERF embeddings seeded in beforeAll do not match that default config, so
+  // this base fixture has no embedding neighbors. The remaining query count is
+  // constant in seed count: fixed signal reads + signal group memberships +
+  // seed group-siblings + default embedding-config resolution + a SINGLE
+  // batched tag-IDF compute for ALL seeds (getTagNeighborhoodsForSeeds: cache
+  // read + one set-based compute + one post-detail fetch; the cache-write runs
+  // in an interactive transaction the pool-level capture does not observe).
+  // A non-empty merged list then costs TWO extra batched `postId IN (...)`
+  // lookups (postGroup for per-group feed dedup + postView for the already-seen
+  // penalty — single indexed batches, not N+1s). The budget is a loose ceiling:
+  // batching left the real count on this path well under it.
   feed: 21,
   // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
   // embedding neighborhood phase should add a small constant number of
