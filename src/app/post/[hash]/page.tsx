@@ -418,6 +418,8 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
                 </Link>
                 <Link
                   href={readerHref(group.id, Math.max(ordinalInGroup, 1))}
+                  // Reader routes load every group member; don't prefetch on view.
+                  prefetch={false}
                   className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-500/10 px-3 py-1.5 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-500/20 dark:text-blue-400"
                   title="Open this group in the reader from the current image"
                 >

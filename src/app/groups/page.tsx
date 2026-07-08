@@ -268,6 +268,10 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                   {postCount > 1 && (
                     <Link
                       href={readerHref(primaryGroup.id, 1)}
+                      // The reader route loads every member of its group; up to
+                      // 50 of these links render per page, so viewport prefetch
+                      // would fan out that many all-member queries unclicked.
+                      prefetch={false}
                       className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-500/20 dark:text-blue-400"
                       title="Open in reader"
                     >
