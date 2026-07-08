@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { decode } from "blurhash";
 import { TextOverlay, type OverlayRegion } from "@/components/post/text-overlay";
 
@@ -98,8 +98,14 @@ function MediaViewerContent({
   const fullRef = useRef<HTMLImageElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Pause video on navigation (handles bfcache, tab switches, and unmount)
-  useEffect(() => {
+  // Pause video on navigation (handles Activity route caching, bfcache, tab
+  // switches, and unmount). With cacheComponents enabled, Next.js keeps
+  // navigated-away pages mounted in a hidden <Activity>; useLayoutEffect (not
+  // useEffect) guarantees the cleanup pause runs synchronously when the route
+  // is hidden — passive-effect cleanup can be deferred by a re-suspending
+  // Suspense boundary or a View Transition, leaving the hidden video audible.
+  // See https://react.dev/reference/react/Activity#my-hidden-components-have-unwanted-side-effects
+  useLayoutEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
