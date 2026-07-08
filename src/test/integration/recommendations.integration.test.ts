@@ -187,6 +187,7 @@ describe('Recommendations Module (Integration)', () => {
       const sourcePost = await createPostWithTags(prisma, ['rerank-retrieval-tag', ...guardTags, ...tailTags]);
       const thinCandidate = await createPostWithTags(prisma, ['rerank-retrieval-tag']);
       const richCandidate = await createPostWithTags(prisma, ['rerank-retrieval-tag', ...tailTags]);
+      const tailOnlyCandidate = await createPostWithTags(prisma, tailTags);
 
       for (const tag of guardTags) {
         for (let i = 0; i < 3; i++) {
@@ -205,14 +206,19 @@ describe('Recommendations Module (Integration)', () => {
       const batchRecommendations = await prisma.$queryRaw<{ source_id: number; recommended_id: number; score: number }[]>`
         SELECT * FROM compute_recommendations_for_posts(ARRAY[${sourcePost.id}]::integer[], ${20}::int)
       `;
+      const sortedBatchRecommendations = [...batchRecommendations].sort(
+        (a, b) => b.score - a.score || a.recommended_id - b.recommended_id
+      );
 
       expect(singleRecommendations[0].recommendedId).toBe(richCandidate.id);
       expect(singleRecommendations.findIndex((recommendation) => recommendation.recommendedId === richCandidate.id))
         .toBeLessThan(singleRecommendations.findIndex((recommendation) => recommendation.recommendedId === thinCandidate.id));
-      expect(batchRecommendations.map((recommendation) => recommendation.recommended_id))
+      expect(singleRecommendations.map((recommendation) => recommendation.recommendedId))
+        .not.toContain(tailOnlyCandidate.id);
+      expect(sortedBatchRecommendations.map((recommendation) => recommendation.recommended_id))
         .toEqual(singleRecommendations.map((recommendation) => recommendation.recommendedId));
       for (let i = 0; i < singleRecommendations.length; i++) {
-        expect(batchRecommendations[i].score).toBeCloseTo(singleRecommendations[i].score, 12);
+        expect(sortedBatchRecommendations[i].score).toBeCloseTo(singleRecommendations[i].score, 12);
       }
     });
   });
