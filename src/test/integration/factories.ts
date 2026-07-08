@@ -34,6 +34,7 @@ export async function createPost(
     blurhash: string;
     sourceUrls: string[];
     thumbnailStatus: ThumbnailStatus;
+    importedAt: Date;
   }> = {}
 ) {
   return prisma.post.create({
@@ -46,7 +47,7 @@ export async function createPost(
       width: overrides.width ?? 800,
       height: overrides.height ?? 600,
       rating: overrides.rating ?? Rating.UNRATED,
-      importedAt: new Date(),
+      importedAt: overrides.importedAt ?? new Date(),
       blurhash: overrides.blurhash,
       sourceUrls: overrides.sourceUrls ?? [],
       thumbnailStatus: overrides.thumbnailStatus ?? ThumbnailStatus.PENDING,

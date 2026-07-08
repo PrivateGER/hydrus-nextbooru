@@ -15,11 +15,17 @@ interface Post {
 interface PostGridProps {
   posts: Post[];
   onDismiss?: (hash: string) => void;
+  /**
+   * Query string (no leading `?`) appended to each post link, e.g. the
+   * `ctx=search&tags=...` navigation context from a search listing. A plain
+   * string rather than a builder function so server components can pass it.
+   */
+  postHrefQuery?: string;
 }
 
 const LAYOUT_STORAGE_KEY = "booru-layout-mode";
 
-export function PostGrid({ posts, onDismiss }: PostGridProps) {
+export function PostGrid({ posts, onDismiss, postHrefQuery }: PostGridProps) {
   const [layout, setLayout] = useState<LayoutMode>("masonry");
 
   useEffect(() => {
@@ -122,6 +128,7 @@ export function PostGrid({ posts, onDismiss }: PostGridProps) {
             layout={layout}
             favorited={post.favorited}
             onDismiss={onDismiss}
+            href={postHrefQuery ? `/post/${post.hash}?${postHrefQuery}` : undefined}
           />
         ))}
       </div>

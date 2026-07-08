@@ -68,3 +68,46 @@ export function parseGroupIdParam(value: string | string[] | undefined): number 
   const id = Number(value);
   return Number.isInteger(id) && id > 0 ? id : undefined;
 }
+
+/**
+ * A search listing the user navigated in from. Carried on post URLs as
+ * `?ctx=search&tags=<comma-list>` so prev/next can follow the search
+ * results instead of a group. Takes precedence over `?in=` group context.
+ */
+export interface SearchContext {
+  tags: string[];
+}
+
+/**
+ * Parse `?ctx=` + `?tags=` search params into a SearchContext.
+ * Tag normalization mirrors the search page's own parsing.
+ */
+export function parseSearchContext(
+  ctx: string | string[] | undefined,
+  tags: string | string[] | undefined
+): SearchContext | undefined {
+  if (ctx !== "search" || typeof tags !== "string") return undefined;
+  const parsed = tags
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  return parsed.length > 0 ? { tags: parsed } : undefined;
+}
+
+/**
+ * Encode a SearchContext as a URL query string (no leading `?`), for
+ * appending to post links from search listings.
+ */
+export function searchContextQuery(context: SearchContext): string {
+  return new URLSearchParams({ ctx: "search", tags: context.tags.join(",") }).toString();
+}
+
+/** Build a post URL that carries search-listing navigation context. */
+export function buildSearchPostUrl(hash: string, context: SearchContext): string {
+  return `/post/${hash}?${searchContextQuery(context)}`;
+}
+
+/** The search listing URL a search context came from (for "back to results"). */
+export function searchContextBackUrl(context: SearchContext): string {
+  return `/search?tags=${encodeURIComponent(context.tags.join(","))}`;
+}

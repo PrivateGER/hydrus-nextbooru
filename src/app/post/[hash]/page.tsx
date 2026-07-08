@@ -18,13 +18,25 @@ import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-po
 import { RecordView } from "@/components/post/record-view";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 import { dedupeFilmstripGroups } from "@/lib/filmstrip-groups";
-import { selectNavigationGroup, buildPostUrl, parseGroupIdParam } from "@/lib/post-navigation";
+import {
+  selectNavigationGroup,
+  buildPostUrl,
+  parseGroupIdParam,
+  parseSearchContext,
+  buildSearchPostUrl,
+  searchContextBackUrl,
+} from "@/lib/post-navigation";
+import { findSearchNeighbors } from "@/lib/search";
 import { readerHref } from "@/lib/reader";
 import { BookOpenIcon } from "@heroicons/react/24/outline";
 
 interface PostPageProps {
   params: Promise<{ hash: string }>;
-  searchParams: Promise<{ in?: string | string[] }>;
+  searchParams: Promise<{
+    in?: string | string[];
+    ctx?: string | string[];
+    tags?: string | string[];
+  }>;
 }
 
 export async function generateMetadata({ params }: PostPageProps): Promise<Metadata> {
@@ -159,7 +171,10 @@ async function getPost(hash: string) {
  * @returns The React element representing the post detail page.
  */
 export default async function PostPage({ params, searchParams }: PostPageProps) {
-  const [{ hash }, { in: inParam }] = await Promise.all([params, searchParams]);
+  const [{ hash }, { in: inParam, ctx: ctxParam, tags: tagsParam }] = await Promise.all([
+    params,
+    searchParams,
+  ]);
 
   // Validate hash format (64 hex characters)
   if (!/^[a-fA-F0-9]{64}$/i.test(hash)) {
@@ -183,10 +198,13 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
     }))
   );
 
-  // Prev/next follow ONE deterministic group: the one named by ?in= when the
-  // post belongs to it, otherwise the best-ranked multi-post group. The
-  // context is carried on every navigation URL so arrows keep following the
-  // same group across posts.
+  // Prev/next follow ONE deterministic context, carried on every navigation
+  // URL so arrows keep following it across posts. Precedence:
+  // 1. A search listing (?ctx=search&tags=...): keyset neighbors within the
+  //    same query the user came from.
+  // 2. A group: the one named by ?in= when the post belongs to it, otherwise
+  //    the best-ranked multi-post group.
+  const searchContext = parseSearchContext(ctxParam, tagsParam);
   const navGroup = selectNavigationGroup(groups, parseGroupIdParam(inParam));
 
   let prevUrl: string | undefined;
@@ -194,7 +212,18 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
   let currentPosition: number | undefined;
   let totalCount: number | undefined;
 
-  if (navGroup) {
+  if (searchContext) {
+    const neighbors = await findSearchNeighbors(
+      { id: post.id, importedAt: post.importedAt },
+      searchContext.tags
+    );
+    if (neighbors.prevHash) {
+      prevUrl = buildSearchPostUrl(neighbors.prevHash, searchContext);
+    }
+    if (neighbors.nextHash) {
+      nextUrl = buildSearchPostUrl(neighbors.nextHash, searchContext);
+    }
+  } else if (navGroup) {
     const currentIndex = navGroup.posts.findIndex((pg) => pg.post.hash === post.hash);
     currentPosition = currentIndex + 1; // 1-based position
     totalCount = navGroup.posts.length;
@@ -399,7 +428,7 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
                 posts={group.posts}
                 currentHash={post.hash}
                 groupId={group.id}
-                isActiveNav={navGroup?.id === group.id}
+                isActiveNav={!searchContext && navGroup?.id === group.id}
               />
             </div>
           );
@@ -412,9 +441,18 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
 
         {/* Navigation */}
         <div className="flex items-center justify-between text-sm">
-          <Link href="/" className="text-blue-600 hover:underline dark:text-blue-400">
-            &larr; Back to gallery
-          </Link>
+          {searchContext ? (
+            <Link
+              href={searchContextBackUrl(searchContext)}
+              className="text-blue-600 hover:underline dark:text-blue-400"
+            >
+              &larr; Back to results
+            </Link>
+          ) : (
+            <Link href="/" className="text-blue-600 hover:underline dark:text-blue-400">
+              &larr; Back to gallery
+            </Link>
+          )}
           <div className="flex items-center gap-4 text-zinc-400 dark:text-zinc-500">
             {prevUrl && (
               <Link href={prevUrl} className="hover:text-zinc-700 dark:hover:text-zinc-300">

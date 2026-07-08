@@ -4,6 +4,10 @@ import {
   selectNavigationGroup,
   buildPostUrl,
   parseGroupIdParam,
+  parseSearchContext,
+  searchContextQuery,
+  buildSearchPostUrl,
+  searchContextBackUrl,
 } from "./post-navigation";
 
 function group(
@@ -86,5 +90,45 @@ describe("parseGroupIdParam", () => {
     expect(parseGroupIdParam("1.5")).toBeUndefined();
     expect(parseGroupIdParam("-3")).toBeUndefined();
     expect(parseGroupIdParam("0")).toBeUndefined();
+  });
+});
+
+describe("parseSearchContext", () => {
+  it("parses a search context and normalizes tags like the search page", () => {
+    expect(parseSearchContext("search", " Blue_Sky ,-cat, ,")).toEqual({
+      tags: ["blue_sky", "-cat"],
+    });
+  });
+
+  it("rejects other or missing ctx values", () => {
+    expect(parseSearchContext(undefined, "a")).toBeUndefined();
+    expect(parseSearchContext("group", "a")).toBeUndefined();
+    expect(parseSearchContext(["search", "search"], "a")).toBeUndefined();
+  });
+
+  it("rejects missing, repeated, or empty tags", () => {
+    expect(parseSearchContext("search", undefined)).toBeUndefined();
+    expect(parseSearchContext("search", ["a", "b"])).toBeUndefined();
+    expect(parseSearchContext("search", " , ,")).toBeUndefined();
+  });
+});
+
+describe("search context URLs", () => {
+  const context = { tags: ["blue_sky", "-cat"] };
+
+  it("round-trips through query encoding", () => {
+    const query = searchContextQuery(context);
+    const params = new URLSearchParams(query);
+    expect(parseSearchContext(params.get("ctx")!, params.get("tags")!)).toEqual(context);
+  });
+
+  it("builds post URLs carrying the context", () => {
+    expect(buildSearchPostUrl("abc", context)).toBe(
+      "/post/abc?ctx=search&tags=blue_sky%2C-cat"
+    );
+  });
+
+  it("builds the back-to-results URL", () => {
+    expect(searchContextBackUrl(context)).toBe("/search?tags=blue_sky%2C-cat");
   });
 });
