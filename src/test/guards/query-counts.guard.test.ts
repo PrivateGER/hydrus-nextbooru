@@ -73,8 +73,10 @@ const QUERY_BUDGETS = {
   // The tag side stays O(1) as signals scale — dismissals (negative seeds) and
   // views (positive seeds) flow through the same batched compute — but note the
   // EMBEDDING path is NOT exercised here: when embeddings are configured,
-  // fetchEmbeddingNeighborhoods issues one k-NN query PER SEED (O(seeds)), which
-  // this favorites-only, embedding-less fixture never triggers. A non-empty
+  // fetchEmbeddingNeighborhoods issues one k-NN query PER SEED (O(seeds)) plus
+  // one batched embedding-availability read over seeds+candidates (for the
+  // merge's per-pair renormalization), which this favorites-only,
+  // embedding-less fixture never triggers. A non-empty
   // merged list then costs TWO extra batched `postId IN (...)` lookups
   // (postGroup for per-group feed dedup + postView for the already-seen
   // penalty — single indexed batches, not N+1s); both are skipped when the

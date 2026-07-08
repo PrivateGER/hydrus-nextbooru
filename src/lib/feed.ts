@@ -6,8 +6,9 @@
  * IDF-weighted tag COSINE similarity (the PostRecommendation engine, both
  * scores in [0,1]). Candidates are merged with recency-decayed seed weights;
  * convergent evidence (a candidate reached from several seeds) accumulates
- * score, renormalized by the engine weight each candidate could actually earn
- * (videos have no embeddings). Taste signals collapse to one seed per group,
+ * score, each contribution renormalized by the engine weight its
+ * seed/candidate pair could actually earn (an embedding-less post on either
+ * end makes the pair tag-only). Taste signals collapse to one seed per group,
  * and already-viewed candidates are downweighted with a decaying penalty.
  *
  * The pure functions (seed selection, group collapse, score merging, viewed
@@ -18,7 +19,6 @@ import type { RecommendedPost } from "@/lib/recommendations";
 import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
-import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/mimes";
 import {
   getEmbeddingOpenRouterSettings,
   toEmbeddingConfig,
@@ -453,20 +453,27 @@ export function selectViewSeeds(
  * score. Contributions sum regardless of sign; a candidate whose net score
  * lands at or below zero — dominated by dislikes — is dropped from the feed.
  *
- * Finally, each candidate's net score is renormalized by the engine weight it
- * could possibly have earned: a post the embedding engine cannot score (video
- * or other unsupported MIME) divides by idfWeight alone instead of
- * idfWeight + embeddingWeight. Without this, videos compete for feed slots
- * with a hard ~(idfWeight) ceiling against images' 1.0 — a systematic
- * media-type bias unrelated to relevance. When `embeddingsActive` is false
- * (unconfigured, or no seed produced embedding neighbors) every candidate is
- * tag-only and the renormalization is a uniform rescale (ranking unchanged).
+ * Each contribution is renormalized by the engine weight its (seed,
+ * candidate) PAIR could possibly have earned: the embedding channel is live
+ * only when both the seed and the candidate have a stored embedding
+ * (`embeddedPostIds`), so a tag-only contribution over a pair with no
+ * possible embedding evidence — video or unembedded post on EITHER end —
+ * divides by idfWeight alone instead of idfWeight + embeddingWeight.
+ * Without this, such posts compete for feed slots with a hard ~(idfWeight)
+ * ceiling against fully-embedded pairs' 1.0 — a systematic media-type /
+ * embedding-coverage bias unrelated to relevance. Normalizing per pair (not
+ * per candidate from a global flag) matters in mixed feeds: an image reached
+ * only through an embedding-less seed's tag similarity must not be penalized
+ * for embedding evidence that seed could never produce. When
+ * `embeddedPostIds` is null/empty (embeddings unconfigured or store empty)
+ * every pair is tag-only and the renormalization is a uniform rescale
+ * (ranking unchanged).
  */
 export function mergeSeedCandidates(
   contributions: SeedContribution[],
   excludedPostIds: ReadonlySet<number>,
   config: FeedConfig = FEED_CONFIG,
-  embeddingsActive = true
+  embeddedPostIds: ReadonlySet<number> | null = null
 ): FeedPost[] {
   const byId = new Map<number, FeedPost>();
 
@@ -496,30 +503,43 @@ export function mergeSeedCandidates(
     // the feed without steamrolling the positive taste that generated it.
     const strength = polarity < 0 ? -config.negativeStrength : 1;
 
+    // The embedding channel is live for a (seed, candidate) PAIR only when
+    // BOTH ends have a stored embedding — findRelatedPostsByEmbedding returns
+    // nothing for an embedding-less seed no matter the candidate, and an
+    // embedding-less candidate can appear in no seed's k-NN results. Each
+    // contribution divides by ITS pair's achievable weight, so normalization
+    // is per contribution and cross-seed convergence still sums untouched.
+    const seedEmbedded = embeddedPostIds?.has(seed.postId) ?? false;
+    const achievableFor = (candidateId: number): number => {
+      const pairEmbedded =
+        seedEmbedded && (embeddedPostIds?.has(candidateId) ?? false);
+      const achievable =
+        config.idfWeight + (pairEmbedded ? config.embeddingWeight : 0);
+      // Degenerate configs (idfWeight 0 without embeddings) fall back to the
+      // raw contribution rather than dividing by zero.
+      return achievable > 0 ? achievable : 1;
+    };
+
     for (const neighbor of embedding) {
       const similarity = Math.max(0, Math.min(1, neighbor.score));
-      add(neighbor, strength * seed.weight * config.embeddingWeight * similarity);
+      add(
+        neighbor,
+        (strength * seed.weight * config.embeddingWeight * similarity) /
+          achievableFor(neighbor.id)
+      );
     }
 
     for (const rec of idf) {
       const similarity = Math.max(0, Math.min(1, rec.score));
-      add(rec, strength * seed.weight * config.idfWeight * similarity);
+      add(
+        rec,
+        (strength * seed.weight * config.idfWeight * similarity) /
+          achievableFor(rec.id)
+      );
     }
   }
 
-  // Renormalize by achievable engine weight (see doc comment). Sign-neutral,
-  // so net-negative (dislike-dominated) candidates stay negative and drop.
-  const posts = [...byId.values()];
-  for (const post of posts) {
-    const achievable =
-      config.idfWeight +
-      (embeddingsActive && EMBEDDING_SUPPORTED_MIMES.has(post.mimeType)
-        ? config.embeddingWeight
-        : 0);
-    if (achievable > 0) post.score /= achievable;
-  }
-
-  return posts
+  return [...byId.values()]
     .filter((post) => post.score > 0)
     .sort((a, b) => b.score - a.score || a.id - b.id)
     .slice(0, config.maxFeedSize);
@@ -831,15 +851,39 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     ...seedGroupSiblings.map((g) => g.postId),
   ]);
 
-  // Embeddings count as an available engine only when they can actually score
-  // candidates: configured AND at least one seed produced neighbors. An
-  // unconfigured or empty embedding store degrades the achievable-weight
-  // renormalization to a uniform (ranking-neutral) rescale.
-  const embeddingsActive =
-    embeddingConfig !== null &&
-    [...embeddingBySeed.values()].some((neighbors) => neighbors.length > 0);
+  // Exact embedding availability for the merge's per-pair achievable-weight
+  // normalization: which of the seeds AND candidates actually have a stored
+  // embedding under the active config (mirrors findRelatedPostsByEmbedding's
+  // source filter). One batched indexed read over ~seeds + all distinct
+  // candidates; skipped entirely when embeddings are unconfigured (null makes
+  // the normalization a uniform, ranking-neutral rescale).
+  let embeddedPostIds: ReadonlySet<number> | null = null;
+  if (embeddingConfig) {
+    const probeIds = new Set<number>(allSeedIds);
+    for (const contribution of contributions) {
+      for (const neighbor of contribution.embedding) probeIds.add(neighbor.id);
+      for (const rec of contribution.idf) probeIds.add(rec.id);
+    }
+    const embeddedRows =
+      probeIds.size > 0
+        ? await prisma.postEmbedding.findMany({
+            where: {
+              postId: { in: [...probeIds] },
+              baseUrl: embeddingConfig.baseUrl,
+              model: embeddingConfig.model,
+              dimensions: embeddingConfig.dimensions,
+              imageMaxResolution: embeddingConfig.imageMaxResolution,
+              // COMPLETE rows always carry a non-null vector (see the upsert
+              // in @/lib/embeddings/store), so status alone is sufficient.
+              status: "COMPLETE",
+            },
+            select: { postId: true },
+          })
+        : [];
+    embeddedPostIds = new Set(embeddedRows.map((row) => row.postId));
+  }
 
-  const merged = mergeSeedCandidates(contributions, excluded, config, embeddingsActive);
+  const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);
   if (merged.length === 0) return merged;
 
   // Two batched lookups over the merged candidates, only when there is a

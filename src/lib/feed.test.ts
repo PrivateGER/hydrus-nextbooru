@@ -280,6 +280,8 @@ describe("mergeSeedCandidates", () => {
     hash: postId.toString(16).padStart(64, "0"),
     weight,
   });
+  /** Posts (seeds and candidates) that have a stored embedding. */
+  const embedded = (...postIds: number[]) => new Set(postIds);
 
   it("accumulates scores for candidates reached from multiple seeds", () => {
     const contributions: SeedContribution[] = [
@@ -287,7 +289,7 @@ describe("mergeSeedCandidates", () => {
       { seed: seed(2, 1), embedding: [candidate(100, 0.6)], idf: [] },
       { seed: seed(3, 1), embedding: [candidate(200, 0.9)], idf: [] },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 2, 3, 100, 200));
 
     const convergent = merged.find((p) => p.id === 100)!;
     const single = merged.find((p) => p.id === 200)!;
@@ -307,7 +309,7 @@ describe("mergeSeedCandidates", () => {
         idf: [candidate(100, 0.8), candidate(200, 0.2)],
       },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100, 200));
     expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 0.8, 10);
     expect(merged.find((p) => p.id === 200)!.score).toBeCloseTo(0.3 * 0.2, 10);
   });
@@ -323,26 +325,45 @@ describe("mergeSeedCandidates", () => {
         ],
       },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100, 200));
     expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 1, 10);
     expect(merged.find((p) => p.id === 200)).toBeUndefined(); // clamped to 0 → no contribution
   });
 
-  it("renormalizes non-embeddable candidates by the tag-only achievable weight", () => {
-    // Identical evidence: one image candidate, one video candidate, each
-    // reached only through the tag engine with the same cosine. The video can
-    // NEVER earn embedding contributions, so its score divides by idfWeight
-    // alone — both end up equal instead of the video losing by media type.
+  it("renormalizes embedding-less candidates by the tag-only achievable weight", () => {
+    // Identical evidence from an embedded seed: one embedded candidate, one
+    // embedding-less candidate (video / not yet embedded), each reached only
+    // through the tag engine with the same cosine. The embedding-less pair
+    // can NEVER earn embedding contributions, so it divides by idfWeight
+    // alone instead of the full channel weight.
     const video = { ...candidate(200, 0.6), mimeType: "video/mp4" };
     const contributions: SeedContribution[] = [
       { seed: seed(1, 1), embedding: [], idf: [candidate(100, 0.6), video] },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config, true);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100));
     const image = merged.find((p) => p.id === 100)!;
     const clip = merged.find((p) => p.id === 200)!;
     expect(image.score).toBeCloseTo((0.3 * 0.6) / (0.3 + 0.7), 10);
     expect(clip.score).toBeCloseTo((0.3 * 0.6) / 0.3, 10);
     expect(clip.score).toBeGreaterThan(image.score); // tag-only evidence, full channel
+  });
+
+  it("treats a pair as tag-only when the SEED lacks an embedding", () => {
+    // An embedded image candidate reached only through an embedding-less
+    // seed's tag similarity: that seed could never have produced embedding
+    // evidence, so the pair divides by idfWeight — identical to a video
+    // candidate with the same cosine, NOT penalized by the full channel
+    // weight just because another seed in the feed has embeddings.
+    const video = { ...candidate(200, 0.6), mimeType: "video/mp4" };
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [], idf: [candidate(100, 0.6), video] },
+    ];
+    // Candidate 100 is embedded, but seed 1 is not.
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(100));
+    const image = merged.find((p) => p.id === 100)!;
+    const clip = merged.find((p) => p.id === 200)!;
+    expect(image.score).toBeCloseTo((0.3 * 0.6) / 0.3, 10);
+    expect(image.score).toBeCloseTo(clip.score, 10);
   });
 
   it("rescales uniformly (ranking-neutral) when embeddings are inactive", () => {
@@ -353,8 +374,8 @@ describe("mergeSeedCandidates", () => {
         idf: [candidate(100, 0.9), { ...candidate(200, 0.3), mimeType: "video/mp4" }],
       },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config, false);
-    // Every candidate is tag-only → all divide by idfWeight; order by cosine.
+    const merged = mergeSeedCandidates(contributions, new Set(), config, null);
+    // Every pair is tag-only → all divide by idfWeight; order by cosine.
     expect(merged.map((p) => p.id)).toEqual([100, 200]);
     expect(merged[0].score).toBeCloseTo(0.9, 10);
     expect(merged[1].score).toBeCloseTo(0.3, 10);
@@ -364,7 +385,7 @@ describe("mergeSeedCandidates", () => {
     const contributions: SeedContribution[] = [
       { seed: seed(1, 0.5), embedding: [candidate(100, 1)], idf: [] },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100));
     expect(merged[0].score).toBeCloseTo(0.5 * 0.7 * 1, 10);
   });
 
@@ -394,10 +415,12 @@ describe("mergeSeedCandidates", () => {
       { seed: seed(1, 1), embedding: [candidate(100, 1)], idf: [], polarity: 1 },
       { seed: seed(2, 1), embedding: [candidate(100, 0.5)], idf: [], polarity: -1 },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), {
-      ...config,
-      negativeStrength: 0.8,
-    });
+    const merged = mergeSeedCandidates(
+      contributions,
+      new Set(),
+      { ...config, negativeStrength: 0.8 },
+      embedded(1, 2, 100)
+    );
     // +0.7*1  -  0.8*0.7*0.5  = 0.7 - 0.28 = 0.42
     expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.42, 10);
   });
