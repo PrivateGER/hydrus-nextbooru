@@ -118,6 +118,12 @@ async function GroupReaderContent({ params }: ReaderPageProps) {
 
   return (
     <MangaReader
+      // Keyed by route params: reader state (current page, preload cache) is
+      // per-destination, so a soft navigation to another group or page gets a
+      // fresh mount instead of inheriting a stale — possibly out-of-range —
+      // page number. In-reader page turns use replaceState and never
+      // re-render this server component, so the key stays put while reading.
+      key={`${group.id}:${page}`}
       groupId={group.id}
       title={groupDisplayTitle(group)}
       pages={group.posts.map((pg) => pg.post)}

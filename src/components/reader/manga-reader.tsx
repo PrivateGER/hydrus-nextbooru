@@ -231,14 +231,22 @@ export function MangaReader({ groupId, title, pages, initialPage }: MangaReaderP
 
   // Preload neighbors' full-resolution images so page turns feel instant.
   useEffect(() => {
+    const keep = new Set([fileUrl(pages[page - 1])]);
     for (const target of preloadTargets(page, total)) {
       const neighbor = pages[target - 1];
       if (!neighbor.mimeType.startsWith("image/")) continue;
       const url = fileUrl(neighbor);
+      keep.add(url);
       if (preloadedRef.current.has(url)) continue;
       const img = new Image();
       img.src = url;
       preloadedRef.current.set(url, img);
+    }
+    // Drop references outside the window: the Image object only needs to
+    // live until the fetch lands in the HTTP cache. Without pruning, a long
+    // read retains every decoded full-size page for the tab's lifetime.
+    for (const url of preloadedRef.current.keys()) {
+      if (!keep.has(url)) preloadedRef.current.delete(url);
     }
   }, [page, pages, total]);
 
