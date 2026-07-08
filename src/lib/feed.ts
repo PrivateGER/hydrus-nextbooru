@@ -966,15 +966,17 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);
   if (merged.length === 0) return merged;
 
-  // Three batched lookups over the merged candidates, only when there is a
-  // feed: import timestamps (freshness boost), group memberships (per-group
+  // Up to three batched lookups over the merged candidates, only when there is
+  // a feed: import timestamps (freshness boost), group memberships (per-group
   // dedup below), and view state (the already-seen penalty).
   const mergedIds = merged.map((p) => p.id);
   const [importedRows, groupRows, candidateViews] = await Promise.all([
-    prisma.post.findMany({
-      where: { id: { in: mergedIds } },
-      select: { id: true, importedAt: true },
-    }),
+    config.freshnessBoost > 0
+      ? prisma.post.findMany({
+          where: { id: { in: mergedIds } },
+          select: { id: true, importedAt: true },
+        })
+      : Promise.resolve([]),
     prisma.postGroup.findMany({
       where: { postId: { in: mergedIds } },
       select: { postId: true, groupId: true },
