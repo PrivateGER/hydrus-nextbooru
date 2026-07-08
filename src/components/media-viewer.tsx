@@ -279,13 +279,17 @@ function MediaViewerContent({
         </Link>
       )}
 
-      {/* Media content */}
+      {/* Media content. The video carries no autoPlay attribute: playback is
+          started exclusively by the layout effect above. The attribute lets
+          the BROWSER start playback on its own when data arrives — including
+          on a navigated-away page kept alive in a hidden Activity, which
+          plays audio from offscreen. The effect's explicit play()/pause()
+          stays in control instead. */}
       {isVideo ? (
         <video
           ref={videoRef}
           src={`/api/files/${hash}${extension}`}
           controls
-          autoPlay
           loop
           className="max-h-[85vh] max-w-full rounded"
         >
