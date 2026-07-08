@@ -6,12 +6,27 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_RECOMMENDATION_LIMIT = 20;
 
 /**
- * Cap on how many of a source post's tags feed the similarity join. Kept in
- * sync with the p_max_source_tags default in the SQL functions. Only the least
- * distinctive (lowest-IDF) tags are dropped once a post exceeds this, so
- * ranking is preserved while the candidate scan stays bounded.
+ * Cap on how many of a source post's retained tags feed the final cosine
+ * rerank. Kept in sync with the p_max_source_tags default in the batch SQL
+ * function and the hardcoded scoring cap in the single-post function.
  */
 const MAX_SOURCE_TAGS = 64;
+
+/**
+ * Phase-1 retrieval cap: candidates are discovered from the source's top 16
+ * retained tags, then the best {@link SOURCE_TAG_RERANK_CANDIDATES} candidates
+ * are reranked by the full {@link MAX_SOURCE_TAGS} scoring set. Prod measured
+ * mean overlap@10 against direct K=64 cosine improving from 0.76 (plain K=16)
+ * to ~0.95 with rerank, while phase-1 scan volume stayed ~1.76M rows for 109
+ * seeds versus ~57M for the set-based K=64 scan.
+ */
+export const SOURCE_TAG_RETRIEVAL_CAP = 16;
+
+/**
+ * Number of phase-1 candidates kept per source for exact top-64 cosine rerank.
+ * Hardcoded in migration 20260708130000_lateral_recommendation_compute.
+ */
+export const SOURCE_TAG_RERANK_CANDIDATES = 400;
 
 /**
  * Distinctiveness floor: a source tag present on more than this FRACTION of the
@@ -25,9 +40,9 @@ const MAX_SOURCE_TAGS = 64;
  *
  * Both are HARDCODED in the SQL functions (compute_post_recommendations /
  * compute_recommendations_for_posts, latest definition in migration
- * 20260707120000_cosine_tag_similarity) and mirrored here for discoverability
- * — the two MUST stay in sync. See migration 20260707000000 for the measured
- * quality/scan tradeoff behind the 0.30 default.
+ * 20260708130000_lateral_recommendation_compute) and mirrored here for
+ * discoverability — the two MUST stay in sync. See migration 20260707000000
+ * for the measured quality/scan tradeoff behind the 0.30 default.
  */
 export const MAX_SOURCE_TAG_FREQUENCY = 0.3;
 
@@ -270,8 +285,10 @@ async function computeAndCacheRecommendations(
  * parallel workers — the batch that pegged the DB at 100% CPU on a cold cache.
  *
  * This reuses the same 24h {@link PostRecommendation} cache, but computes every
- * cold seed in ONE set-based `compute_recommendations_for_posts` call (one scan
- * of PostTag instead of N). Fresh cache hits are served from the read; only the
+ * cold seed in ONE `compute_recommendations_for_posts` call. The SQL function
+ * uses a LATERAL-per-seed shape: each seed prunes to its retained top tags
+ * before scanning candidate posting lists, avoiding the old cross-seed
+ * GroupAggregate blow-up. Fresh cache hits are served from the read; only the
  * misses hit the compute. Newly computed rows are persisted so a later
  * single-post lookup (detail page) is warm too.
  *
@@ -336,7 +353,7 @@ export async function getTagNeighborhoodsForSeeds(
 
   if (coldIds.length === 0) return result;
 
-  // 2. Compute every cold seed in a single set-based query.
+  // 2. Compute every cold seed in a single LATERAL-backed batch query.
   const idsLiteral = Prisma.raw(
     `ARRAY[${coldIds.map((id) => Math.trunc(id)).join(",")}]::integer[]`
   );

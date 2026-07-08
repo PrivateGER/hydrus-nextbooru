@@ -178,6 +178,43 @@ describe('Recommendations Module (Integration)', () => {
       expect(rareIndex).toBeGreaterThan(0); // Rare tag match should be after both-tag match
       expect(rareIndex).toBeLessThan(5); // But should be in top 5 (above common-only posts)
     });
+
+    it('should retrieve by top-16 tags then rerank by the top-64 retained tags in single and batch paths', async () => {
+      const prisma = getTestPrisma();
+
+      const guardTags = Array.from({ length: 15 }, (_, i) => `rerank-guard-${i}`);
+      const tailTags = Array.from({ length: 17 }, (_, i) => `rerank-tail-${i}`);
+      const sourcePost = await createPostWithTags(prisma, ['rerank-retrieval-tag', ...guardTags, ...tailTags]);
+      const thinCandidate = await createPostWithTags(prisma, ['rerank-retrieval-tag']);
+      const richCandidate = await createPostWithTags(prisma, ['rerank-retrieval-tag', ...tailTags]);
+
+      for (const tag of guardTags) {
+        for (let i = 0; i < 3; i++) {
+          await createPostWithTags(prisma, [tag]);
+        }
+      }
+      for (const tag of tailTags) {
+        for (let i = 0; i < 8; i++) {
+          await createPostWithTags(prisma, [tag]);
+        }
+      }
+
+      await recalculateTagStats();
+
+      const singleRecommendations = await computeRecommendationsForPost(sourcePost.id, 20);
+      const batchRecommendations = await prisma.$queryRaw<{ source_id: number; recommended_id: number; score: number }[]>`
+        SELECT * FROM compute_recommendations_for_posts(ARRAY[${sourcePost.id}]::integer[], ${20}::int)
+      `;
+
+      expect(singleRecommendations[0].recommendedId).toBe(richCandidate.id);
+      expect(singleRecommendations.findIndex((recommendation) => recommendation.recommendedId === richCandidate.id))
+        .toBeLessThan(singleRecommendations.findIndex((recommendation) => recommendation.recommendedId === thinCandidate.id));
+      expect(batchRecommendations.map((recommendation) => recommendation.recommended_id))
+        .toEqual(singleRecommendations.map((recommendation) => recommendation.recommendedId));
+      for (let i = 0; i < singleRecommendations.length; i++) {
+        expect(batchRecommendations[i].score).toBeCloseTo(singleRecommendations[i].score, 12);
+      }
+    });
   });
 
   describe('getOrComputeRecommendations (JIT)', () => {
