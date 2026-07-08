@@ -1032,11 +1032,18 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     const totalPosts = await updateTotalPostCount();
     // Recalculate tag post counts for efficient sorting
     await recalculateTagCounts();
-    await prisma.$executeRawUnsafe(
-      'ANALYZE "PostTag", "Tag", "Post", "PostGroup", "PostEmbedding", "PostRecommendation"'
-    );
     // IDF refresh can change scores globally; invalidate only when corpus drift is material.
     await invalidateRecommendationsIfNeeded(totalPosts);
+    try {
+      await prisma.$executeRawUnsafe(
+        'ANALYZE "PostTag", "Tag", "Post", "PostGroup", "PostEmbedding", "PostRecommendation"'
+      );
+    } catch (err) {
+      syncLog.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Post-sync ANALYZE failed; continuing sync completion'
+      );
+    }
     // Update precomputed homepage stats
     await updateHomeStatsCache();
 
@@ -1206,9 +1213,18 @@ export async function getSyncState() {
 }
 
 async function getRecommendationInvalidationPostCountMarker(): Promise<number | null> {
-  const setting = await prisma.settings.findUnique({
-    where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
-  });
+  let setting: { value: string } | null;
+  try {
+    setting = await prisma.settings.findUnique({
+      where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
+    });
+  } catch (err) {
+    syncLog.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      'Failed to read recommendation invalidation marker; invalidating globally'
+    );
+    return null;
+  }
 
   if (!setting) {
     return null;
@@ -1238,18 +1254,14 @@ async function invalidateRecommendationsIfNeeded(currentTotalPosts: number): Pro
   }
 
   const markerValue = currentTotalPosts.toString();
-  await prisma.$transaction(async (tx) => {
-    await invalidateAllRecommendations(tx);
-    await tx.settings.upsert({
-      where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
-      update: { value: markerValue },
-      create: {
-        key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY,
-        value: markerValue,
-      },
-    });
-  }, {
-    timeout: 30000,
+  await invalidateAllRecommendations();
+  await prisma.settings.upsert({
+    where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
+    update: { value: markerValue },
+    create: {
+      key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY,
+      value: markerValue,
+    },
   });
 }
 
