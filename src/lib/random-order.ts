@@ -16,6 +16,83 @@ export function seedToHexCursor(seed: string, length: 32 | 64): string {
   return digest.slice(0, length);
 }
 
+/**
+ * Find a post's immediate neighbors within the seeded random listing.
+ *
+ * The rotation orders posts by hash ascending starting at the seed-derived
+ * cursor and wraps around: [cursor..max] then [min..cursor). Hashes are
+ * unique, so the order is total. Neighbors are resolved with indexed
+ * hash-comparison lookups; the second query of each pair only runs at the
+ * wrap boundary.
+ */
+export async function findRotationNeighbors(
+  anchorHash: string,
+  seed: string,
+  prisma: PrismaClient = defaultPrisma
+): Promise<{ prevHash: string | null; nextHash: string | null }> {
+  const cursor = seedToHexCursor(seed, 64);
+  const select = { hash: true } as const;
+  const asc = { hash: 'asc' as const };
+  const desc = { hash: 'desc' as const };
+
+  const inFirstSegment = anchorHash >= cursor;
+
+  const [next, prev] = await Promise.all([
+    (async () => {
+      if (inFirstSegment) {
+        // Continue up the first segment...
+        const sameSegment = await prisma.post.findFirst({
+          where: { hash: { gt: anchorHash } },
+          orderBy: asc,
+          select,
+        });
+        if (sameSegment) return sameSegment.hash;
+        // ...or wrap to the start of the second segment.
+        const wrapped = await prisma.post.findFirst({
+          where: { hash: { lt: cursor } },
+          orderBy: asc,
+          select,
+        });
+        return wrapped?.hash ?? null;
+      }
+      // Second segment ends just below the cursor — no further wrap.
+      const sameSegment = await prisma.post.findFirst({
+        where: { hash: { gt: anchorHash, lt: cursor } },
+        orderBy: asc,
+        select,
+      });
+      return sameSegment?.hash ?? null;
+    })(),
+    (async () => {
+      if (inFirstSegment) {
+        // The first segment starts at the cursor — nothing before its head.
+        const sameSegment = await prisma.post.findFirst({
+          where: { hash: { lt: anchorHash, gte: cursor } },
+          orderBy: desc,
+          select,
+        });
+        return sameSegment?.hash ?? null;
+      }
+      // Back down the second segment...
+      const sameSegment = await prisma.post.findFirst({
+        where: { hash: { lt: anchorHash } },
+        orderBy: desc,
+        select,
+      });
+      if (sameSegment) return sameSegment.hash;
+      // ...or wrap back to the tail of the first segment.
+      const wrapped = await prisma.post.findFirst({
+        where: { hash: { gte: cursor } },
+        orderBy: desc,
+        select,
+      });
+      return wrapped?.hash ?? null;
+    })(),
+  ]);
+
+  return { prevHash: prev, nextHash: next };
+}
+
 export async function getPostsByHashRotation({
   page,
   pageSize,

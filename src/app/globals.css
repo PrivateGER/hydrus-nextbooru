@@ -20,7 +20,13 @@
   }
 }
 
-/* View Transitions */
+/* View Transitions.
+ *
+ * The root snapshot cross-fades whatever is NOT captured as its own named
+ * group below. Stable page regions (site header, media viewer, tag sidebar)
+ * carry view-transition-name classes so post-to-post navigation doesn't
+ * blink the whole page: the header holds still, the image morphs/cross-fades
+ * in place, and only genuinely changing content participates in the fade. */
 @supports (view-transition-name: none) {
   ::view-transition-old(root) {
     animation: fade-out 150ms ease-out;
@@ -28,6 +34,18 @@
 
   ::view-transition-new(root) {
     animation: fade-in 150ms ease-in;
+  }
+
+  .vt-site-header {
+    view-transition-name: site-header;
+  }
+
+  .vt-media-viewer {
+    view-transition-name: media-viewer;
+  }
+
+  .vt-tag-sidebar {
+    view-transition-name: tag-sidebar;
   }
 
   @keyframes fade-out {

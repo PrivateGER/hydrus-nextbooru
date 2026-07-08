@@ -137,3 +137,81 @@ export function searchContextBackUrl(context: SearchContext): string {
   const page = context.page !== undefined && context.page > 1 ? `&page=${context.page}` : "";
   return `/search?tags=${encodeURIComponent(context.tags.join(","))}${page}`;
 }
+
+export type GallerySort = "newest" | "oldest" | "random";
+
+/**
+ * The gallery listing the user navigated in from, carried on post URLs as
+ * `?ctx=gallery[&sort=...][&seed=...][&page=N]`. All three gallery sorts are
+ * deterministic (newest/oldest by import time; random is a seeded hash
+ * rotation), so prev/next replay server-side just like search contexts.
+ * Precedence sits alongside search context, above `?in=` group context.
+ */
+export interface GalleryContext {
+  sort: GallerySort;
+  /** Rotation seed; present exactly when sort is "random". */
+  seed?: string;
+  /** 1-based listing page for "back to gallery" (omitted when 1). */
+  page?: number;
+}
+
+/** Mirrors the home page's seed validation. */
+const GALLERY_SEED_PATTERN = /^[a-z0-9]{8}$/;
+
+/**
+ * Parse `?ctx=gallery` params into a GalleryContext. Random sort without a
+ * valid seed cannot be replayed, so it yields no context (group fallback).
+ */
+export function parseGalleryContext(
+  ctx: string | string[] | undefined,
+  sort: string | string[] | undefined,
+  seed: string | string[] | undefined,
+  page?: string | string[] | undefined
+): GalleryContext | undefined {
+  if (ctx !== "gallery") return undefined;
+
+  const parsedSort: GallerySort = sort === "oldest" || sort === "random" ? sort : "newest";
+  const validSeed =
+    typeof seed === "string" && GALLERY_SEED_PATTERN.test(seed) ? seed : undefined;
+  if (parsedSort === "random" && validSeed === undefined) return undefined;
+
+  const parsedPage = typeof page === "string" ? Number(page) : undefined;
+  const validPage =
+    parsedPage !== undefined && Number.isInteger(parsedPage) && parsedPage > 1
+      ? parsedPage
+      : undefined;
+
+  return {
+    sort: parsedSort,
+    ...(parsedSort === "random" && { seed: validSeed }),
+    ...(validPage !== undefined && { page: validPage }),
+  };
+}
+
+/**
+ * Encode a GalleryContext as a URL query string (no leading `?`), for
+ * appending to post links from the gallery. Defaults (newest, page 1) are
+ * omitted so the plain gallery yields just `ctx=gallery`.
+ */
+export function galleryContextQuery(context: GalleryContext): string {
+  const params = new URLSearchParams({ ctx: "gallery" });
+  if (context.sort !== "newest") params.set("sort", context.sort);
+  if (context.sort === "random" && context.seed) params.set("seed", context.seed);
+  if (context.page !== undefined && context.page > 1) params.set("page", String(context.page));
+  return params.toString();
+}
+
+/** Build a post URL that carries gallery-listing navigation context. */
+export function buildGalleryPostUrl(hash: string, context: GalleryContext): string {
+  return `/post/${hash}?${galleryContextQuery(context)}`;
+}
+
+/** The gallery URL a gallery context came from (for "back to gallery"). */
+export function galleryContextBackUrl(context: GalleryContext): string {
+  const params = new URLSearchParams();
+  if (context.sort !== "newest") params.set("sort", context.sort);
+  if (context.page !== undefined && context.page > 1) params.set("page", String(context.page));
+  if (context.sort === "random" && context.seed) params.set("seed", context.seed);
+  const query = params.toString();
+  return query ? `/?${query}` : "/";
+}

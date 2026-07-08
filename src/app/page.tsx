@@ -19,6 +19,7 @@ import {
 import { POSTS_PER_PAGE } from "@/lib/pagination";
 import { getPostsByHashRotation } from "@/lib/random-order";
 import { mergeFavoritedState } from "@/lib/favorites";
+import { galleryContextQuery } from "@/lib/post-navigation";
 
 type SortOption = "newest" | "oldest" | "random";
 
@@ -62,9 +63,14 @@ async function getPosts(page: number, sort: SortOption, seed: string) {
     };
   }
 
-  // Standard sorting
-  const orderBy: Prisma.PostOrderByWithRelationInput =
-    sort === "oldest" ? { importedAt: "asc" } : { importedAt: "desc" };
+  // Standard sorting. id breaks importedAt ties so the listing is a total
+  // order — required for stable pagination and for findGalleryNeighbors'
+  // keyset queries to agree with the listing.
+  const direction = sort === "oldest" ? ("asc" as const) : ("desc" as const);
+  const orderBy: Prisma.PostOrderByWithRelationInput[] = [
+    { importedAt: direction },
+    { id: direction },
+  ];
 
   const [posts, totalCount] = await Promise.all([
     prisma.post.findMany({
@@ -252,7 +258,17 @@ async function HomePageContent({ searchParams }: { searchParams: Promise<{ page?
             </div>
           }
         >
-          <PostGrid posts={posts} />
+          {/* All gallery sorts are deterministic (importedAt keyset; random
+              is a seeded hash rotation), so post links carry the listing as
+              navigation context — the post page's prev/next follow it. */}
+          <PostGrid
+            posts={posts}
+            postHrefQuery={galleryContextQuery({
+              sort,
+              ...(sort === "random" && { seed }),
+              ...(page > 1 && { page }),
+            })}
+          />
         </Suspense>
 
         {/* Pagination */}

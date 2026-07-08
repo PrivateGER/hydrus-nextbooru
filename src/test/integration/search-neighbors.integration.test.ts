@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from './setup';
 import { setTestPrisma } from '@/lib/db';
-import { createPostWithTags } from './factories';
+import { createPost, createPostWithTags } from './factories';
 import { invalidateAllCaches } from '@/lib/cache';
 
 let findSearchNeighbors: typeof import('@/lib/search').findSearchNeighbors;
+let findGalleryNeighbors: typeof import('@/lib/search').findGalleryNeighbors;
 let searchPosts: typeof import('@/lib/search').searchPosts;
+let findRotationNeighbors: typeof import('@/lib/random-order').findRotationNeighbors;
+let seedToHexCursor: typeof import('@/lib/random-order').seedToHexCursor;
 
 const at = (iso: string) => new Date(iso);
 
@@ -13,7 +16,8 @@ describe('findSearchNeighbors (Integration)', () => {
   beforeAll(async () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
-    ({ findSearchNeighbors, searchPosts } = await import('@/lib/search'));
+    ({ findSearchNeighbors, findGalleryNeighbors, searchPosts } = await import('@/lib/search'));
+    ({ findRotationNeighbors, seedToHexCursor } = await import('@/lib/random-order'));
   });
 
   afterAll(async () => {
@@ -99,5 +103,58 @@ describe('findSearchNeighbors (Integration)', () => {
     // No criteria at all, and a wildcard matching nothing
     expect(await findSearchNeighbors(anchor, [])).toEqual({ prevHash: null, nextHash: null });
     expect(await findSearchNeighbors(anchor, ['nomatch*'])).toEqual({ prevHash: null, nextHash: null });
+  });
+
+  describe('findGalleryNeighbors', () => {
+    it('follows the newest-first listing', async () => {
+      const a = await createPost(getTestPrisma(), { importedAt: at('2026-01-01T00:00:00Z') });
+      const b = await createPost(getTestPrisma(), { importedAt: at('2026-01-02T00:00:00Z') });
+      const c = await createPost(getTestPrisma(), { importedAt: at('2026-01-03T00:00:00Z') });
+
+      expect(await findGalleryNeighbors(b, 'newest')).toEqual({ prevHash: c.hash, nextHash: a.hash });
+    });
+
+    it('reverses for the oldest-first listing, breaking importedAt ties by id', async () => {
+      const shared = at('2026-01-01T00:00:00Z');
+      const a = await createPost(getTestPrisma(), { importedAt: shared });
+      const b = await createPost(getTestPrisma(), { importedAt: shared });
+      const c = await createPost(getTestPrisma(), { importedAt: shared });
+
+      // Ascending listing: a, b, c (by id at equal importedAt).
+      expect(await findGalleryNeighbors(b, 'oldest')).toEqual({ prevHash: a.hash, nextHash: c.hash });
+      expect(await findGalleryNeighbors(a, 'oldest')).toEqual({ prevHash: null, nextHash: b.hash });
+      expect(await findGalleryNeighbors(c, 'oldest')).toEqual({ prevHash: b.hash, nextHash: null });
+    });
+  });
+
+  describe('findRotationNeighbors', () => {
+    const SEED = 'abcd1234';
+
+    it('walks the seeded rotation, wrapping from the top of the hash space', async () => {
+      const cursor = seedToHexCursor(SEED, 64);
+      // Rotation listing: [cursor..max] ascending, then wrap to [min..cursor).
+      const high1 = 'f'.repeat(63) + '0';
+      const high2 = 'f'.repeat(63) + '1';
+      const low1 = '0'.repeat(63) + '1';
+      const low2 = '0'.repeat(63) + '2';
+      // The fixed seed's cursor sits strictly between the crafted hashes; if
+      // this ever fails the seed constant needs adjusting, not the assertions.
+      expect(low2 < cursor && cursor < high1).toBe(true);
+
+      for (const hash of [low1, low2, high1, high2]) {
+        await createPost(getTestPrisma(), { hash });
+      }
+
+      // Listing order: high1, high2, low1, low2.
+      expect(await findRotationNeighbors(high1, SEED)).toEqual({ prevHash: null, nextHash: high2 });
+      expect(await findRotationNeighbors(high2, SEED)).toEqual({ prevHash: high1, nextHash: low1 });
+      expect(await findRotationNeighbors(low1, SEED)).toEqual({ prevHash: high2, nextHash: low2 });
+      expect(await findRotationNeighbors(low2, SEED)).toEqual({ prevHash: low1, nextHash: null });
+    });
+
+    it('handles a single-post rotation', async () => {
+      const only = await createPost(getTestPrisma(), { hash: 'f'.repeat(64) });
+      expect(await findRotationNeighbors(only.hash, SEED)).toEqual({ prevHash: null, nextHash: null });
+    });
   });
 });
