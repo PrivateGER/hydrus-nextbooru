@@ -328,6 +328,9 @@ export function MangaReader({ groupId, title, pages, initialPage }: MangaReaderP
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!e.isPrimary || e.pointerType === "mouse") return;
+    // Original-size mode pans natively in both axes; a horizontal drag there
+    // is scrolling the oversized image, not a page-turn gesture.
+    if (fit === "original") return;
     const target = e.target as HTMLElement;
     if (target.closest("video, a, button, input")) return;
     swipeStartRef.current = { x: e.clientX, y: e.clientY };
@@ -411,7 +414,13 @@ export function MangaReader({ groupId, title, pages, initialPage }: MangaReaderP
   return (
     <div
       className="fixed inset-0 z-[60] flex flex-col bg-black text-zinc-100 select-none"
-      style={{ height: "100dvh", touchAction: "pan-y pinch-zoom" }}
+      style={{
+        height: "100dvh",
+        // Original-size mode needs horizontal touch panning to reach the full
+        // width of an oversized image (swipe paging is disabled there); the
+        // other modes reserve horizontal drags for swipe page-turns.
+        touchAction: fit === "original" ? "pan-x pan-y pinch-zoom" : "pan-y pinch-zoom",
+      }}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       onPointerCancel={() => (swipeStartRef.current = null)}

@@ -21,20 +21,24 @@ export function ReadGroupButton({ groupId, postCount }: ReadGroupButtonProps) {
 
   // Deferred like post-grid's layout restore: reading localStorage after
   // hydration avoids a server/client mismatch, and the timeout keeps the
-  // setState out of the synchronous effect body.
+  // setState out of the synchronous effect body. Always writes (progress or
+  // null) so a soft navigation to a group without saved progress can't keep
+  // showing the previous group's resume page.
   useEffect(() => {
     const progress = deserializeProgress(
       localStorage.getItem(progressKey(groupId)),
       postCount
     );
-    if (!progress || progress.page <= 1) return;
+    const nextResumePage = progress && progress.page > 1 ? progress.page : null;
     const timeout = window.setTimeout(() => {
-      setResumePage(progress.page);
+      setResumePage(nextResumePage);
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [groupId, postCount]);
 
-  if (postCount === 0) return null;
+  // Same threshold as the other reader entry points (groups listing,
+  // post-page filmstrips): a single-image group has nothing to page through.
+  if (postCount <= 1) return null;
 
   return (
     <div className="flex items-center gap-2">

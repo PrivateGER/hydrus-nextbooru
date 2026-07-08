@@ -39,15 +39,26 @@ describe('findSearchNeighbors (Integration)', () => {
 
   it('agrees with the searchPosts listing order, including importedAt ties', async () => {
     const shared = at('2026-01-01T00:00:00Z');
-    await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared });
-    await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared });
-    await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared });
+    const created = [
+      await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared }),
+      await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared }),
+      await createPostWithTags(getTestPrisma(), ['scenery'], { importedAt: shared }),
+    ];
 
     const listing = (await searchPosts(['scenery'], 1)).posts;
     expect(listing).toHaveLength(3);
 
+    // Anchor from the created post, NOT the listing row: searchPosts does not
+    // select importedAt, and Prisma silently drops undefined comparisons —
+    // an undefined anchor date would degrade the keyset to id-only and this
+    // test would no longer exercise the tie-break it claims to.
+    const anchor = created.find((p) => p.id === listing[1].id)!;
+
     // Walking neighbors from the middle post must reproduce the listing.
-    const neighbors = await findSearchNeighbors(listing[1], ['scenery']);
+    const neighbors = await findSearchNeighbors(
+      { id: anchor.id, importedAt: anchor.importedAt },
+      ['scenery']
+    );
     expect(neighbors).toEqual({ prevHash: listing[0].hash, nextHash: listing[2].hash });
   });
 
