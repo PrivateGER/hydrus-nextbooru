@@ -25,8 +25,12 @@ import {
   parseSearchContext,
   buildSearchPostUrl,
   searchContextBackUrl,
+  parseGalleryContext,
+  buildGalleryPostUrl,
+  galleryContextBackUrl,
 } from "@/lib/post-navigation";
-import { findSearchNeighbors } from "@/lib/search";
+import { findSearchNeighbors, findGalleryNeighbors } from "@/lib/search";
+import { findRotationNeighbors } from "@/lib/random-order";
 import { readerHref } from "@/lib/reader";
 import { BookOpenIcon } from "@heroicons/react/24/outline";
 
@@ -36,6 +40,8 @@ interface PostPageProps {
     in?: string | string[];
     ctx?: string | string[];
     tags?: string | string[];
+    sort?: string | string[];
+    seed?: string | string[];
     page?: string | string[];
   }>;
 }
@@ -172,8 +178,10 @@ async function getPost(hash: string) {
  * @returns The React element representing the post detail page.
  */
 export default async function PostPage({ params, searchParams }: PostPageProps) {
-  const [{ hash }, { in: inParam, ctx: ctxParam, tags: tagsParam, page: pageParam }] =
-    await Promise.all([params, searchParams]);
+  const [
+    { hash },
+    { in: inParam, ctx: ctxParam, tags: tagsParam, sort: sortParam, seed: seedParam, page: pageParam },
+  ] = await Promise.all([params, searchParams]);
 
   // Validate hash format (64 hex characters)
   if (!/^[a-fA-F0-9]{64}$/i.test(hash)) {
@@ -199,11 +207,16 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
 
   // Prev/next follow ONE deterministic context, carried on every navigation
   // URL so arrows keep following it across posts. Precedence:
-  // 1. A search listing (?ctx=search&tags=...): keyset neighbors within the
-  //    same query the user came from.
+  // 1. A listing the user came from — a search (?ctx=search&tags=...) or the
+  //    gallery (?ctx=gallery&sort=...): keyset/rotation neighbors within
+  //    that same listing.
   // 2. A group: the one named by ?in= when the post belongs to it, otherwise
   //    the best-ranked multi-post group.
   const searchContext = parseSearchContext(ctxParam, tagsParam, pageParam);
+  const galleryContext = searchContext
+    ? undefined
+    : parseGalleryContext(ctxParam, sortParam, seedParam, pageParam);
+  const hasListingContext = Boolean(searchContext || galleryContext);
   const navGroup = selectNavigationGroup(groups, parseGroupIdParam(inParam));
 
   let prevUrl: string | undefined;
@@ -221,6 +234,20 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
     }
     if (neighbors.nextHash) {
       nextUrl = buildSearchPostUrl(neighbors.nextHash, searchContext);
+    }
+  } else if (galleryContext) {
+    const neighbors =
+      galleryContext.sort === "random"
+        ? await findRotationNeighbors(post.hash, galleryContext.seed!)
+        : await findGalleryNeighbors(
+            { id: post.id, importedAt: post.importedAt },
+            galleryContext.sort
+          );
+    if (neighbors.prevHash) {
+      prevUrl = buildGalleryPostUrl(neighbors.prevHash, galleryContext);
+    }
+    if (neighbors.nextHash) {
+      nextUrl = buildGalleryPostUrl(neighbors.nextHash, galleryContext);
     }
   } else if (navGroup) {
     const currentIndex = navGroup.posts.findIndex((pg) => pg.post.hash === post.hash);
@@ -374,7 +401,7 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
 
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
           const ordinalInGroup = group.posts.findIndex((pg) => pg.post.hash === post.hash) + 1;
-          const isActiveNav = !searchContext && navGroup?.id === group.id;
+          const isActiveNav = !hasListingContext && navGroup?.id === group.id;
 
           return (
             <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -452,7 +479,10 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
               &larr; Back to results
             </Link>
           ) : (
-            <Link href="/" className="text-blue-600 hover:underline dark:text-blue-400">
+            <Link
+              href={galleryContext ? galleryContextBackUrl(galleryContext) : "/"}
+              className="text-blue-600 hover:underline dark:text-blue-400"
+            >
               &larr; Back to gallery
             </Link>
           )}

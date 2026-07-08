@@ -8,6 +8,10 @@ import {
   searchContextQuery,
   buildSearchPostUrl,
   searchContextBackUrl,
+  parseGalleryContext,
+  galleryContextQuery,
+  buildGalleryPostUrl,
+  galleryContextBackUrl,
 } from "./post-navigation";
 
 function group(
@@ -161,5 +165,70 @@ describe("search context URLs", () => {
   it("builds the back-to-results URL, returning to the original page", () => {
     expect(searchContextBackUrl(context)).toBe("/search?tags=blue_sky%2C-cat");
     expect(searchContextBackUrl({ tags: ["a"], page: 3 })).toBe("/search?tags=a&page=3");
+  });
+});
+
+describe("parseGalleryContext", () => {
+  it("parses the default gallery context", () => {
+    expect(parseGalleryContext("gallery", undefined, undefined)).toEqual({ sort: "newest" });
+  });
+
+  it("parses sort, seed, and page", () => {
+    expect(parseGalleryContext("gallery", "oldest", undefined, "3")).toEqual({
+      sort: "oldest",
+      page: 3,
+    });
+    expect(parseGalleryContext("gallery", "random", "abcd1234")).toEqual({
+      sort: "random",
+      seed: "abcd1234",
+    });
+  });
+
+  it("falls back to newest for unknown sorts and drops page 1", () => {
+    expect(parseGalleryContext("gallery", "bogus", undefined, "1")).toEqual({ sort: "newest" });
+  });
+
+  it("yields no context for random sort without a valid seed", () => {
+    expect(parseGalleryContext("gallery", "random", undefined)).toBeUndefined();
+    expect(parseGalleryContext("gallery", "random", "UPPERCASE")).toBeUndefined();
+    expect(parseGalleryContext("gallery", "random", ["abcd1234", "abcd1234"])).toBeUndefined();
+  });
+
+  it("rejects other ctx values", () => {
+    expect(parseGalleryContext("search", "newest", undefined)).toBeUndefined();
+    expect(parseGalleryContext(undefined, "newest", undefined)).toBeUndefined();
+  });
+});
+
+describe("gallery context URLs", () => {
+  it("omits defaults so the plain gallery yields just ctx=gallery", () => {
+    expect(galleryContextQuery({ sort: "newest" })).toBe("ctx=gallery");
+  });
+
+  it("round-trips through query encoding", () => {
+    const context = { sort: "random" as const, seed: "abcd1234", page: 3 };
+    const params = new URLSearchParams(galleryContextQuery(context));
+    expect(
+      parseGalleryContext(
+        params.get("ctx")!,
+        params.get("sort")!,
+        params.get("seed")!,
+        params.get("page")!
+      )
+    ).toEqual(context);
+  });
+
+  it("builds post URLs carrying the context", () => {
+    expect(buildGalleryPostUrl("abc", { sort: "oldest", page: 2 })).toBe(
+      "/post/abc?ctx=gallery&sort=oldest&page=2"
+    );
+  });
+
+  it("builds the back-to-gallery URL, mirroring the home page's param shape", () => {
+    expect(galleryContextBackUrl({ sort: "newest" })).toBe("/");
+    expect(galleryContextBackUrl({ sort: "oldest", page: 2 })).toBe("/?sort=oldest&page=2");
+    expect(galleryContextBackUrl({ sort: "random", seed: "abcd1234" })).toBe(
+      "/?sort=random&seed=abcd1234"
+    );
   });
 });

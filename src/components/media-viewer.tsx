@@ -249,7 +249,7 @@ function MediaViewerContent({
 
   return (
     <div
-      className="group relative inline-block rounded-lg bg-zinc-200 dark:bg-zinc-800 touch-pan-y"
+      className="vt-media-viewer group relative inline-block rounded-lg bg-zinc-200 dark:bg-zinc-800 touch-pan-y"
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}

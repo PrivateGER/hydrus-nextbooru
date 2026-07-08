@@ -668,7 +668,7 @@ export async function searchPosts(
   };
 }
 
-/** Prev/next hashes of a post within a tag-search result listing. */
+/** Prev/next hashes of a post within an ordered post listing. */
 export interface SearchNeighbors {
   /** Post shown before the anchor in the listing (toward page 1), if any. */
   prevHash: string | null;
@@ -676,16 +676,60 @@ export interface SearchNeighbors {
   nextHash: string | null;
 }
 
+/** An (importedAt, id) listing order: "desc" is newest-first. */
+type ListingDirection = "desc" | "asc";
+
+/**
+ * Two keyset lookups around the anchor's (importedAt, id) sort position in a
+ * filtered, direction-aware listing. Shared by search results (filtered,
+ * newest-first) and the gallery (unfiltered, either direction).
+ *
+ * The anchor itself does not need to match the where clause (e.g. its tag
+ * was removed since the listing was rendered) — neighbors are computed
+ * purely from its sort position, so navigation still lands on the adjacent
+ * matching posts.
+ */
+async function findKeysetNeighbors(
+  anchor: { id: number; importedAt: Date },
+  where: Prisma.PostWhereInput,
+  direction: ListingDirection
+): Promise<SearchNeighbors> {
+  // In listing order, "next" is further along the direction and "prev" is
+  // back toward page 1. For a desc listing, prev is the closest row GREATER
+  // than the anchor; asc mirrors it.
+  const towardPrev = direction === "desc" ? ("gt" as const) : ("lt" as const);
+  const towardNext = direction === "desc" ? ("lt" as const) : ("gt" as const);
+  const reverseOrder = direction === "desc" ? ("asc" as const) : ("desc" as const);
+
+  const neighbor = (op: "gt" | "lt", order: ListingDirection) =>
+    prisma.post.findFirst({
+      where: {
+        AND: [
+          where,
+          {
+            OR: [
+              { importedAt: { [op]: anchor.importedAt } },
+              { importedAt: anchor.importedAt, id: { [op]: anchor.id } },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ importedAt: order }, { id: order }],
+      select: { hash: true },
+    });
+
+  const [prev, next] = await Promise.all([
+    neighbor(towardPrev, reverseOrder),
+    neighbor(towardNext, direction),
+  ]);
+
+  return { prevHash: prev?.hash ?? null, nextHash: next?.hash ?? null };
+}
+
 /**
  * Find a post's immediate neighbors within a tag-search listing without
- * paginating through it: two keyset lookups around the anchor's
- * (importedAt, id) sort position, using the same where clause and total
- * order as `searchPosts`.
- *
- * The anchor itself does not need to match the query (e.g. its tag was
- * removed since the listing was rendered) — neighbors are computed purely
- * from its sort position, so navigation still lands on the adjacent
- * matching posts.
+ * paginating through it, using the same where clause and total order as
+ * `searchPosts`.
  */
 export async function findSearchNeighbors(
   anchor: { id: number; importedAt: Date },
@@ -696,42 +740,19 @@ export async function findSearchNeighbors(
     return { prevHash: null, nextHash: null };
   }
 
-  // The listing sorts by (importedAt desc, id desc); "prev" is the closest
-  // post greater than the anchor in that order, "next" the closest smaller.
-  const [prev, next] = await Promise.all([
-    prisma.post.findFirst({
-      where: {
-        AND: [
-          built.where,
-          {
-            OR: [
-              { importedAt: { gt: anchor.importedAt } },
-              { importedAt: anchor.importedAt, id: { gt: anchor.id } },
-            ],
-          },
-        ],
-      },
-      orderBy: [{ importedAt: "asc" }, { id: "asc" }],
-      select: { hash: true },
-    }),
-    prisma.post.findFirst({
-      where: {
-        AND: [
-          built.where,
-          {
-            OR: [
-              { importedAt: { lt: anchor.importedAt } },
-              { importedAt: anchor.importedAt, id: { lt: anchor.id } },
-            ],
-          },
-        ],
-      },
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { hash: true },
-    }),
-  ]);
+  return findKeysetNeighbors(anchor, built.where, "desc");
+}
 
-  return { prevHash: prev?.hash ?? null, nextHash: next?.hash ?? null };
+/**
+ * Find a post's immediate neighbors within the gallery listing (all posts
+ * ordered by import time). Random sort is handled separately by
+ * `findRotationNeighbors` in lib/random-order.ts.
+ */
+export async function findGalleryNeighbors(
+  anchor: { id: number; importedAt: Date },
+  sort: "newest" | "oldest"
+): Promise<SearchNeighbors> {
+  return findKeysetNeighbors(anchor, {}, sort === "newest" ? "desc" : "asc");
 }
 
 /** Cap on co-occurring tags returned for the search drill-down sidebar */
