@@ -16,7 +16,10 @@
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
-import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
+import {
+  type EmbeddedRelatedPost,
+  findRelatedPostsByEmbeddingForPosts,
+} from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
@@ -24,7 +27,6 @@ import {
   toEmbeddingConfig,
   type EmbeddingConfig,
 } from "@/lib/embeddings/settings";
-import { findRelatedPostsByEmbedding } from "@/lib/embeddings/store";
 
 export interface FeedConfig {
   /** Most recent favorites always used as seeds (current taste). */
@@ -626,45 +628,35 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
 /**
  * Image-embedding nearest neighbors for every seed, keyed by seed post id.
  *
- * These use the pgvector `vchordrq` ANN index and are cheap individually; the
- * flat Promise.all is bounded by Prisma's connection pool (single-user
- * deployment). Returns an empty map when embeddings are unconfigured. Each
- * seed degrades to an empty neighborhood on failure rather than failing the
- * whole build.
+ * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
+ * avoid per-seed round trips, small enough to keep Postgres parallelism across
+ * chunks. Returns an empty map when embeddings are unconfigured. Missing source
+ * embeddings are absent from the map, and chunk-level failures degrade to empty
+ * neighborhoods rather than failing the whole build.
  */
 async function fetchEmbeddingNeighborhoods(
   seeds: FeedSeed[],
   embeddingConfig: EmbeddingConfig | null,
   config: FeedConfig
 ): Promise<Map<number, EmbeddedRelatedPost[]>> {
-  const bySeed = new Map<number, EmbeddedRelatedPost[]>();
-  if (!embeddingConfig || seeds.length === 0) return bySeed;
+  if (!embeddingConfig || seeds.length === 0) return new Map();
 
-  const results = await Promise.all(
-    seeds.map((seed) =>
-      findRelatedPostsByEmbedding({
-        hash: seed.hash,
-        config: embeddingConfig,
-        limit: config.neighborsPerSeed,
-        minScore: config.minEmbeddingScore,
-      })
-        .catch((error): EmbeddedRelatedPost[] => {
-          console.error(`Feed: embedding neighbors failed for seed ${seed.hash}:`, error);
-          return [];
-        })
-        .then((neighbors) => [seed.postId, neighbors] as const)
-    )
-  );
-
-  for (const [postId, neighbors] of results) bySeed.set(postId, neighbors);
-  return bySeed;
+  return findRelatedPostsByEmbeddingForPosts({
+    postIds: seeds.map((seed) => seed.postId),
+    config: embeddingConfig,
+    limit: config.neighborsPerSeed,
+    minScore: config.minEmbeddingScore,
+  }).catch((error): Map<number, EmbeddedRelatedPost[]> => {
+    console.error("Feed: batched embedding neighbors failed:", error);
+    return new Map();
+  });
 }
 
 /**
  * Assemble per-seed candidate neighborhoods from the two engines. Tag-IDF
  * neighborhoods are computed for ALL seeds in one batched query (see
- * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched
- * per seed. Missing entries degrade to empty.
+ * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched in
+ * chunked batches. Missing entries degrade to empty.
  */
 function assembleContributions(
   seeds: FeedSeed[],
@@ -812,8 +804,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   // Favorites and views are positive (boost neighbors); dismissals are negative
   // (suppress neighbors). All three feed the same batched tag compute and
-  // per-seed embedding fetch, so extra signals add seeds without multiplying
-  // query count. Seed sets are disjoint by construction (views exclude
+  // chunked embedding fetch, so extra signals add seeds without multiplying
+  // query count per seed. Seed sets are disjoint by construction (views exclude
   // favorited/dismissed; favorites and dismissals are mutually exclusive).
   const positiveSeeds = [...favoriteSeeds, ...viewSeeds];
   const allSeeds = [...positiveSeeds, ...negativeSeeds];
@@ -822,8 +814,8 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const embeddingConfig = await resolveEmbeddingConfig();
 
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
-  // neighborhoods are fetched per seed (cheap via the ANN index). Prisma queues
-  // work beyond its pool size, so the flat fan-out is safe (single-user).
+  // neighborhoods are fetched in bounded chunks so the ANN work can use several
+  // backends without one round trip per seed.
   const [seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
@@ -852,11 +844,10 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   ]);
 
   // Exact embedding availability for the merge's per-pair achievable-weight
-  // normalization: which of the seeds AND candidates actually have a stored
-  // embedding under the active config (mirrors findRelatedPostsByEmbedding's
-  // source filter). One batched indexed read over ~seeds + all distinct
-  // candidates; skipped entirely when embeddings are unconfigured (null makes
-  // the normalization a uniform, ranking-neutral rescale).
+  // normalization: which seeds and candidates actually have usable embedding
+  // evidence under the active config. Seed availability is gated by
+  // embeddingBySeed.has(seedId), so a failed kNN chunk degrades like an
+  // unavailable embedding rather than diluting tag-only scores.
   let embeddedPostIds: ReadonlySet<number> | null = null;
   if (embeddingConfig) {
     const probeIds = new Set<number>(allSeedIds);
@@ -880,7 +871,11 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
             select: { postId: true },
           })
         : [];
-    embeddedPostIds = new Set(embeddedRows.map((row) => row.postId));
+    const availableEmbeddingPostIds = new Set(embeddedRows.map((row) => row.postId));
+    for (const seedId of allSeedIds) {
+      if (!embeddingBySeed.has(seedId)) availableEmbeddingPostIds.delete(seedId);
+    }
+    embeddedPostIds = availableEmbeddingPostIds;
   }
 
   const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);

@@ -8,7 +8,12 @@ import {
 } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
-import { seedLargeDataset, getRandomTagNames } from '../perf/seeders';
+import {
+  PERF_EMBEDDING_CONFIG,
+  getRandomTagNames,
+  seedEmbeddings,
+  seedLargeDataset,
+} from '../perf/seeders';
 import {
   startQueryCapture,
   stopQueryCapture,
@@ -73,7 +78,7 @@ const QUERY_BUDGETS = {
   // The tag side stays O(1) as signals scale — dismissals (negative seeds) and
   // views (positive seeds) flow through the same batched compute — but note the
   // EMBEDDING path is NOT exercised here: when embeddings are configured,
-  // fetchEmbeddingNeighborhoods issues one k-NN query PER SEED (O(seeds)) plus
+  // fetchEmbeddingNeighborhoods issues one k-NN query per 16-seed chunk plus
   // one batched embedding-availability read over seeds+candidates (for the
   // merge's per-pair renormalization), which this favorites-only,
   // embedding-less fixture never triggers. A non-empty
@@ -83,6 +88,11 @@ const QUERY_BUDGETS = {
   // feed is empty. The budget is a loose ceiling: batching left the real
   // count on this path well under it.
   feed: 21,
+  // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
+  // embedding neighborhood phase should add a small constant number of
+  // statements (two k-NN chunks + one availability read), not one query per
+  // seed.
+  feedWithEmbeddings: 26,
   // resolvePostForMutation's getPostIdByHash is the only pool-captured query
   // for PUT: setFavorite/setDismissal run in an interactive transaction whose
   // statements (advisory lock, delete-opposite, upsert-self) run on a
@@ -101,6 +111,7 @@ const QUERY_BUDGETS = {
 // Fixed favorite count for the feed guard: small and < recentSeedCount so the
 // build fans out deterministically over exactly this many seeds.
 const FEED_GUARD_SEEDS = 3;
+const FEED_EMBEDDING_GUARD_SEEDS = 17;
 
 // Rate limits are disabled for this suite via DISABLE_RATE_LIMITS in
 // vitest.guards.config.ts.
@@ -136,6 +147,7 @@ describe('Query count guards', () => {
     // but rows must exist so N+1 patterns actually multiply.
     await seedLargeDataset(prisma, { posts: 300, uniqueTags: 150, tagsPerPost: 8 });
     await recalculateTagStats();
+    await seedEmbeddings(prisma, { config: PERF_EMBEDDING_CONFIG });
   });
 
   afterAll(async () => {
@@ -248,6 +260,52 @@ describe('Query count guards', () => {
 
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feed);
+  });
+
+  it('feed build with embeddings stays within chunked budget for more than one chunk', async () => {
+    const prisma = getTestPrisma();
+    const seeds = await prisma.post.findMany({
+      orderBy: { id: 'asc' },
+      take: FEED_EMBEDDING_GUARD_SEEDS,
+      select: { id: true },
+    });
+    const seedIds = seeds.map((s) => s.id);
+
+    await prisma.favorite.deleteMany();
+    await prisma.feedDismissal.deleteMany();
+    await prisma.postRecommendation.deleteMany({ where: { postId: { in: seedIds } } });
+    await prisma.settings.deleteMany({
+      where: {
+        key: {
+          in: [
+            'openrouter.baseUrl',
+            'openrouter.embedding.model',
+            'openrouter.embedding.dimensions',
+            'openrouter.embedding.imageMaxResolution',
+          ],
+        },
+      },
+    });
+    await prisma.settings.createMany({
+      data: [
+        { key: 'openrouter.baseUrl', value: PERF_EMBEDDING_CONFIG.baseUrl },
+        { key: 'openrouter.embedding.model', value: PERF_EMBEDDING_CONFIG.model },
+        { key: 'openrouter.embedding.dimensions', value: String(PERF_EMBEDDING_CONFIG.dimensions) },
+        {
+          key: 'openrouter.embedding.imageMaxResolution',
+          value: String(PERF_EMBEDDING_CONFIG.imageMaxResolution),
+        },
+      ],
+    });
+    await prisma.favorite.createMany({ data: seedIds.map((postId) => ({ postId })) });
+
+    const count = await countQueries('feed (cold, embeddings)', () =>
+      feedGET(apiRequest('http://localhost/api/feed'))
+    );
+
+    expect(seedIds).toHaveLength(17);
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithEmbeddings);
   });
 
   it('favorite PUT stays within budget', async () => {
