@@ -1249,9 +1249,10 @@ async function isSyncCancelled(): Promise<boolean> {
 }
 
 /**
- * Recalculate postCount and idfWeight for all tags.
+ * Recalculate postCount and idfWeight for all tags, then each post's
+ * tag-IDF vector length (tagIdfNorm, the cosine denominator).
  * Called after sync to ensure counts are accurate for efficient sorting
- * and IDF weights are fresh for recommendation computation.
+ * and IDF weights + norms are fresh for recommendation computation.
  */
 async function recalculateTagCounts(): Promise<void> {
   // First update postCount
@@ -1273,6 +1274,22 @@ async function recalculateTagCounts(): Promise<void> {
       UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0
     `;
   }
+
+  // Refresh each post's tag-IDF vector length. Must run after the idfWeight
+  // updates above; a post with no tags gets norm 0 (it can never be a
+  // tag-similarity candidate, and the cosine treats norm 0 as "stale: score
+  // 0" rather than dividing by zero).
+  await prisma.$executeRaw`
+    UPDATE "Post" p SET "tagIdfNorm" = COALESCE(
+      (
+        SELECT SQRT(SUM(t."idfWeight" * t."idfWeight"))
+        FROM "PostTag" pt
+        JOIN "Tag" t ON t.id = pt."tagId"
+        WHERE pt."postId" = p.id
+      ),
+      0
+    )
+  `;
 }
 
 /**

@@ -8,6 +8,8 @@ import {
   mulberry32,
   mergeSeedCandidates,
   dedupeRankedByGroup,
+  collapseSignalsByGroup,
+  applyViewedPenalty,
   type FavoriteSeedInput,
   type DismissalSeedInput,
   type ViewSeedInput,
@@ -278,6 +280,8 @@ describe("mergeSeedCandidates", () => {
     hash: postId.toString(16).padStart(64, "0"),
     weight,
   });
+  /** Posts (seeds and candidates) that have a stored embedding. */
+  const embedded = (...postIds: number[]) => new Set(postIds);
 
   it("accumulates scores for candidates reached from multiple seeds", () => {
     const contributions: SeedContribution[] = [
@@ -285,7 +289,7 @@ describe("mergeSeedCandidates", () => {
       { seed: seed(2, 1), embedding: [candidate(100, 0.6)], idf: [] },
       { seed: seed(3, 1), embedding: [candidate(200, 0.9)], idf: [] },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 2, 3, 100, 200));
 
     const convergent = merged.find((p) => p.id === 100)!;
     const single = merged.find((p) => p.id === 200)!;
@@ -294,27 +298,94 @@ describe("mergeSeedCandidates", () => {
     expect(merged[0].id).toBe(100); // convergent evidence ranks first
   });
 
-  it("normalizes IDF scores per seed and applies the idf weight", () => {
+  it("blends IDF cosine scores directly at the idf weight (no per-seed max normalization)", () => {
+    // Tag scores are cosines in [0,1] (migration 20260707120000): a seed whose
+    // best tag match is weak (0.2) must NOT be inflated to look like a seed
+    // with a near-duplicate best match — scores blend as-is.
+    const contributions: SeedContribution[] = [
+      {
+        seed: seed(1, 1),
+        embedding: [],
+        idf: [candidate(100, 0.8), candidate(200, 0.2)],
+      },
+    ];
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100, 200));
+    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 0.8, 10);
+    expect(merged.find((p) => p.id === 200)!.score).toBeCloseTo(0.3 * 0.2, 10);
+  });
+
+  it("clamps out-of-range IDF scores defensively", () => {
     const contributions: SeedContribution[] = [
       {
         seed: seed(1, 1),
         embedding: [],
         idf: [
-          { ...candidate(100, 0), score: 40 },
-          { ...candidate(200, 0), score: 10 },
+          { ...candidate(100, 0), score: 40 }, // pre-cosine cache row / bad data
+          { ...candidate(200, 0), score: -1 },
         ],
       },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
-    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 1.0, 10);
-    expect(merged.find((p) => p.id === 200)!.score).toBeCloseTo(0.3 * 0.25, 10);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100, 200));
+    expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.3 * 1, 10);
+    expect(merged.find((p) => p.id === 200)).toBeUndefined(); // clamped to 0 → no contribution
+  });
+
+  it("renormalizes embedding-less candidates by the tag-only achievable weight", () => {
+    // Identical evidence from an embedded seed: one embedded candidate, one
+    // embedding-less candidate (video / not yet embedded), each reached only
+    // through the tag engine with the same cosine. The embedding-less pair
+    // can NEVER earn embedding contributions, so it divides by idfWeight
+    // alone instead of the full channel weight.
+    const video = { ...candidate(200, 0.6), mimeType: "video/mp4" };
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [], idf: [candidate(100, 0.6), video] },
+    ];
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100));
+    const image = merged.find((p) => p.id === 100)!;
+    const clip = merged.find((p) => p.id === 200)!;
+    expect(image.score).toBeCloseTo((0.3 * 0.6) / (0.3 + 0.7), 10);
+    expect(clip.score).toBeCloseTo((0.3 * 0.6) / 0.3, 10);
+    expect(clip.score).toBeGreaterThan(image.score); // tag-only evidence, full channel
+  });
+
+  it("treats a pair as tag-only when the SEED lacks an embedding", () => {
+    // An embedded image candidate reached only through an embedding-less
+    // seed's tag similarity: that seed could never have produced embedding
+    // evidence, so the pair divides by idfWeight — identical to a video
+    // candidate with the same cosine, NOT penalized by the full channel
+    // weight just because another seed in the feed has embeddings.
+    const video = { ...candidate(200, 0.6), mimeType: "video/mp4" };
+    const contributions: SeedContribution[] = [
+      { seed: seed(1, 1), embedding: [], idf: [candidate(100, 0.6), video] },
+    ];
+    // Candidate 100 is embedded, but seed 1 is not.
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(100));
+    const image = merged.find((p) => p.id === 100)!;
+    const clip = merged.find((p) => p.id === 200)!;
+    expect(image.score).toBeCloseTo((0.3 * 0.6) / 0.3, 10);
+    expect(image.score).toBeCloseTo(clip.score, 10);
+  });
+
+  it("rescales uniformly (ranking-neutral) when embeddings are inactive", () => {
+    const contributions: SeedContribution[] = [
+      {
+        seed: seed(1, 1),
+        embedding: [],
+        idf: [candidate(100, 0.9), { ...candidate(200, 0.3), mimeType: "video/mp4" }],
+      },
+    ];
+    const merged = mergeSeedCandidates(contributions, new Set(), config, null);
+    // Every pair is tag-only → all divide by idfWeight; order by cosine.
+    expect(merged.map((p) => p.id)).toEqual([100, 200]);
+    expect(merged[0].score).toBeCloseTo(0.9, 10);
+    expect(merged[1].score).toBeCloseTo(0.3, 10);
   });
 
   it("applies seed recency weights", () => {
     const contributions: SeedContribution[] = [
       { seed: seed(1, 0.5), embedding: [candidate(100, 1)], idf: [] },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), config);
+    const merged = mergeSeedCandidates(contributions, new Set(), config, embedded(1, 100));
     expect(merged[0].score).toBeCloseTo(0.5 * 0.7 * 1, 10);
   });
 
@@ -344,10 +415,12 @@ describe("mergeSeedCandidates", () => {
       { seed: seed(1, 1), embedding: [candidate(100, 1)], idf: [], polarity: 1 },
       { seed: seed(2, 1), embedding: [candidate(100, 0.5)], idf: [], polarity: -1 },
     ];
-    const merged = mergeSeedCandidates(contributions, new Set(), {
-      ...config,
-      negativeStrength: 0.8,
-    });
+    const merged = mergeSeedCandidates(
+      contributions,
+      new Set(),
+      { ...config, negativeStrength: 0.8 },
+      embedded(1, 2, 100)
+    );
     // +0.7*1  -  0.8*0.7*0.5  = 0.7 - 0.28 = 0.42
     expect(merged.find((p) => p.id === 100)!.score).toBeCloseTo(0.42, 10);
   });
@@ -436,5 +509,123 @@ describe("dedupeRankedByGroup", () => {
     // 2 is ungrouped, 3's group 30 is fresh → all three survive.
     const result = dedupeRankedByGroup(posts, groups);
     expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("collapseSignalsByGroup", () => {
+  const signal = (postId: number) => ({ postId });
+
+  it("keeps everything when nothing is grouped", () => {
+    const signals = [signal(1), signal(2), signal(3)];
+    expect(collapseSignalsByGroup(signals, new Map())).toEqual(signals);
+  });
+
+  it("collapses a multi-page set to its first (newest) member", () => {
+    // Signals arrive newest-first; pages 1-3 of one set + an ungrouped post.
+    const signals = [signal(1), signal(2), signal(3), signal(4)];
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [2, [10]],
+      [3, [10]],
+    ]);
+    expect(collapseSignalsByGroup(signals, groups).map((s) => s.postId)).toEqual([1, 4]);
+  });
+
+  it("drops a signal when ANY of its groups was already claimed", () => {
+    const signals = [signal(1), signal(2)];
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [2, [20, 10]],
+    ]);
+    expect(collapseSignalsByGroup(signals, groups).map((s) => s.postId)).toEqual([1]);
+  });
+
+  it("threads one seen-set across signal lists so later lists defer to earlier ones", () => {
+    // A favorite claims group 10; a viewed sibling page of the same set is
+    // redundant with that favorite seed and collapses away.
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [7, [10]],
+    ]);
+    const seen = new Set<number>();
+    const favorites = collapseSignalsByGroup([signal(1)], groups, seen);
+    const views = collapseSignalsByGroup([signal(7), signal(8)], groups, seen);
+    expect(favorites.map((s) => s.postId)).toEqual([1]);
+    expect(views.map((s) => s.postId)).toEqual([8]);
+  });
+
+  it("keeps signals collapsed with independent seen-sets separate (polarity isolation)", () => {
+    // A dismissal inside a favorited set keeps its own (negative) seed.
+    const groups = new Map<number, number[]>([
+      [1, [10]],
+      [7, [10]],
+    ]);
+    const favorites = collapseSignalsByGroup([signal(1)], groups);
+    const dismissals = collapseSignalsByGroup([signal(7)], groups);
+    expect(favorites.map((s) => s.postId)).toEqual([1]);
+    expect(dismissals.map((s) => s.postId)).toEqual([7]);
+  });
+
+  it("preserves input order and extra fields", () => {
+    const signals = [
+      { postId: 5, weightMarker: "a" },
+      { postId: 6, weightMarker: "b" },
+    ];
+    const result = collapseSignalsByGroup(signals, new Map());
+    expect(result).toEqual(signals);
+  });
+});
+
+describe("applyViewedPenalty", () => {
+  const NOW_ = new Date("2026-07-03T00:00:00Z");
+  const post = (id: number, score: number): FeedPost => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width: 100,
+    height: 100,
+    blurhash: null,
+    mimeType: "image/png",
+    score,
+  });
+  const viewedAt = (ageDays: number) => new Date(NOW_.getTime() - ageDays * DAY_MS);
+
+  it("leaves unviewed posts untouched", () => {
+    const posts = [post(1, 0.9), post(2, 0.8)];
+    const result = applyViewedPenalty(posts, new Map(), NOW_, FEED_CONFIG);
+    expect(result).toEqual(posts);
+  });
+
+  it("scales a freshly viewed post down to the penalty floor and re-ranks", () => {
+    const posts = [post(1, 0.9), post(2, 0.5)];
+    const result = applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, FEED_CONFIG);
+    const viewed = result.find((p) => p.id === 1)!;
+    expect(viewed.score).toBeCloseTo(0.9 * FEED_CONFIG.viewedCandidatePenaltyFloor, 10);
+    // 0.9 * 0.3 = 0.27 < 0.5 → the unviewed post now ranks first.
+    expect(result.map((p) => p.id)).toEqual([2, 1]);
+  });
+
+  it("relaxes the penalty back toward 1 as the view ages", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewRecencyHalfLifeDays: 30 };
+    const posts = [post(1, 1)];
+    const fresh = applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, config)[0];
+    const halfLife = applyViewedPenalty(posts, new Map([[1, viewedAt(30)]]), NOW_, config)[0];
+    const ancient = applyViewedPenalty(posts, new Map([[1, viewedAt(3000)]]), NOW_, config)[0];
+    // floor 0.3: fresh → 0.3; one half-life → 1 - 0.7*0.5 = 0.65; ancient → ~1.
+    expect(fresh.score).toBeCloseTo(0.3, 10);
+    expect(halfLife.score).toBeCloseTo(0.65, 10);
+    expect(ancient.score).toBeGreaterThan(0.99);
+  });
+
+  it("is disabled entirely at floor >= 1", () => {
+    const config: FeedConfig = { ...FEED_CONFIG, viewedCandidatePenaltyFloor: 1 };
+    const posts = [post(1, 0.9)];
+    const result = applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, config);
+    expect(result).toBe(posts); // same reference: no-op
+  });
+
+  it("does not mutate the input posts", () => {
+    const posts = [post(1, 0.9)];
+    applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, FEED_CONFIG);
+    expect(posts[0].score).toBe(0.9);
   });
 });

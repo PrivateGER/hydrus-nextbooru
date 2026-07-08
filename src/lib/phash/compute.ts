@@ -1,18 +1,8 @@
 import sharp from "sharp";
 import { phashLog } from "@/lib/logger";
 
-/**
- * Image MIME types that Sharp can process for pHash computation.
- * SVG is excluded — rasterization is resolution-dependent, producing inconsistent hashes.
- */
-export const PHASH_SUPPORTED_MIMES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/avif",
-  "image/tiff",
-]);
+// Re-exported from the sharp-free module for existing importers.
+export { PHASH_SUPPORTED_MIMES } from "@/lib/phash/mimes";
 
 // =============================================================================
 // DCT Coefficient Matrix (pre-computed at module load)

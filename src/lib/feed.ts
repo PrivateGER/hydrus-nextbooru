@@ -2,13 +2,17 @@
  * "For You" feed engine.
  *
  * Multi-seed k-NN aggregation: each favorited post seeds two candidate
- * neighborhoods — image-embedding nearest neighbors (pgvector) and
- * IDF-weighted tag similarity (the existing PostRecommendation engine).
- * Candidates are merged with recency-decayed seed weights; convergent
- * evidence (a candidate reached from several seeds) accumulates score.
+ * neighborhoods — image-embedding nearest neighbors (pgvector) and the
+ * IDF-weighted tag COSINE similarity (the PostRecommendation engine, both
+ * scores in [0,1]). Candidates are merged with recency-decayed seed weights;
+ * convergent evidence (a candidate reached from several seeds) accumulates
+ * score, each contribution renormalized by the engine weight its
+ * seed/candidate pair could actually earn (an embedding-less post on either
+ * end makes the pair tag-only). Taste signals collapse to one seed per group,
+ * and already-viewed candidates are downweighted with a decaying penalty.
  *
- * The pure functions (seed selection, score merging) live at the top and
- * are unit-tested; DB/build plumbing follows.
+ * The pure functions (seed selection, group collapse, score merging, viewed
+ * penalty) live at the top and are unit-tested; DB/build plumbing follows.
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
@@ -83,6 +87,14 @@ export interface FeedConfig {
    * the 20th.
    */
   viewCountSaturation: number;
+  /**
+   * Residual score multiplier for a candidate the user JUST viewed. A viewed
+   * candidate's merged score is scaled by a factor that starts at this floor
+   * for a fresh view and decays back to 1 as the view ages (at
+   * viewRecencyHalfLifeDays), so the feed stops re-serving what the user
+   * already opened without permanently burying it. 1 disables the penalty.
+   */
+  viewedCandidatePenaltyFloor: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
@@ -104,6 +116,7 @@ export const FEED_CONFIG: FeedConfig = {
   viewRecencyHalfLifeDays: 30,
   viewWeightCap: 0.35,
   viewCountSaturation: 8,
+  viewedCandidatePenaltyFloor: 0.3,
   maxFeedSize: 500,
 };
 
@@ -155,6 +168,19 @@ export interface SeedContribution {
 }
 
 const DAY_MS = 86_400_000;
+
+/**
+ * Over-fetch factor for the bounded seed-signal reads (recent views and
+ * dismissals). Group collapse runs AFTER the fetch, so fetching exactly
+ * seed-count rows would let one freshly-viewed/dismissed multi-page set
+ * collapse the whole window into a single seed while older unrelated signals
+ * were never fetched. Fetching a few multiples keeps the window meaningful
+ * even when sets dominate the newest rows; the seed selectors still cap the
+ * final seed counts (selectViewSeeds / selectNegativeSeeds slice to their
+ * configured counts), so this only widens the candidate window — reads stay
+ * bounded and index-served. Favorites are unaffected (loaded in full).
+ */
+const SEED_COLLAPSE_OVERFETCH = 4;
 
 /**
  * Time-bucket width for the seed sampler's PRNG seed. Builds within the same
@@ -221,6 +247,46 @@ function sampleWeighted(
     pool.splice(picked, 1);
   }
   return picks;
+}
+
+/**
+ * Collapse a taste-signal list (favorites / views / dismissals) to one
+ * representative per group BEFORE seed selection.
+ *
+ * Without this, favoriting a 30-page Pixiv set puts up to 30 near-identical
+ * posts into the recent-seed slots — each with full weight and an essentially
+ * identical neighborhood — so a single set contributes ~30x convergent
+ * evidence and monopolizes the feed. Candidate-side group dedup cannot fix
+ * that: the ballot box is stuffed at the seed level.
+ *
+ * Walking in the given order (callers pass newest-first, so the newest member
+ * represents the group), a signal is dropped when ANY of its groups was
+ * already claimed by an earlier kept signal. Ungrouped signals always pass.
+ *
+ * `seenGroups` is mutated so callers can thread one set through several
+ * signal lists of the SAME polarity (favorites first, then views: a viewed
+ * sibling page of a favorited set is redundant with the favorite seed).
+ * Negative signals must use their own set — a dismissal of one page of an
+ * otherwise-liked set is an explicit correction and must not be silenced by
+ * the favorite having claimed the group.
+ */
+export function collapseSignalsByGroup<T extends { postId: number }>(
+  signals: readonly T[],
+  groupIdsByPostId: ReadonlyMap<number, number[]>,
+  seenGroups: Set<number> = new Set()
+): T[] {
+  const kept: T[] = [];
+  for (const signal of signals) {
+    const groupIds = groupIdsByPostId.get(signal.postId);
+    if (!groupIds || groupIds.length === 0) {
+      kept.push(signal);
+      continue;
+    }
+    if (groupIds.some((id) => seenGroups.has(id))) continue;
+    for (const id of groupIds) seenGroups.add(id);
+    kept.push(signal);
+  }
+  return kept;
 }
 
 /**
@@ -374,21 +440,40 @@ export function selectViewSeeds(
 /**
  * Merge per-seed candidate neighborhoods into one ranked list.
  *
- * Embedding scores are cosine similarities already in [0,1] (clamped
- * defensively). IDF scores are unbounded, so they are normalized per seed by
- * that seed's maximum (best tag-similar candidate -> 1). Each candidate's
- * contribution is seedWeight * (engineWeight * normalizedScore); candidates
- * reached from several seeds accumulate.
+ * Both engines now emit cosine similarities in [0,1] (clamped defensively):
+ * embedding cosine, and the IDF-weighted tag cosine (migration
+ * 20260707120000). Tag scores are therefore blended DIRECTLY — the old
+ * per-seed max normalization (which inflated every seed's best tag match to
+ * 1.0, making a barely-related best match look like a near-duplicate) is
+ * gone. Each candidate's contribution is seedWeight * engineWeight * score;
+ * candidates reached from several seeds accumulate.
  *
  * Negative seeds (polarity -1, from dismissals) subtract their contribution
  * scaled by `negativeStrength`, so a candidate near a disliked post loses
  * score. Contributions sum regardless of sign; a candidate whose net score
  * lands at or below zero — dominated by dislikes — is dropped from the feed.
+ *
+ * Each contribution is renormalized by the engine weight its (seed,
+ * candidate) PAIR could possibly have earned: the embedding channel is live
+ * only when both the seed and the candidate have a stored embedding
+ * (`embeddedPostIds`), so a tag-only contribution over a pair with no
+ * possible embedding evidence — video or unembedded post on EITHER end —
+ * divides by idfWeight alone instead of idfWeight + embeddingWeight.
+ * Without this, such posts compete for feed slots with a hard ~(idfWeight)
+ * ceiling against fully-embedded pairs' 1.0 — a systematic media-type /
+ * embedding-coverage bias unrelated to relevance. Normalizing per pair (not
+ * per candidate from a global flag) matters in mixed feeds: an image reached
+ * only through an embedding-less seed's tag similarity must not be penalized
+ * for embedding evidence that seed could never produce. When
+ * `embeddedPostIds` is null/empty (embeddings unconfigured or store empty)
+ * every pair is tag-only and the renormalization is a uniform rescale
+ * (ranking unchanged).
  */
 export function mergeSeedCandidates(
   contributions: SeedContribution[],
   excludedPostIds: ReadonlySet<number>,
-  config: FeedConfig = FEED_CONFIG
+  config: FeedConfig = FEED_CONFIG,
+  embeddedPostIds: ReadonlySet<number> | null = null
 ): FeedPost[] {
   const byId = new Map<number, FeedPost>();
 
@@ -418,16 +503,39 @@ export function mergeSeedCandidates(
     // the feed without steamrolling the positive taste that generated it.
     const strength = polarity < 0 ? -config.negativeStrength : 1;
 
+    // The embedding channel is live for a (seed, candidate) PAIR only when
+    // BOTH ends have a stored embedding — findRelatedPostsByEmbedding returns
+    // nothing for an embedding-less seed no matter the candidate, and an
+    // embedding-less candidate can appear in no seed's k-NN results. Each
+    // contribution divides by ITS pair's achievable weight, so normalization
+    // is per contribution and cross-seed convergence still sums untouched.
+    const seedEmbedded = embeddedPostIds?.has(seed.postId) ?? false;
+    const achievableFor = (candidateId: number): number => {
+      const pairEmbedded =
+        seedEmbedded && (embeddedPostIds?.has(candidateId) ?? false);
+      const achievable =
+        config.idfWeight + (pairEmbedded ? config.embeddingWeight : 0);
+      // Degenerate configs (idfWeight 0 without embeddings) fall back to the
+      // raw contribution rather than dividing by zero.
+      return achievable > 0 ? achievable : 1;
+    };
+
     for (const neighbor of embedding) {
       const similarity = Math.max(0, Math.min(1, neighbor.score));
-      add(neighbor, strength * seed.weight * config.embeddingWeight * similarity);
+      add(
+        neighbor,
+        (strength * seed.weight * config.embeddingWeight * similarity) /
+          achievableFor(neighbor.id)
+      );
     }
 
-    const maxIdf = idf.reduce((max, rec) => Math.max(max, rec.score), 0);
-    if (maxIdf > 0) {
-      for (const rec of idf) {
-        add(rec, strength * seed.weight * config.idfWeight * (rec.score / maxIdf));
-      }
+    for (const rec of idf) {
+      const similarity = Math.max(0, Math.min(1, rec.score));
+      add(
+        rec,
+        (strength * seed.weight * config.idfWeight * similarity) /
+          achievableFor(rec.id)
+      );
     }
   }
 
@@ -435,6 +543,42 @@ export function mergeSeedCandidates(
     .filter((post) => post.score > 0)
     .sort((a, b) => b.score - a.score || a.id - b.id)
     .slice(0, config.maxFeedSize);
+}
+
+/**
+ * Downweight candidates the user has ALREADY opened.
+ *
+ * Without this the feed keeps re-serving exactly what the user just looked at
+ * — viewed posts stay eligible candidates, and (as view seeds) even pull in
+ * more of the same — so the top of the feed accumulates consumed content. A
+ * view is interest, not rejection, so this is a decaying penalty rather than
+ * an exclusion: a candidate viewed just now keeps only
+ * `viewedCandidatePenaltyFloor` of its score, and the factor relaxes back to
+ * 1 as the view ages (same half-life as view seeding), letting old favorites
+ * of the eye resurface later.
+ *
+ * Runs on the merged ranked list (post-cap): penalized posts sink within the
+ * feed but posts below the maxFeedSize cutoff are not promoted — an accepted
+ * tail effect that keeps the penalty a cheap O(feed) pass.
+ */
+export function applyViewedPenalty(
+  posts: FeedPost[],
+  lastViewedByPostId: ReadonlyMap<number, Date>,
+  now: Date,
+  config: FeedConfig = FEED_CONFIG
+): FeedPost[] {
+  const floor = config.viewedCandidatePenaltyFloor;
+  if (floor >= 1 || lastViewedByPostId.size === 0) return posts;
+
+  return posts
+    .map((post) => {
+      const lastViewedAt = lastViewedByPostId.get(post.id);
+      if (!lastViewedAt) return post;
+      const recency = seedWeight(lastViewedAt, now, config.viewRecencyHalfLifeDays);
+      const factor = 1 - (1 - Math.max(0, floor)) * recency;
+      return { ...post, score: post.score * factor };
+    })
+    .sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
 /**
@@ -539,12 +683,16 @@ function assembleContributions(
 /**
  * Build the full ranked feed from scratch.
  *
- * Positive seeds (favorites) pull in similar posts; negative seeds (recent
- * dismissals) push down posts similar to them. Excludes favorited posts,
- * dismissed posts, and any post sharing a group with a seed of either sign
- * (the per-seed engines already exclude the seed's own group; this applies the
- * rule across seeds too). Both engines degrade to empty per-seed results on
- * failure rather than failing the build.
+ * Positive seeds (favorites, views) pull in similar posts; negative seeds
+ * (recent dismissals) push down posts similar to them. Taste signals are
+ * first collapsed to one representative per group (a favorited multi-page
+ * set is ONE seed, not one per page). Excludes favorited posts, dismissed
+ * posts, and any post sharing a group with a seed of either sign (the
+ * per-seed engines already exclude the seed's own group; this applies the
+ * rule across seeds too). After merging, already-viewed candidates are
+ * downweighted (decaying with view age) and group siblings among candidates
+ * collapse to one representative. Both engines degrade to empty per-seed
+ * results on failure rather than failing the build.
  */
 export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
   const now = new Date();
@@ -563,12 +711,14 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     // dismissals.
     prisma.feedDismissal.findMany({ select: { postId: true } }),
     // Only the most-recent dismissals become negative seeds, so only these need
-    // the ordered read + Post join for their hash (embedding lookup). Bounded by
-    // negativeSeedCount and served by the dismissedAt index.
+    // the ordered read + Post join for their hash (embedding lookup). Served by
+    // the dismissedAt index; over-fetched so group collapse cannot starve the
+    // signal (see SEED_COLLAPSE_OVERFETCH) — selectNegativeSeeds still caps
+    // seeds at negativeSeedCount.
     config.negativeSeedCount > 0
       ? prisma.feedDismissal.findMany({
           orderBy: { dismissedAt: "desc" },
-          take: config.negativeSeedCount,
+          take: config.negativeSeedCount * SEED_COLLAPSE_OVERFETCH,
           select: {
             postId: true,
             dismissedAt: true,
@@ -577,11 +727,12 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         })
       : Promise.resolve([]),
     // Recently-viewed posts that carry no explicit signal yet (not favorited,
-    // not dismissed) — the implicit-engagement seeds.
+    // not dismissed) — the implicit-engagement seeds. Over-fetched like the
+    // dismissals above; selectViewSeeds caps seeds at viewSeedCount.
     prisma.postView.findMany({
       where: { post: { favorite: { is: null }, feedDismissal: { is: null } } },
       orderBy: { lastViewedAt: "desc" },
-      take: config.viewSeedCount,
+      take: config.viewSeedCount * SEED_COLLAPSE_OVERFETCH,
       select: {
         postId: true,
         viewCount: true,
@@ -595,37 +746,69 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   // only from dislikes/views would have too little explicit signal to rank on.
   if (favorites.length === 0) return [];
 
+  const favoriteInputs: FavoriteSeedInput[] = favorites.map((fav) => ({
+    postId: fav.postId,
+    hash: fav.post.hash,
+    favoritedAt: fav.favoritedAt,
+  }));
+  const viewInputs: ViewSeedInput[] = views.map((v) => ({
+    postId: v.postId,
+    hash: v.post.hash,
+    viewCount: v.viewCount,
+    lastViewedAt: v.lastViewedAt,
+  }));
+  const dismissalInputs: DismissalSeedInput[] = recentDismissals.map((d) => ({
+    postId: d.postId,
+    hash: d.post.hash,
+    dismissedAt: d.dismissedAt,
+  }));
+
+  // Group memberships of every taste signal, for seed-level group collapse:
+  // a favorited/viewed/dismissed multi-page set must count as ONE signal, not
+  // one per page (see collapseSignalsByGroup).
+  const signalIds = [
+    ...favoriteInputs.map((f) => f.postId),
+    ...viewInputs.map((v) => v.postId),
+    ...dismissalInputs.map((d) => d.postId),
+  ];
+  const signalGroupRows = await prisma.postGroup.findMany({
+    where: { postId: { in: signalIds } },
+    select: { postId: true, groupId: true },
+  });
+  const signalGroupsByPostId = new Map<number, number[]>();
+  for (const { postId, groupId } of signalGroupRows) {
+    const existing = signalGroupsByPostId.get(postId);
+    if (existing) existing.push(groupId);
+    else signalGroupsByPostId.set(postId, [groupId]);
+  }
+
+  // Positive signals share one seen-set — favorites collapse first so a
+  // viewed sibling of a favorited set defers to the (stronger) favorite seed.
+  // Negative signals collapse independently: a dismissal inside an otherwise-
+  // liked set is an explicit correction that must keep its seed.
+  const seenPositiveGroups = new Set<number>();
+  const collapsedFavorites = collapseSignalsByGroup(
+    favoriteInputs,
+    signalGroupsByPostId,
+    seenPositiveGroups
+  );
+  const collapsedViews = collapseSignalsByGroup(
+    viewInputs,
+    signalGroupsByPostId,
+    seenPositiveGroups
+  );
+  const collapsedDismissals = collapseSignalsByGroup(dismissalInputs, signalGroupsByPostId);
+
   const favoriteSeeds = selectSeeds(
-    favorites.map((fav) => ({
-      postId: fav.postId,
-      hash: fav.post.hash,
-      favoritedAt: fav.favoritedAt,
-    })),
+    collapsedFavorites,
     now,
     config,
     mulberry32(currentSeedBucket())
   );
 
-  const viewSeeds = selectViewSeeds(
-    views.map((v) => ({
-      postId: v.postId,
-      hash: v.post.hash,
-      viewCount: v.viewCount,
-      lastViewedAt: v.lastViewedAt,
-    })),
-    now,
-    config
-  );
+  const viewSeeds = selectViewSeeds(collapsedViews, now, config);
 
-  const negativeSeeds = selectNegativeSeeds(
-    recentDismissals.map((d) => ({
-      postId: d.postId,
-      hash: d.post.hash,
-      dismissedAt: d.dismissedAt,
-    })),
-    now,
-    config
-  );
+  const negativeSeeds = selectNegativeSeeds(collapsedDismissals, now, config);
 
   // Favorites and views are positive (boost neighbors); dismissals are negative
   // (suppress neighbors). All three feed the same batched tag compute and
@@ -668,24 +851,75 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     ...seedGroupSiblings.map((g) => g.postId),
   ]);
 
-  const merged = mergeSeedCandidates(contributions, excluded, config);
+  // Exact embedding availability for the merge's per-pair achievable-weight
+  // normalization: which of the seeds AND candidates actually have a stored
+  // embedding under the active config (mirrors findRelatedPostsByEmbedding's
+  // source filter). One batched indexed read over ~seeds + all distinct
+  // candidates; skipped entirely when embeddings are unconfigured (null makes
+  // the normalization a uniform, ranking-neutral rescale).
+  let embeddedPostIds: ReadonlySet<number> | null = null;
+  if (embeddingConfig) {
+    const probeIds = new Set<number>(allSeedIds);
+    for (const contribution of contributions) {
+      for (const neighbor of contribution.embedding) probeIds.add(neighbor.id);
+      for (const rec of contribution.idf) probeIds.add(rec.id);
+    }
+    const embeddedRows =
+      probeIds.size > 0
+        ? await prisma.postEmbedding.findMany({
+            where: {
+              postId: { in: [...probeIds] },
+              baseUrl: embeddingConfig.baseUrl,
+              model: embeddingConfig.model,
+              dimensions: embeddingConfig.dimensions,
+              imageMaxResolution: embeddingConfig.imageMaxResolution,
+              // COMPLETE rows always carry a non-null vector (see the upsert
+              // in @/lib/embeddings/store), so status alone is sufficient.
+              status: "COMPLETE",
+            },
+            select: { postId: true },
+          })
+        : [];
+    embeddedPostIds = new Set(embeddedRows.map((row) => row.postId));
+  }
+
+  const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);
   if (merged.length === 0) return merged;
 
-  // Collapse multi-post sets (a candidate whose group sibling is also a
-  // candidate) to one representative each, so a large set near the user's
-  // taste cannot flood the feed. One extra query, only when there is a feed.
-  const groupRows = await prisma.postGroup.findMany({
-    where: { postId: { in: merged.map((p) => p.id) } },
-    select: { postId: true, groupId: true },
-  });
+  // Two batched lookups over the merged candidates, only when there is a
+  // feed: group memberships (per-group dedup below) and view state (the
+  // already-seen penalty).
+  const mergedIds = merged.map((p) => p.id);
+  const [groupRows, candidateViews] = await Promise.all([
+    prisma.postGroup.findMany({
+      where: { postId: { in: mergedIds } },
+      select: { postId: true, groupId: true },
+    }),
+    config.viewedCandidatePenaltyFloor < 1
+      ? prisma.postView.findMany({
+          where: { postId: { in: mergedIds } },
+          select: { postId: true, lastViewedAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
   const groupIdsByPostId = new Map<number, number[]>();
   for (const { postId, groupId } of groupRows) {
     const existing = groupIdsByPostId.get(postId);
     if (existing) existing.push(groupId);
     else groupIdsByPostId.set(postId, [groupId]);
   }
+  const lastViewedByPostId = new Map<number, Date>(
+    candidateViews.map((v) => [v.postId, v.lastViewedAt])
+  );
 
-  return dedupeRankedByGroup(merged, groupIdsByPostId);
+  // Penalize already-viewed candidates BEFORE choosing group representatives,
+  // so an unviewed sibling can represent its set over a just-viewed one.
+  const penalized = applyViewedPenalty(merged, lastViewedByPostId, now, config);
+
+  // Collapse multi-post sets (a candidate whose group sibling is also a
+  // candidate) to one representative each, so a large set near the user's
+  // taste cannot flood the feed.
+  return dedupeRankedByGroup(penalized, groupIdsByPostId);
 }
 
 /**
@@ -708,8 +942,14 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
  * Prisma client. Favorite/dismissal writes call {@link invalidateFeedCache} to
  * drop it immediately (explicit taste the user expects reflected at once);
  * views deliberately do not (a weak signal that can wait for the bucket to
- * roll). A monotonic generation counter makes an invalidation that races an
- * in-flight build discard that build's result rather than cache stale data.
+ * roll). That means the already-seen penalty ({@link applyViewedPenalty})
+ * also lags a fresh view by up to one bucket: a post opened from the feed
+ * keeps its pre-view rank until the bucket rolls. Accepted deliberately —
+ * invalidating (or re-penalizing at read time) on every view would reshuffle
+ * the ranking mid-scroll, breaking the stable pagination this cache exists to
+ * provide, and would rebuild the feed on every post open. A monotonic
+ * generation counter makes an invalidation that races an in-flight build
+ * discard that build's result rather than cache stale data.
  *
  * Invalidation is per-process: the cache and its generation counter live on
  * this process's globalThis, so a single Node instance is load-bearing for the
