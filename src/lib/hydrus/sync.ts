@@ -26,6 +26,20 @@ const MAX_TRACKED_ERRORS = 200;
 // polling state); the in-process onProgress callback still fires per chunk.
 const PROGRESS_WRITE_INTERVAL_MS = 1000;
 
+const RECOMMENDATION_INVALIDATION_POST_COUNT_KEY = "recommendations.lastGlobalInvalidationPostCount";
+const RECOMMENDATION_INVALIDATION_DRIFT_THRESHOLD = 0.02;
+
+export function shouldInvalidateRecommendations(marker: number | null, currentTotal: number): boolean {
+  if (marker === null || !Number.isFinite(marker) || marker <= 0) {
+    return true;
+  }
+  if (!Number.isFinite(currentTotal) || currentTotal < 0) {
+    return true;
+  }
+
+  return Math.abs(currentTotal - marker) >= marker * RECOMMENDATION_INVALIDATION_DRIFT_THRESHOLD;
+}
+
 /**
  * Lookup maps populated before parallel processing to avoid race conditions
  */
@@ -1015,11 +1029,14 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     progress.phase = "complete";
 
-    await updateTotalPostCount();
+    const totalPosts = await updateTotalPostCount();
     // Recalculate tag post counts for efficient sorting
     await recalculateTagCounts();
-    // IDF refresh can change scores globally, so drop recommendation cache.
-    await invalidateAllRecommendations();
+    await prisma.$executeRawUnsafe(
+      'ANALYZE "PostTag", "Tag", "Post", "PostGroup", "PostEmbedding", "PostRecommendation"'
+    );
+    // IDF refresh can change scores globally; invalidate only when corpus drift is material.
+    await invalidateRecommendationsIfNeeded(totalPosts);
     // Update precomputed homepage stats
     await updateHomeStatsCache();
 
@@ -1188,6 +1205,54 @@ export async function getSyncState() {
   return prisma.syncState.findFirst();
 }
 
+async function getRecommendationInvalidationPostCountMarker(): Promise<number | null> {
+  const setting = await prisma.settings.findUnique({
+    where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
+  });
+
+  if (!setting) {
+    return null;
+  }
+
+  const marker = Number.parseInt(setting.value, 10);
+  if (!Number.isSafeInteger(marker) || marker < 0) {
+    return null;
+  }
+
+  return marker;
+}
+
+async function invalidateRecommendationsIfNeeded(currentTotalPosts: number): Promise<void> {
+  const marker = await getRecommendationInvalidationPostCountMarker();
+
+  if (!shouldInvalidateRecommendations(marker, currentTotalPosts)) {
+    const drift = marker === null || marker <= 0
+      ? 0
+      : Math.abs(currentTotalPosts - marker) / marker;
+    syncLog.info({
+      currentTotalPosts,
+      lastGlobalInvalidationPostCount: marker,
+      drift,
+    }, 'Skipped global recommendation invalidation; post-count drift below threshold');
+    return;
+  }
+
+  const markerValue = currentTotalPosts.toString();
+  await prisma.$transaction(async (tx) => {
+    await invalidateAllRecommendations(tx);
+    await tx.settings.upsert({
+      where: { key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY },
+      update: { value: markerValue },
+      create: {
+        key: RECOMMENDATION_INVALIDATION_POST_COUNT_KEY,
+        value: markerValue,
+      },
+    });
+  }, {
+    timeout: 30000,
+  });
+}
+
 /**
  * Atomically acquire the sync lock by flipping the SyncState row to "running"
  * only if it is not already running. The decision is made by the DB write, not
@@ -1296,11 +1361,12 @@ async function recalculateTagCounts(): Promise<void> {
  * Update the total post count stored in Settings.
  * Used for efficient excludeCount calculation in tag search.
  */
-async function updateTotalPostCount(): Promise<void> {
+async function updateTotalPostCount(): Promise<number> {
   const count = await prisma.post.count();
   await prisma.settings.upsert({
     where: { key: "stats.totalPostCount" },
     update: { value: count.toString() },
     create: { key: "stats.totalPostCount", value: count.toString() },
   });
+  return count;
 }

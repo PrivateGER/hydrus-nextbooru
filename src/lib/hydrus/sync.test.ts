@@ -28,6 +28,7 @@ import {
   bulkEnsureTags,
   bulkEnsureGroups,
   acquireSyncLock,
+  shouldInvalidateRecommendations,
 } from "./sync";
 import { TagCategory, SourceType } from "@/generated/prisma/client";
 
@@ -76,6 +77,32 @@ function makeGroupTxStub() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("shouldInvalidateRecommendations", () => {
+  it("invalidates when no prior global invalidation marker exists", () => {
+    expect(shouldInvalidateRecommendations(null, 100)).toBe(true);
+  });
+
+  it("invalidates when the stored marker is zero", () => {
+    expect(shouldInvalidateRecommendations(0, 0)).toBe(true);
+  });
+
+  it("invalidates at exactly two percent growth", () => {
+    expect(shouldInvalidateRecommendations(100, 102)).toBe(true);
+  });
+
+  it("does not invalidate below two percent growth", () => {
+    expect(shouldInvalidateRecommendations(100, 101)).toBe(false);
+  });
+
+  it("invalidates at exactly two percent shrinkage", () => {
+    expect(shouldInvalidateRecommendations(100, 98)).toBe(true);
+  });
+
+  it("does not invalidate below two percent shrinkage", () => {
+    expect(shouldInvalidateRecommendations(100, 99)).toBe(false);
+  });
 });
 
 describe("bulkEnsureTags array binding", () => {
