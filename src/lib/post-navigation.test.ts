@@ -122,6 +122,14 @@ describe("parseSearchContext", () => {
     expect(parseSearchContext("search", ["a", "b"])).toBeUndefined();
     expect(parseSearchContext("search", " , ,")).toBeUndefined();
   });
+
+  it("carries a listing page past 1 and drops page 1 or malformed values", () => {
+    expect(parseSearchContext("search", "a", "3")).toEqual({ tags: ["a"], page: 3 });
+    expect(parseSearchContext("search", "a", "1")).toEqual({ tags: ["a"] });
+    expect(parseSearchContext("search", "a", "abc")).toEqual({ tags: ["a"] });
+    expect(parseSearchContext("search", "a", ["2", "3"])).toEqual({ tags: ["a"] });
+    expect(parseSearchContext("search", "a")).toEqual({ tags: ["a"] });
+  });
 });
 
 describe("search context URLs", () => {
@@ -133,13 +141,25 @@ describe("search context URLs", () => {
     expect(parseSearchContext(params.get("ctx")!, params.get("tags")!)).toEqual(context);
   });
 
+  it("round-trips the listing page", () => {
+    const paged = { tags: ["a"], page: 3 };
+    const params = new URLSearchParams(searchContextQuery(paged));
+    expect(
+      parseSearchContext(params.get("ctx")!, params.get("tags")!, params.get("page")!)
+    ).toEqual(paged);
+  });
+
   it("builds post URLs carrying the context", () => {
     expect(buildSearchPostUrl("abc", context)).toBe(
       "/post/abc?ctx=search&tags=blue_sky%2C-cat"
     );
+    expect(buildSearchPostUrl("abc", { tags: ["a"], page: 3 })).toBe(
+      "/post/abc?ctx=search&tags=a&page=3"
+    );
   });
 
-  it("builds the back-to-results URL", () => {
+  it("builds the back-to-results URL, returning to the original page", () => {
     expect(searchContextBackUrl(context)).toBe("/search?tags=blue_sky%2C-cat");
+    expect(searchContextBackUrl({ tags: ["a"], page: 3 })).toBe("/search?tags=a&page=3");
   });
 });

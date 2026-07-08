@@ -25,10 +25,13 @@ export function ReadGroupButton({ groupId, postCount }: ReadGroupButtonProps) {
   // null) so a soft navigation to a group without saved progress can't keep
   // showing the previous group's resume page.
   useEffect(() => {
-    const progress = deserializeProgress(
-      localStorage.getItem(progressKey(groupId)),
-      postCount
-    );
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(progressKey(groupId));
+    } catch {
+      // Storage blocked (e.g. privacy mode): treat as no saved progress.
+    }
+    const progress = deserializeProgress(stored, postCount);
     const nextResumePage = progress && progress.page > 1 ? progress.page : null;
     const timeout = window.setTimeout(() => {
       setResumePage(nextResumePage);

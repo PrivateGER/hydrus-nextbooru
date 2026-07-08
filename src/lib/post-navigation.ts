@@ -76,27 +76,43 @@ export function parseGroupIdParam(value: string | string[] | undefined): number 
 
 /**
  * A search listing the user navigated in from. Carried on post URLs as
- * `?ctx=search&tags=<comma-list>` so prev/next can follow the search
- * results instead of a group. Takes precedence over `?in=` group context.
+ * `?ctx=search&tags=<comma-list>[&page=N]` so prev/next can follow the
+ * search results instead of a group. Takes precedence over `?in=` group
+ * context.
  */
 export interface SearchContext {
   tags: string[];
+  /**
+   * 1-based listing page the user entered from, kept only so "back to
+   * results" returns there. Navigation itself is keyset-based and page-free;
+   * omitted when the listing was on page 1.
+   */
+  page?: number;
 }
 
 /**
- * Parse `?ctx=` + `?tags=` search params into a SearchContext.
- * Tag normalization mirrors the search page's own parsing.
+ * Parse `?ctx=` + `?tags=` (+ optional `?page=`) search params into a
+ * SearchContext. Tag normalization mirrors the search page's own parsing.
  */
 export function parseSearchContext(
   ctx: string | string[] | undefined,
-  tags: string | string[] | undefined
+  tags: string | string[] | undefined,
+  page?: string | string[] | undefined
 ): SearchContext | undefined {
   if (ctx !== "search" || typeof tags !== "string") return undefined;
   const parsed = tags
     .split(",")
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
-  return parsed.length > 0 ? { tags: parsed } : undefined;
+  if (parsed.length === 0) return undefined;
+
+  const parsedPage = typeof page === "string" ? Number(page) : undefined;
+  const validPage =
+    parsedPage !== undefined && Number.isInteger(parsedPage) && parsedPage > 1
+      ? parsedPage
+      : undefined;
+
+  return { tags: parsed, ...(validPage !== undefined && { page: validPage }) };
 }
 
 /**
@@ -104,7 +120,11 @@ export function parseSearchContext(
  * appending to post links from search listings.
  */
 export function searchContextQuery(context: SearchContext): string {
-  return new URLSearchParams({ ctx: "search", tags: context.tags.join(",") }).toString();
+  const params = new URLSearchParams({ ctx: "search", tags: context.tags.join(",") });
+  if (context.page !== undefined && context.page > 1) {
+    params.set("page", String(context.page));
+  }
+  return params.toString();
 }
 
 /** Build a post URL that carries search-listing navigation context. */
@@ -114,5 +134,6 @@ export function buildSearchPostUrl(hash: string, context: SearchContext): string
 
 /** The search listing URL a search context came from (for "back to results"). */
 export function searchContextBackUrl(context: SearchContext): string {
-  return `/search?tags=${encodeURIComponent(context.tags.join(","))}`;
+  const page = context.page !== undefined && context.page > 1 ? `&page=${context.page}` : "";
+  return `/search?tags=${encodeURIComponent(context.tags.join(","))}${page}`;
 }

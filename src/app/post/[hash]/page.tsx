@@ -36,6 +36,7 @@ interface PostPageProps {
     in?: string | string[];
     ctx?: string | string[];
     tags?: string | string[];
+    page?: string | string[];
   }>;
 }
 
@@ -171,10 +172,8 @@ async function getPost(hash: string) {
  * @returns The React element representing the post detail page.
  */
 export default async function PostPage({ params, searchParams }: PostPageProps) {
-  const [{ hash }, { in: inParam, ctx: ctxParam, tags: tagsParam }] = await Promise.all([
-    params,
-    searchParams,
-  ]);
+  const [{ hash }, { in: inParam, ctx: ctxParam, tags: tagsParam, page: pageParam }] =
+    await Promise.all([params, searchParams]);
 
   // Validate hash format (64 hex characters)
   if (!/^[a-fA-F0-9]{64}$/i.test(hash)) {
@@ -204,7 +203,7 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
   //    same query the user came from.
   // 2. A group: the one named by ?in= when the post belongs to it, otherwise
   //    the best-ranked multi-post group.
-  const searchContext = parseSearchContext(ctxParam, tagsParam);
+  const searchContext = parseSearchContext(ctxParam, tagsParam, pageParam);
   const navGroup = selectNavigationGroup(groups, parseGroupIdParam(inParam));
 
   let prevUrl: string | undefined;

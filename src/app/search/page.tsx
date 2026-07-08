@@ -386,7 +386,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
               posts={posts}
               postHrefQuery={
                 !isSemanticSearch && tags.length > 0
-                  ? searchContextQuery({ tags })
+                  ? searchContextQuery({ tags, page })
                   : undefined
               }
             />
