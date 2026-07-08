@@ -28,6 +28,13 @@ interface GroupFilmstripProps {
   groupId?: number;
   /** Whether arrow-key/swipe navigation currently follows this group. */
   isActiveNav?: boolean;
+  /**
+   * URL of the current post with this group as navigation context. Rendered
+   * as a "navigate this group" link when the group is not the active
+   * context, so the user can hand the arrows to this group without leaving
+   * the image they are on.
+   */
+  switchNavUrl?: string;
   /** Height class for thumbnails (default: h-32) */
   heightClass?: string;
 }
@@ -41,6 +48,7 @@ export function GroupFilmstrip({
   currentHash,
   groupId,
   isActiveNav = false,
+  switchNavUrl,
   heightClass = "h-32"
 }: GroupFilmstripProps) {
   const currentRef = useRef<HTMLAnchorElement>(null);
@@ -82,7 +90,7 @@ export function GroupFilmstrip({
             {currentIndex + 1} / {totalPosts}
           </span>
           <span className="text-zinc-500 dark:text-zinc-400">in group</span>
-          {isActiveNav && (
+          {isActiveNav ? (
             <span
               className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/20 dark:text-blue-400"
               title="Arrow keys and swipes move through this group"
@@ -91,7 +99,17 @@ export function GroupFilmstrip({
               <ChevronRightIcon className="h-3 w-3" />
               navigating this group
             </span>
-          )}
+          ) : switchNavUrl ? (
+            <Link
+              href={switchNavUrl}
+              className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-blue-100 hover:text-blue-700 dark:bg-zinc-700/50 dark:text-zinc-400 dark:hover:bg-blue-500/20 dark:hover:text-blue-400"
+              title="Make arrow keys and swipes move through this group"
+            >
+              <ChevronLeftIcon className="h-3 w-3" />
+              <ChevronRightIcon className="h-3 w-3" />
+              navigate this group
+            </Link>
+          ) : null}
         </div>
       )}
 

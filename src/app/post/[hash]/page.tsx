@@ -375,6 +375,7 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
 
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
           const ordinalInGroup = group.posts.findIndex((pg) => pg.post.hash === post.hash) + 1;
+          const isActiveNav = !searchContext && navGroup?.id === group.id;
 
           return (
             <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -428,7 +429,8 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
                 posts={group.posts}
                 currentHash={post.hash}
                 groupId={group.id}
-                isActiveNav={!searchContext && navGroup?.id === group.id}
+                isActiveNav={isActiveNav}
+                switchNavUrl={isActiveNav ? undefined : buildPostUrl(post.hash, group.id)}
               />
             </div>
           );
