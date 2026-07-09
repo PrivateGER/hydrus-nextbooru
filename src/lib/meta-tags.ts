@@ -214,53 +214,6 @@ export function searchMetaTags(query: string): MetaTagDefinition[] {
   );
 }
 
-
-/**
- * Get the count of posts matching a meta tag, optionally filtered by tag co-occurrence.
- *
- * @param tagName - Meta tag name
- * @param prisma - Prisma client instance
- * @param filteredPostIds - Optional array of post IDs to restrict the count to (for co-occurrence)
- * @returns Number of matching posts
- */
-export async function getMetaTagCount(
-  tagName: string,
-  prisma: {
-    post: { count: (args: { where: Prisma.PostWhereInput }) => Promise<number> };
-  },
-  filteredPostIds?: number[]
-): Promise<number> {
-  const def = getMetaTagDefinition(tagName);
-  if (!def?.getCondition) return 0;
-
-  const where = filteredPostIds && filteredPostIds.length > 0
-    ? { AND: [def.getCondition(), { id: { in: filteredPostIds } }] }
-    : def.getCondition();
-
-  return prisma.post.count({ where });
-}
-
-/**
- * Get counts for multiple meta tags in parallel, optionally filtered by tag co-occurrence.
- *
- * @param tagNames - Array of meta tag names
- * @param prisma - Prisma client instance
- * @param filteredPostIds - Optional array of post IDs to restrict counts to (for co-occurrence)
- * @returns Map of tag name to count
- */
-export async function getMetaTagCounts(
-  tagNames: string[],
-  prisma: {
-    post: { count: (args: { where: Prisma.PostWhereInput }) => Promise<number> };
-  },
-  filteredPostIds?: number[]
-): Promise<Map<string, number>> {
-  const counts = await Promise.all(
-    tagNames.map(async (name) => [name, await getMetaTagCount(name, prisma, filteredPostIds)] as const)
-  );
-  return new Map(counts);
-}
-
 /**
  * Prisma client type for raw queries.
  */

@@ -105,7 +105,7 @@ export async function getEmbeddingStats(config: EmbeddingConfig): Promise<Embedd
   };
 }
 
-export async function getVectorExtensionVersions(): Promise<EmbeddingStats["extensions"]> {
+async function getVectorExtensionVersions(): Promise<EmbeddingStats["extensions"]> {
   const rows = await prisma.$queryRaw<{ extname: string; extversion: string }[]>`
     SELECT extname, extversion
     FROM pg_extension

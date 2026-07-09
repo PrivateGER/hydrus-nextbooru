@@ -118,30 +118,6 @@ export function validateWildcardPattern(tag: string): {
 }
 
 /**
- * Parse a list of tags into regular tags and wildcard patterns.
- *
- * @param tags - Array of tag patterns
- * @returns Object with regular tags and wildcard patterns separated
- */
-function separateWildcardPatterns(tags: string[]): {
-  regularTags: string[];
-  wildcardPatterns: string[];
-} {
-  const regularTags: string[] = [];
-  const wildcardPatterns: string[] = [];
-
-  for (const tag of tags) {
-    if (isWildcardPattern(tag)) {
-      wildcardPatterns.push(tag);
-    } else {
-      regularTags.push(tag);
-    }
-  }
-
-  return { regularTags, wildcardPatterns };
-}
-
-/**
  * Information about a resolved wildcard pattern.
  */
 export interface ResolvedWildcard {

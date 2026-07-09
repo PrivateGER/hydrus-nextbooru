@@ -40,7 +40,7 @@ export const TAG_BADGE_COLORS: Record<TagCategory, string> = {
 };
 
 /** Virtual meta tag color (for computed tags like video, portrait, etc.) */
-export const VIRTUAL_META_COLOR = "text-cyan-600 dark:text-cyan-400";
+const VIRTUAL_META_COLOR = "text-cyan-600 dark:text-cyan-400";
 
 /** Extended text colors including virtual meta - for search bar suggestions */
 export const TAG_TEXT_COLORS_WITH_META: Record<TagCategory | "VIRTUAL_META", string> = {

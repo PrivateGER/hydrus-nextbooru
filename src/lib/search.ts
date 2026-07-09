@@ -490,7 +490,11 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   for (const tag of includeTags) {
     if (isWildcardPattern(tag)) {
       const v = validateWildcardPattern(tag);
-      v.valid ? wildcard.include.push(tag) : errors.push(v.error ?? "Invalid pattern");
+      if (v.valid) {
+        wildcard.include.push(tag);
+      } else {
+        errors.push(v.error ?? "Invalid pattern");
+      }
     } else {
       regular.include.push(tag);
     }
@@ -499,7 +503,11 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   for (const tag of excludeTags) {
     if (isWildcardPattern(tag)) {
       const v = validateWildcardPattern(`-${tag}`);
-      v.valid ? wildcard.exclude.push(tag) : errors.push(v.error ?? "Invalid pattern");
+      if (v.valid) {
+        wildcard.exclude.push(tag);
+      } else {
+        errors.push(v.error ?? "Invalid pattern");
+      }
     } else {
       regular.exclude.push(tag);
     }

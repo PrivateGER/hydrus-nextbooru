@@ -9,7 +9,7 @@
  * Canonical name of the user "favorite" meta tag. Single source of the
  * literal so the meta-tag set and {@link isFavoriteTag} cannot drift.
  */
-export const FAVORITE_TAG_NAME = "favorite";
+const FAVORITE_TAG_NAME = "favorite";
 
 /**
  * List of all meta tag names.

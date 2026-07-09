@@ -8,7 +8,7 @@
 
 export type FitMode = "contain" | "width" | "original";
 
-export const FIT_MODES: readonly FitMode[] = ["contain", "width", "original"];
+const FIT_MODES: readonly FitMode[] = ["contain", "width", "original"];
 
 export interface ReadingProgress {
   page: number;
