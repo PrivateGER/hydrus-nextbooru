@@ -6,6 +6,11 @@ import {
   getClientIPFromHeaders,
 } from "@/lib/rate-limit";
 
+// The limiter stamps its internal lastCleanup with the real clock when the
+// module loads (i.e. during this file's imports, before any fake timers).
+// Captured here so the cleanup test can fake a time that is reliably later.
+const MODULE_LOAD_TIME = Date.now();
+
 describe("checkRateLimit", () => {
   let keyId = 0;
 
@@ -65,6 +70,25 @@ describe("checkRateLimit", () => {
     expect(checkRateLimit(firstKey, 1, 1_000).allowed).toBe(true);
     expect(checkRateLimit(firstKey, 1, 1_000).allowed).toBe(false);
     expect(checkRateLimit(secondKey, 1, 1_000).allowed).toBe(true);
+  });
+
+  it("purges expired entries once the cleanup interval elapses", () => {
+    const key = uniqueKey("cleanup");
+
+    // Jump past the module-load timestamp so the 5-minute cleanup interval
+    // has elapsed; the other tests fake a past date, which never triggers it.
+    vi.setSystemTime(MODULE_LOAD_TIME + 6 * 60 * 1000);
+    expect(checkRateLimit(key, 1, 1_000).allowed).toBe(true);
+
+    // Expire the entry and cross the next cleanup interval; the following
+    // call's lazy cleanup must purge it and grant a fresh window.
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    expect(checkRateLimit(uniqueKey("cleanup-trigger"), 1, 1_000).allowed).toBe(true);
+    expect(checkRateLimit(key, 1, 1_000)).toEqual({
+      allowed: true,
+      remaining: 0,
+      resetIn: 1_000,
+    });
   });
 });
 
