@@ -64,10 +64,14 @@ function TagTreeContent() {
 
   const searchKey = `${selectedTags.join(",")}|${currentPage}`;
   const hasTags = selectedTags.length > 0;
-  const posts = hasTags && fetched ? fetched.posts : [];
-  const totalCount = hasTags && fetched ? fetched.totalCount : 0;
-  const totalPages = hasTags && fetched ? fetched.totalPages : 0;
-  const isLoadingPosts = hasTags && fetched?.key !== searchKey;
+  // Only trust results fetched for the CURRENT search: a previous search's
+  // counts would otherwise keep stale pagination clickable during a refetch,
+  // letting a quick click navigate the new search to an out-of-range page.
+  const current = hasTags && fetched?.key === searchKey ? fetched : null;
+  const posts = current?.posts ?? [];
+  const totalCount = current?.totalCount ?? 0;
+  const totalPages = current?.totalPages ?? 0;
+  const isLoadingPosts = hasTags && !current;
 
   // Update URL when tags change (not page - pagination handles that via links)
   const updateUrl = useCallback(
@@ -141,7 +145,7 @@ function TagTreeContent() {
         {/* Results column */}
         <div className="min-w-0">
           {/* Results header */}
-          {selectedTags.length > 0 && (
+          {selectedTags.length > 0 && !isLoadingPosts && (
             <div className="mb-4 flex items-center justify-between">
               <span className="text-sm text-zinc-500 dark:text-zinc-400">
                 {totalCount.toLocaleString()} {totalCount === 1 ? "result" : "results"}
