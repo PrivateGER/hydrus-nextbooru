@@ -61,6 +61,7 @@ import {
   selectOcrBatchPosts,
 } from "./batch";
 import { OpenRouterApiError } from "@/lib/openrouter";
+import { OcrServiceBusyError } from "./errors";
 
 const post = (id: number) => ({ id, hash: `${id}`.padStart(64, "0"), extension: ".png", mimeType: "image/png" });
 
@@ -78,6 +79,7 @@ const region = () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.OCR_BUSY_RETRY_DELAYS_MS;
   mockBatchUpdateMany.mockResolvedValue({ count: 1 });
   mockBatchFindUnique.mockResolvedValue({ status: "running" });
   mockMarkScanFailed.mockResolvedValue(undefined);
@@ -256,6 +258,40 @@ describe("runOcrBatch", () => {
     expect(result.failed).toBe(1);
     expect(mockFinalizeScan).toHaveBeenCalledWith(first, [detected], [null], null, page);
     expect(mockMarkScanFailed).toHaveBeenCalledWith(first.id);
+  });
+
+  it("retries a busy sidecar with backoff instead of failing the post", async () => {
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0,0";
+    mockPostFindMany.mockResolvedValue([post(1)]);
+    mockOcrPost
+      .mockRejectedValueOnce(new OcrServiceBusyError("busy"))
+      .mockRejectedValueOnce(new OcrServiceBusyError("busy"))
+      .mockResolvedValueOnce([]);
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("completed");
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(mockOcrPost).toHaveBeenCalledTimes(3);
+    expect(mockMarkScanFailed).not.toHaveBeenCalled();
+  });
+
+  it("stops the batch and leaves posts PENDING when the sidecar stays busy", async () => {
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0,0";
+    mockPostFindMany.mockResolvedValue([post(1), post(2)]);
+    mockOcrPost.mockRejectedValue(new OcrServiceBusyError("busy"));
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("error");
+    expect(result.processed).toBe(0);
+    // A wedged sidecar is not a post failure: nothing gets flipped to FAILED
+    // and the second post is never attempted.
+    expect(result.failed).toBe(0);
+    expect(mockMarkScanFailed).not.toHaveBeenCalled();
+    expect(mockOcrPost).toHaveBeenCalledTimes(3); // initial attempt + 2 retries, post 1 only
+    expect(result.errors[0]).toMatch(/busy/i);
   });
 
   it("stops between posts when cancellation was requested", async () => {

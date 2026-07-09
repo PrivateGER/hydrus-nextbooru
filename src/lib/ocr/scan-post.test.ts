@@ -70,7 +70,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("./crops", () => ({ storeInpaintedPage: mockStoreInpaintedPage, deleteInpaintedPage: mockDeleteInpaintedPage }));
 
 import { finalizeScan, scanPost, translateRegions, OcrFileMissingError, withPostCropWriteLock } from "./scan-post";
-import { OcrServiceUnavailableError } from "./errors";
+import { OcrServiceBusyError, OcrServiceUnavailableError } from "./errors";
 import { OpenRouterApiError } from "@/lib/openrouter";
 import type { NormalizedRegion } from "./types";
 
@@ -268,6 +268,14 @@ describe("scanPost", () => {
       data: { ocrStatus: "FAILED" },
     });
     expect(mockRegionDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it("leaves the post's status untouched and rethrows when the sidecar is busy", async () => {
+    // Busy is transient and the route answers with a retryable 503; flipping
+    // the post to FAILED would exclude it from default (PENDING-only) batches.
+    mockScanImage.mockRejectedValue(new OcrServiceBusyError("worker occupied"));
+    await expect(scanPost(POST)).rejects.toBeInstanceOf(OcrServiceBusyError);
+    expect(mockPostUpdate).not.toHaveBeenCalled();
   });
 
   it("marks FAILED and throws OcrFileMissingError when the file is unreadable", async () => {

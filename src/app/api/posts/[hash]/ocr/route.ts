@@ -4,6 +4,7 @@ import {
   isOcrEnabled,
   scanPost,
   OcrFileMissingError,
+  OcrServiceBusyError,
   OcrServiceResponseError,
   OcrServiceUnavailableError,
 } from "@/lib/ocr";
@@ -75,6 +76,14 @@ export async function POST(
     }
     if (error instanceof OcrServiceUnavailableError) {
       return NextResponse.json({ error: "OCR service unavailable" }, { status: 503 });
+    }
+    // Busy is a subclass of OcrServiceResponseError; match it first so the
+    // caller gets a retryable 503 instead of a terminal-looking 502.
+    if (error instanceof OcrServiceBusyError) {
+      return NextResponse.json(
+        { error: "OCR service is busy, try again shortly" },
+        { status: 503, headers: { "Retry-After": "30" } }
+      );
     }
     if (error instanceof OcrServiceResponseError) {
       return NextResponse.json({ error: "OCR service returned an error" }, { status: 502 });

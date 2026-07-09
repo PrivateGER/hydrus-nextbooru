@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderInpaintedPage, scanImage, checkOcrServiceHealth } from "./client";
-import { OcrServiceResponseError, OcrServiceUnavailableError } from "./errors";
+import { OcrServiceBusyError, OcrServiceResponseError, OcrServiceUnavailableError } from "./errors";
 
 const okResponse = (body: unknown) => ({
   ok: true,
@@ -268,6 +268,54 @@ describe("ocr client", () => {
       name: "OcrServiceResponseError",
       statusCode: 500,
     });
+  });
+
+  it("maps HTTP 429 to OcrServiceBusyError on both sidecar endpoints", async () => {
+    const busyHttpResponse = () => ({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+      json: vi.fn(),
+      text: vi.fn().mockResolvedValue("some Method is already being executed."),
+    });
+
+    fetchMock.mockResolvedValueOnce(busyHttpResponse());
+    await expect(scanImage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceBusyError
+    );
+
+    fetchMock.mockResolvedValueOnce(busyHttpResponse());
+    await expect(renderInpaintedPage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceBusyError
+    );
+  });
+
+  it("maps worker-busy stream error frames to OcrServiceBusyError", async () => {
+    // The gateway relays its worker's 429 rejection inside a stream ERROR
+    // frame while the HTTP response itself stays 200.
+    const busyText = "Translation failed: 429, some Method is already being executed.";
+
+    fetchMock.mockResolvedValueOnce(multiFrameResponse(streamFrame(2, busyText)));
+    await expect(scanImage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceBusyError
+    );
+
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(binaryStreamFrame(2, Buffer.from(busyText)))
+    );
+    await expect(renderInpaintedPage(Buffer.from([1]), "image/png")).rejects.toBeInstanceOf(
+      OcrServiceBusyError
+    );
+  });
+
+  it("keeps non-busy stream errors as plain OcrServiceResponseError", async () => {
+    fetchMock.mockResolvedValueOnce(
+      multiFrameResponse(streamFrame(2, "Translation failed: model exploded"))
+    );
+
+    const error = await scanImage(Buffer.from([1]), "image/png").catch((e) => e);
+    expect(error).toBeInstanceOf(OcrServiceResponseError);
+    expect(error).not.toBeInstanceOf(OcrServiceBusyError);
   });
 
   it("maps invalid JSON body to OcrServiceResponseError", async () => {

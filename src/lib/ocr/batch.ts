@@ -10,7 +10,8 @@ import {
   translateRegions,
   type ScannablePost,
 } from "./scan-post";
-import { getOcrTimeoutMs } from "./config";
+import { getOcrBusyRetryDelaysMs, getOcrTimeoutMs } from "./config";
+import { OcrServiceBusyError } from "./errors";
 import type { NormalizedRegion } from "./types";
 
 const TRANSLATE_CONCURRENCY = 3;
@@ -197,6 +198,55 @@ async function heartbeat(): Promise<void> {
   }
 }
 
+/** Resolve after ms, or immediately once the batch abort signal fires. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (ms <= 0 || signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Serial-path OCR with busy backoff. A 429 means the sidecar's single worker
+ * is occupied — typically still grinding a request whose client already timed
+ * out and disconnected — so the post itself is fine and the right move is to
+ * wait the worker out, not to fail the post. Rethrows the busy error once the
+ * backoff schedule is exhausted (a persistently busy sidecar is wedged and the
+ * batch must stop instead of hammering it).
+ */
+async function ocrPostWithBusyRetry(
+  post: ScannablePost,
+  signal: AbortSignal
+): Promise<NormalizedRegion[]> {
+  const delays = getOcrBusyRetryDelaysMs();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ocrPost(post, { signal });
+    } catch (error) {
+      if (!(error instanceof OcrServiceBusyError) || attempt >= delays.length || signal.aborted) {
+        throw error;
+      }
+      aiLog.warn(
+        { hash: post.hash, attempt: attempt + 1, retryInMs: delays[attempt] },
+        "OCR sidecar busy; backing off before retrying"
+      );
+      await abortableDelay(delays[attempt], signal);
+      if (signal.aborted) throw error;
+    }
+  }
+}
+
 async function finalize(result: OcrBatchResult): Promise<void> {
   try {
     await prisma.ocrBatchState.updateMany({
@@ -276,11 +326,24 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
       // Stage 1: serial OCR.
       let regions: NormalizedRegion[];
       try {
-        regions = await ocrPost(post, { signal: batchSignal });
+        regions = await ocrPostWithBusyRetry(post, batchSignal);
       } catch (error) {
         if (batchSignal.aborted) {
           // Cancellation aborted the in-flight OCR call: not a post failure.
           result.status = "cancelled";
+          break;
+        }
+        if (error instanceof OcrServiceBusyError) {
+          // The sidecar stayed busy through the whole backoff schedule: its
+          // worker is wedged (or hogged by another client). Failing this and
+          // every remaining post would hammer the wedged service and flip
+          // hundreds of ocrStatus rows to FAILED in seconds, so stop the
+          // batch instead and leave everything unscanned as PENDING.
+          result.status = "error";
+          pushError(
+            "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING"
+          );
+          aiLog.error({ hash: post.hash }, "OCR batch stopped: sidecar persistently busy");
           break;
         }
         result.failed++;

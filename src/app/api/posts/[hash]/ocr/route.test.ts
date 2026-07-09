@@ -9,6 +9,7 @@ const {
   MockOcrFileMissingError,
   MockOcrServiceUnavailableError,
   MockOcrServiceResponseError,
+  MockOcrServiceBusyError,
 } = vi.hoisted(() => {
   class TestOcrFileMissingError extends Error {}
   class TestOcrServiceUnavailableError extends Error {}
@@ -19,6 +20,12 @@ const {
       this.statusCode = statusCode;
     }
   }
+  // Mirrors the real hierarchy: busy IS-A response error.
+  class TestOcrServiceBusyError extends TestOcrServiceResponseError {
+    constructor(message: string) {
+      super(message, 429);
+    }
+  }
   return {
     mockScanPost: vi.fn(),
     mockIsOcrEnabled: vi.fn(),
@@ -27,6 +34,7 @@ const {
     MockOcrFileMissingError: TestOcrFileMissingError,
     MockOcrServiceUnavailableError: TestOcrServiceUnavailableError,
     MockOcrServiceResponseError: TestOcrServiceResponseError,
+    MockOcrServiceBusyError: TestOcrServiceBusyError,
   };
 });
 
@@ -36,6 +44,7 @@ vi.mock("@/lib/ocr", () => ({
   OcrFileMissingError: MockOcrFileMissingError,
   OcrServiceUnavailableError: MockOcrServiceUnavailableError,
   OcrServiceResponseError: MockOcrServiceResponseError,
+  OcrServiceBusyError: MockOcrServiceBusyError,
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -50,6 +59,7 @@ import { POST } from "./route";
 import {
   OcrServiceUnavailableError,
   OcrServiceResponseError,
+  OcrServiceBusyError,
   OcrFileMissingError,
 } from "@/lib/ocr";
 
@@ -131,6 +141,13 @@ describe("POST /api/posts/[hash]/ocr", () => {
 
     mockScanPost.mockRejectedValueOnce(new OcrServiceResponseError("garbage", 500));
     expect((await POST(request(), params(HASH))).status).toBe(502);
+  });
+
+  it("maps a busy sidecar to a retryable 503, not a 502", async () => {
+    mockScanPost.mockRejectedValueOnce(new OcrServiceBusyError("worker occupied"));
+    const response = await POST(request(), params(HASH));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("30");
   });
 
   it("maps missing files to 404", async () => {
