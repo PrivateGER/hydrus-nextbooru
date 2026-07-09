@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from "react";
  * - Ignores clicks while a request is in flight (`pending`).
  * - Stops event propagation/default so it is safe inside a <Link>/<summary>.
  * - Resyncs to `initialFavorited` when the prop changes without a remount
- *   (e.g. client-side pagination reuses the component).
+ *   (e.g. client-side pagination reuses the component) by adjusting state
+ *   during render (https://react.dev/learn/you-might-not-need-an-effect).
  * - Guards every post-await setState behind a mounted ref so a fetch that
  *   resolves after unmount cannot update state.
  *
@@ -31,9 +32,11 @@ export function useFavoriteToggle(hash: string, initialFavorited: boolean) {
   }, []);
 
   // Prop can change without remount (e.g. client-side pagination) — resync.
-  useEffect(() => {
+  const [prevInitialFavorited, setPrevInitialFavorited] = useState(initialFavorited);
+  if (prevInitialFavorited !== initialFavorited) {
+    setPrevInitialFavorited(initialFavorited);
     setFavorited(initialFavorited);
-  }, [initialFavorited]);
+  }
 
   const toggle = async (event: React.MouseEvent) => {
     event.preventDefault();

@@ -47,21 +47,23 @@ export function usePhash(
     },
   });
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/phash");
-      if (!response.ok) return;
-      const data = await response.json();
-      if (mountedRef.current) {
-        setPhashStats(data);
-        setIsComputing(data.batchRunning);
-        // Resume live updates if a batch was already running (e.g. started in
-        // another tab) when this hook mounted.
-        if (data.batchRunning) startPolling();
-      }
-    } catch (error) {
-      console.error("Error fetching phash stats:", error);
-    }
+  // Promise-chain rather than async/await so the initial-fetch effect below
+  // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
+  const fetchStats = useCallback(() => {
+    return fetch("/api/admin/phash")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
+          setPhashStats(data);
+          setIsComputing(data.batchRunning);
+          // Resume live updates if a batch was already running (e.g. started in
+          // another tab) when this hook mounted.
+          if (data.batchRunning) startPolling();
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching phash stats:", error);
+      });
   }, [mountedRef, startPolling]);
 
   useEffect(() => {

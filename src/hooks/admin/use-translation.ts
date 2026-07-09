@@ -204,190 +204,202 @@ export function useTranslation(
     };
   }, []);
 
-  const fetchSettings = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/settings");
-      const rawData: unknown = await response.json();
+  // The initial-fetch effects call these fetchers directly, so they are
+  // promise-chains rather than async/await: react-hooks/set-state-in-effect
+  // accepts state set from callbacks but not from an awaited function body.
+  const fetchSettings = useCallback(() => {
+    return fetch("/api/admin/settings")
+      .then((response) =>
+        (response.json() as Promise<unknown>).then((rawData) => {
+          if (!response.ok) {
+            const error =
+              rawData && typeof rawData === "object" && "error" in rawData
+                ? (rawData as { error?: unknown }).error
+                : rawData;
+            throw new Error(typeof error === "string" ? error : "Failed to fetch translation settings");
+          }
 
-      if (!response.ok) {
-        const error =
-          rawData && typeof rawData === "object" && "error" in rawData
-            ? (rawData as { error?: unknown }).error
-            : rawData;
-        throw new Error(typeof error === "string" ? error : "Failed to fetch translation settings");
-      }
+          const data = parseTranslationSettingsPayload(rawData);
+          if (!data) {
+            throw new Error("Invalid translation settings payload");
+          }
 
-      const data = parseTranslationSettingsPayload(rawData);
-      if (!data) {
-        throw new Error("Invalid translation settings payload");
-      }
+          if (!mountedRef.current) return;
 
-      if (!mountedRef.current) return;
+          setSettings(data);
+          setProvider(data.provider);
+          setTargetLang(data.targetLang);
 
-      setSettings(data);
-      setProvider(data.provider);
-      setTargetLang(data.targetLang);
+          setOpenrouterBaseUrl(data.openrouter.baseUrl || "");
+          setOpenrouterModel(data.openrouter.model);
+          setLocalBaseUrl(data.local.baseUrl || "");
+          setLocalModel(data.local.model || "");
 
-      setOpenrouterBaseUrl(data.openrouter.baseUrl || "");
-      setOpenrouterModel(data.openrouter.model);
-      setLocalBaseUrl(data.local.baseUrl || "");
-      setLocalModel(data.local.model || "");
+          const isPopularModel = POPULAR_MODELS.some((m) => m.id === data.openrouter.model);
+          if (!isPopularModel && data.openrouter.model) {
+            setOpenrouterCustomModel(data.openrouter.model);
+            setOpenrouterModel("custom");
+          } else {
+            setOpenrouterCustomModel("");
+          }
 
-      const isPopularModel = POPULAR_MODELS.some((m) => m.id === data.openrouter.model);
-      if (!isPopularModel && data.openrouter.model) {
-        setOpenrouterCustomModel(data.openrouter.model);
-        setOpenrouterModel("custom");
-      } else {
-        setOpenrouterCustomModel("");
-      }
-
-      setLocalCustomModel("");
-    } catch (error) {
-      console.error("Error fetching translation settings:", error);
-    }
+          setLocalCustomModel("");
+        })
+      )
+      .catch((error) => {
+        console.error("Error fetching translation settings:", error);
+      });
   }, []);
 
-  const fetchEstimate = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/translations/estimate");
-      if (response.ok) {
-        const data: TranslationEstimate = await response.json();
-        if (mountedRef.current) {
+  const fetchEstimate = useCallback(() => {
+    return fetch("/api/admin/translations/estimate")
+      .then((response) => (response.ok ? (response.json() as Promise<TranslationEstimate>) : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
           setEstimate(data);
         }
-      }
-    } catch (error) {
-      console.error("Error fetching translation estimate:", error);
-    }
+      })
+      .catch((error) => {
+        console.error("Error fetching translation estimate:", error);
+      });
   }, []);
 
-  const fetchNoteEstimate = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/note-translations/estimate");
-      if (response.ok) {
-        const data: NoteTranslationEstimate = await response.json();
-        if (mountedRef.current) {
+  const fetchNoteEstimate = useCallback(() => {
+    return fetch("/api/admin/note-translations/estimate")
+      .then((response) => (response.ok ? (response.json() as Promise<NoteTranslationEstimate>) : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
           setNoteEstimate(data);
         }
-      }
-    } catch (error) {
-      console.error("Error fetching note translation estimate:", error);
-    }
+      })
+      .catch((error) => {
+        console.error("Error fetching note translation estimate:", error);
+      });
   }, []);
 
-  const fetchBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
-    try {
-      const response = await fetch("/api/admin/translations");
-      const data: unknown = await response.json();
+  const fetchBulkProgress = useCallback((): Promise<BulkTranslationProgress | null> => {
+    return fetch("/api/admin/translations")
+      .then((response) =>
+        (response.json() as Promise<unknown>).then((data): BulkTranslationProgress | null => {
+          if (!response.ok) {
+            const error =
+              data && typeof data === "object" && "error" in data
+                ? (data as { error?: unknown }).error
+                : data;
+            console.error("Error fetching bulk translation progress:", error);
+            return null;
+          }
 
-      if (!response.ok) {
-        const error =
-          data && typeof data === "object" && "error" in data
-            ? (data as { error?: unknown }).error
-            : data;
+          if (data && typeof data === "object" && "error" in data) {
+            console.error(
+              "Error fetching bulk translation progress:",
+              (data as { error?: unknown }).error
+            );
+            return null;
+          }
+
+          if (!isBulkTranslationProgressPayload(data)) {
+            console.error("Invalid bulk translation progress payload:", data);
+            return null;
+          }
+
+          if (mountedRef.current) {
+            setBulkProgress(data);
+            setIsTranslating(data.status === "running");
+          }
+          return data;
+        })
+      )
+      .catch((error) => {
         console.error("Error fetching bulk translation progress:", error);
         return null;
-      }
-
-      if (data && typeof data === "object" && "error" in data) {
-        console.error(
-          "Error fetching bulk translation progress:",
-          (data as { error?: unknown }).error
-        );
-        return null;
-      }
-
-      if (!isBulkTranslationProgressPayload(data)) {
-        console.error("Invalid bulk translation progress payload:", data);
-        return null;
-      }
-
-      if (mountedRef.current) {
-        setBulkProgress(data);
-        setIsTranslating(data.status === "running");
-      }
-      return data;
-    } catch (error) {
-      console.error("Error fetching bulk translation progress:", error);
-      return null;
-    }
+      });
   }, []);
 
-  const fetchNoteBulkProgress = useCallback(async (): Promise<BulkTranslationProgress | null> => {
-    try {
-      const response = await fetch("/api/admin/note-translations");
-      const data: unknown = await response.json();
+  const fetchNoteBulkProgress = useCallback((): Promise<BulkTranslationProgress | null> => {
+    return fetch("/api/admin/note-translations")
+      .then((response) =>
+        (response.json() as Promise<unknown>).then((data): BulkTranslationProgress | null => {
+          if (!response.ok) {
+            const error =
+              data && typeof data === "object" && "error" in data
+                ? (data as { error?: unknown }).error
+                : data;
+            console.error("Error fetching note translation progress:", error);
+            return null;
+          }
 
-      if (!response.ok) {
-        const error =
-          data && typeof data === "object" && "error" in data
-            ? (data as { error?: unknown }).error
-            : data;
+          if (data && typeof data === "object" && "error" in data) {
+            console.error(
+              "Error fetching note translation progress:",
+              (data as { error?: unknown }).error
+            );
+            return null;
+          }
+
+          if (!isBulkTranslationProgressPayload(data)) {
+            console.error("Invalid note translation progress payload:", data);
+            return null;
+          }
+
+          if (mountedRef.current) {
+            setNoteBulkProgress(data);
+            setIsNoteTranslating(data.status === "running");
+          }
+          return data;
+        })
+      )
+      .catch((error) => {
         console.error("Error fetching note translation progress:", error);
         return null;
-      }
-
-      if (data && typeof data === "object" && "error" in data) {
-        console.error(
-          "Error fetching note translation progress:",
-          (data as { error?: unknown }).error
-        );
-        return null;
-      }
-
-      if (!isBulkTranslationProgressPayload(data)) {
-        console.error("Invalid note translation progress payload:", data);
-        return null;
-      }
-
-      if (mountedRef.current) {
-        setNoteBulkProgress(data);
-        setIsNoteTranslating(data.status === "running");
-      }
-      return data;
-    } catch (error) {
-      console.error("Error fetching note translation progress:", error);
-      return null;
-    }
+      });
   }, []);
 
-  const fetchModels = useCallback(async () => {
-    setIsModelsLoading(true);
-    try {
-      const response = await fetch("/api/admin/models");
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch models");
-      }
-
-      const models: ModelDefinition[] = Array.isArray(data.models)
-        ? data.models.map((model: { id: string; name?: string }): ModelDefinition => ({
-            id: model.id,
-            name: model.name || model.id,
-          }))
-        : [];
-
-      if (mountedRef.current) {
-        setLocalModels(models);
-        setLocalModel((prev) => {
-          if (prev && prev !== "custom" && !models.some((m) => m.id === prev)) {
-            setLocalCustomModel(prev);
-            return "custom";
+  const fetchModels = useCallback(() => {
+    // The loading flag is flipped inside the chain (one microtask later) so
+    // the provider-change effect can call this without setting state
+    // synchronously from the effect body.
+    return Promise.resolve()
+      .then(() => {
+        setIsModelsLoading(true);
+        return fetch("/api/admin/models");
+      })
+      .then((response) =>
+        response.json().then((data) => {
+          if (!response.ok) {
+            throw new Error(data.error || "Failed to fetch models");
           }
-          return prev;
-        });
-      }
-    } catch (error) {
-      console.error("Error fetching models:", error);
-      if (mountedRef.current) {
-        setLocalModels([]);
-      }
-    } finally {
-      if (mountedRef.current) {
-        setIsModelsLoading(false);
-      }
-    }
+
+          const models: ModelDefinition[] = Array.isArray(data.models)
+            ? data.models.map((model: { id: string; name?: string }): ModelDefinition => ({
+                id: model.id,
+                name: model.name || model.id,
+              }))
+            : [];
+
+          if (mountedRef.current) {
+            setLocalModels(models);
+            setLocalModel((prev) => {
+              if (prev && prev !== "custom" && !models.some((m) => m.id === prev)) {
+                setLocalCustomModel(prev);
+                return "custom";
+              }
+              return prev;
+            });
+          }
+        })
+      )
+      .catch((error) => {
+        console.error("Error fetching models:", error);
+        if (mountedRef.current) {
+          setLocalModels([]);
+        }
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setIsModelsLoading(false);
+        }
+      });
   }, []);
 
   // Initial fetch

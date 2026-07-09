@@ -21,6 +21,11 @@ interface PostsResponse {
   totalPages: number;
 }
 
+interface FetchedResults extends PostsResponse {
+  /** `tags|page` key the results were fetched for. */
+  key: string;
+}
+
 /**
  * Render the tag-based filtering UI with a tag selector, results area, loading and empty states, and pagination.
  *
@@ -40,17 +45,29 @@ function TagTreeContent() {
   const pageFromUrl = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
 
   const [selectedTags, setSelectedTags] = useState<string[]>(tagsFromUrl);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [totalPages, setTotalPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(pageFromUrl);
-  const [isLoadingPosts, setIsLoadingPosts] = useState(false);
+  // Last completed search; posts/counts/loading are derived from it so the
+  // fetch effect never has to set state synchronously.
+  const [fetched, setFetched] = useState<FetchedResults | null>(null);
 
-  // Sync state with URL when it changes (e.g., pagination clicks)
-  useEffect(() => {
-    setSelectedTags(tagsFromUrl);
+  // Sync state with URL when it changes (e.g., pagination clicks) — adjusted
+  // during render rather than in an effect. The functional update keeps the
+  // array identity stable when the tags are unchanged so the fetch effect
+  // doesn't re-run after our own router.push.
+  const [prevSearchParams, setPrevSearchParams] = useState(searchParams);
+  if (prevSearchParams !== searchParams) {
+    setPrevSearchParams(searchParams);
+    setSelectedTags((prev) => (prev.join(",") === tagsFromUrl.join(",") ? prev : tagsFromUrl));
     setCurrentPage(pageFromUrl);
-  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (tagsFromUrl.length === 0) setFetched(null);
+  }
+
+  const searchKey = `${selectedTags.join(",")}|${currentPage}`;
+  const hasTags = selectedTags.length > 0;
+  const posts = hasTags && fetched ? fetched.posts : [];
+  const totalCount = hasTags && fetched ? fetched.totalCount : 0;
+  const totalPages = hasTags && fetched ? fetched.totalPages : 0;
+  const isLoadingPosts = hasTags && fetched?.key !== searchKey;
 
   // Update URL when tags change (not page - pagination handles that via links)
   const updateUrl = useCallback(
@@ -66,41 +83,35 @@ function TagTreeContent() {
   );
 
   // Fetch posts when tags or page change
-  const fetchPosts = useCallback(async () => {
-    if (selectedTags.length === 0) {
-      setPosts([]);
-      setTotalCount(0);
-      setTotalPages(0);
-      return;
-    }
-
-    setIsLoadingPosts(true);
-    try {
-      const params = new URLSearchParams();
-      params.set("tags", selectedTags.join(","));
-      params.set("page", currentPage.toString());
-      params.set("limit", POSTS_PER_PAGE.toString());
-
-      const response = await fetch(`/api/posts/search?${params.toString()}`);
-      const data: PostsResponse = await response.json();
-
-      setPosts(data.posts);
-      setTotalCount(data.totalCount);
-      setTotalPages(data.totalPages);
-    } catch (error) {
-      console.error("Error fetching posts:", error);
-    } finally {
-      setIsLoadingPosts(false);
-    }
-  }, [selectedTags, currentPage]);
-
   useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
+    if (selectedTags.length === 0) return;
+
+    const key = `${selectedTags.join(",")}|${currentPage}`;
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    params.set("tags", selectedTags.join(","));
+    params.set("page", currentPage.toString());
+    params.set("limit", POSTS_PER_PAGE.toString());
+
+    fetch(`/api/posts/search?${params.toString()}`, { signal: controller.signal })
+      .then((response) => response.json())
+      .then((data: PostsResponse) => {
+        setFetched({ key, posts: data.posts, totalCount: data.totalCount, totalPages: data.totalPages });
+      })
+      .catch((error) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        console.error("Error fetching posts:", error);
+        // Record the failed search as empty so the loading skeleton clears.
+        setFetched({ key, posts: [], totalCount: 0, totalPages: 0 });
+      });
+
+    return () => controller.abort();
+  }, [selectedTags, currentPage]);
 
   const handleTagsChange = (tags: string[]) => {
     setSelectedTags(tags);
     setCurrentPage(1);
+    if (tags.length === 0) setFetched(null);
     updateUrl(tags);
   };
 

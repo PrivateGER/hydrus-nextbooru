@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   EyeIcon,
@@ -36,6 +43,40 @@ interface TextOverlayProps {
 
 const MODE_KEY = "ocrOverlayMode";
 const LEGACY_VISIBILITY_KEY = "ocrOverlayVisible";
+const MODE_CHANGE_EVENT = "ocr-overlay-mode-change";
+
+/**
+ * The persisted overlay mode is read through useSyncExternalStore so the
+ * stored value participates in render directly (no mount effect + setState,
+ * and overlay instances on the same page stay in sync).
+ */
+function subscribeToStoredMode(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(MODE_CHANGE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(MODE_CHANGE_EVENT, callback);
+  };
+}
+
+/** Read-only snapshot: peeks at the legacy flag but never writes (migration
+ * happens in an effect). Returns null when nothing is stored. */
+function readStoredMode(): OverlayMode | null {
+  const stored = localStorage.getItem(MODE_KEY);
+  if (stored === "hidden" || stored === "notes" || stored === "typeset") {
+    return stored;
+  }
+  const legacy = localStorage.getItem(LEGACY_VISIBILITY_KEY);
+  if (legacy !== null) {
+    return legacy === "false" ? "hidden" : "typeset";
+  }
+  return null;
+}
+
+function writeStoredMode(mode: OverlayMode) {
+  localStorage.setItem(MODE_KEY, mode);
+  window.dispatchEvent(new Event(MODE_CHANGE_EVENT));
+}
 
 /** aria-label for the toolbar button, naming the mode it will switch to next. */
 const MODE_LABEL: Record<OverlayMode, string> = {
@@ -52,7 +93,8 @@ const MODE_LABEL: Record<OverlayMode, string> = {
 export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayProps) {
   const router = useRouter();
   const [regions, setRegions] = useState<OverlayRegion[]>(initialRegions);
-  const [mode, setMode] = useState<OverlayMode>("typeset");
+  const storedMode = useSyncExternalStore(subscribeToStoredMode, readStoredMode, () => null);
+  const mode: OverlayMode = storedMode ?? "typeset";
   const [activeRegion, setActiveRegion] = useState<number | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,27 +104,27 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
   const cropVersion = regions.reduce((max, region) => Math.max(max, region.cropVersion), 0);
   const usePageInpaint = mode === "typeset" && hasTypesetContent && !pageInpaintFailed;
 
+  // Migrate the legacy boolean visibility flag once. Visible used to mean
+  // notes-only; now the default visible OCR experience is full-page typeset.
+  // readStoredMode already derives the mode from the legacy flag, so this
+  // only persists it under the new key (no state update needed).
   useEffect(() => {
-    const stored = localStorage.getItem(MODE_KEY);
-    if (stored === "hidden" || stored === "notes" || stored === "typeset") {
-      setMode(stored);
-      return;
-    }
-    // Migrate the legacy boolean visibility flag once. Visible used to mean
-    // notes-only; now the default visible OCR experience is full-page typeset.
+    if (localStorage.getItem(MODE_KEY) !== null) return;
     const legacy = localStorage.getItem(LEGACY_VISIBILITY_KEY);
     if (legacy !== null) {
-      const migrated: OverlayMode = legacy === "false" ? "hidden" : "typeset";
-      setMode(migrated);
-      localStorage.setItem(MODE_KEY, migrated);
+      writeStoredMode(legacy === "false" ? "hidden" : "typeset");
       localStorage.removeItem(LEGACY_VISIBILITY_KEY);
     }
   }, []);
 
-
-  useEffect(() => {
+  // Retry page inpainting when the post or its crops change — adjusted during
+  // render rather than in an effect.
+  const inpaintKey = `${hash}|${cropVersion}`;
+  const [prevInpaintKey, setPrevInpaintKey] = useState(inpaintKey);
+  if (prevInpaintKey !== inpaintKey) {
+    setPrevInpaintKey(inpaintKey);
     setPageInpaintFailed(false);
-  }, [hash, cropVersion]);
+  }
 
   // While a tooltip is open, dismiss it on Escape or a pointer press that
   // lands outside the overlay's roots (boxes wrapper + toolbar).
@@ -110,8 +152,7 @@ export function TextOverlay({ hash, initialRegions, ocrEnabled }: TextOverlayPro
     mode === "hidden" ? "notes" : mode === "notes" ? (hasTypesetContent ? "typeset" : "hidden") : "hidden";
 
   const cycleMode = () => {
-    localStorage.setItem(MODE_KEY, nextMode);
-    setMode(nextMode);
+    writeStoredMode(nextMode);
   };
 
   const handleScan = async () => {

@@ -91,19 +91,21 @@ export function useEmbeddings(
     },
   });
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/embeddings");
-      if (!response.ok) return;
-      const data: EmbeddingAdminStatus = await response.json();
-      if (mountedRef.current) {
-        applyStatus(data);
-        // Resume live updates if a batch was already running when this mounted.
-        if (data.batchRunning) startPolling();
-      }
-    } catch (error) {
-      console.error("Error fetching embedding status:", error);
-    }
+  // Promise-chain rather than async/await so the initial-fetch effect below
+  // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
+  const fetchStatus = useCallback(() => {
+    return fetch("/api/admin/embeddings")
+      .then((response) => (response.ok ? (response.json() as Promise<EmbeddingAdminStatus>) : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
+          applyStatus(data);
+          // Resume live updates if a batch was already running when this mounted.
+          if (data.batchRunning) startPolling();
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching embedding status:", error);
+      });
   }, [applyStatus, mountedRef, startPolling]);
 
   useEffect(() => {

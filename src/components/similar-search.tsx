@@ -32,36 +32,42 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
     return () => { abortRef.current?.abort(); };
   }, []);
 
-  // Search by hash via GET API
-  const searchByHash = useCallback(async (hash: string, thresh: number) => {
+  // Search by hash via GET API. Promise-chain with the searching/error flags
+  // set inside it (one microtask later) so the initial-search effect can call
+  // this without setting state synchronously from the effect body.
+  const searchByHash = useCallback((hash: string, thresh: number) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setIsSearching(true);
-    setError(null);
+    return Promise.resolve()
+      .then(() => {
+        setIsSearching(true);
+        setError(null);
 
-    try {
-      const params = new URLSearchParams({
-        hash,
-        threshold: String(thresh),
-        limit: "40",
+        const params = new URLSearchParams({
+          hash,
+          threshold: String(thresh),
+          limit: "40",
+        });
+        return fetch(`/api/similar?${params}`, { signal: controller.signal });
+      })
+      .then((response) =>
+        response.json().then((data) => {
+          if (!response.ok) {
+            throw new Error(data.error || "Search failed");
+          }
+          setResults(data.results);
+        })
+      )
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Search failed");
+        setResults(null);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsSearching(false);
       });
-      const response = await fetch(`/api/similar?${params}`, { signal: controller.signal });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Search failed");
-      }
-
-      setResults(data.results);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : "Search failed");
-      setResults(null);
-    } finally {
-      if (!controller.signal.aborted) setIsSearching(false);
-    }
   }, []);
 
   // Search by uploaded file via POST API
