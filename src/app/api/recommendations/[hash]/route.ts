@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrComputeRecommendationsByHash, MAX_RECOMMENDATION_LIMIT } from "@/lib/recommendations";
+import { apiLog } from "@/lib/logger";
 
 interface RouteParams {
   params: Promise<{ hash: string }>;
@@ -39,7 +40,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       }
     );
   } catch (error) {
-    console.error("Error fetching recommendations:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Error fetching recommendations");
     return NextResponse.json(
       { error: "Failed to fetch recommendations" },
       { status: 500 }

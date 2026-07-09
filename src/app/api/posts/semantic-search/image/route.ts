@@ -6,6 +6,7 @@ import {
 } from "@/lib/search";
 import { checkApiRateLimit, type ApiRateLimitConfig } from "@/lib/rate-limit";
 import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
+import { apiLog } from "@/lib/logger";
 
 /** Cap query-image uploads (matches the perceptual-hash reverse-search limit). */
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024; // 20MB
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(await fileEntry.arrayBuffer());
     result = await prepareImageQueryEmbedding(buffer);
   } catch (err) {
-    console.error("Failed to prepare image search", err);
+    apiLog.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to prepare image search");
     return NextResponse.json({ error: "Failed to prepare image search" }, { status: 500 });
   }
 

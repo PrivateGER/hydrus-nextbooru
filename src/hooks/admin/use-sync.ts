@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useBatchPolling } from "./use-batch-polling";
 import type { SyncStatus, Message } from "@/types/admin";
 
 export interface UseSyncReturn {
@@ -20,20 +21,39 @@ export function useSync(
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
+  const { mountedRef, startPolling } = useBatchPolling<SyncStatus>({
+    url: "/api/admin/sync",
+    onData: setSyncStatus,
+    isActive: (data) => data.status === "running",
+    onStop: (data) => {
+      setIsSyncing(false);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+      if (data.status === "completed") {
+        triggerSuccessAnimation();
+        setMessage({
+          type: "success",
+          text: `Sync completed! ${data.lastSyncCount.toLocaleString()} files imported.`,
+        });
+      } else if (data.status === "cancelled") {
+        setMessage({
+          type: "success",
+          text: `Sync cancelled. ${data.processedFiles.toLocaleString()} files were imported.`,
+        });
+      } else if (data.status === "error") {
+        setMessage({
+          type: "error",
+          text: `Sync failed: ${data.errorMessage}`,
+        });
       }
-    };
-  }, []);
+    },
+    onPollError: () => {
+      setIsSyncing(false);
+      setMessage({
+        type: "error",
+        text: "Failed to check sync status",
+      });
+    },
+  });
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -50,7 +70,7 @@ export function useSync(
         setIsLoading(false);
       }
     }
-  }, []);
+  }, [mountedRef]);
 
   // Initial fetch
   useEffect(() => {
@@ -75,57 +95,7 @@ export function useSync(
       }
 
       setMessage({ type: "success", text: "Sync started! You can monitor progress below." });
-
-      // Start polling for completion
-      pollIntervalRef.current = setInterval(async () => {
-        try {
-          const statusResponse = await fetch("/api/admin/sync");
-          const statusData = await statusResponse.json();
-
-          if (!mountedRef.current) return;
-
-          setSyncStatus(statusData);
-
-          if (statusData.status !== "running") {
-            if (pollIntervalRef.current) {
-              clearInterval(pollIntervalRef.current);
-              pollIntervalRef.current = null;
-            }
-            setIsSyncing(false);
-
-            if (statusData.status === "completed") {
-              triggerSuccessAnimation();
-              setMessage({
-                type: "success",
-                text: `Sync completed! ${statusData.lastSyncCount.toLocaleString()} files imported.`,
-              });
-            } else if (statusData.status === "cancelled") {
-              setMessage({
-                type: "success",
-                text: `Sync cancelled. ${statusData.processedFiles.toLocaleString()} files were imported.`,
-              });
-            } else if (statusData.status === "error") {
-              setMessage({
-                type: "error",
-                text: `Sync failed: ${statusData.errorMessage}`,
-              });
-            }
-          }
-        } catch (error) {
-          console.error("Error polling sync status:", error);
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          if (mountedRef.current) {
-            setIsSyncing(false);
-            setMessage({
-              type: "error",
-              text: "Failed to check sync status",
-            });
-          }
-        }
-      }, 2000);
+      startPolling();
     } catch (error) {
       setIsSyncing(false);
       setMessage({
@@ -133,7 +103,7 @@ export function useSync(
         text: error instanceof Error ? error.message : "Failed to start sync",
       });
     }
-  }, [setMessage, triggerSuccessAnimation]);
+  }, [setMessage, startPolling]);
 
   const cancelSync = useCallback(async () => {
     try {

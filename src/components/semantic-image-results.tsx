@@ -3,14 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import { PostCard } from "@/components/post-card";
 import { Pagination } from "@/components/pagination";
+import type { PostSummary } from "@/types/post";
 
-interface SemanticImageResult {
+interface SemanticImageResult extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
   distance: number;
   score?: number;
 }

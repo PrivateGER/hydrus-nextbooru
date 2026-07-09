@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import { postCardSelect } from "@/lib/post-select";
 
 // Cache TTL: 24 hours in milliseconds
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -137,14 +138,7 @@ export async function getOrComputeRecommendations(
     where: { postId },
     include: {
       recommended: {
-        select: {
-          id: true,
-          hash: true,
-          width: true,
-          height: true,
-          blurhash: true,
-          mimeType: true,
-        },
+        select: postCardSelect,
       },
     },
     orderBy: { score: "desc" },
@@ -227,14 +221,7 @@ async function computeAndCacheRecommendations(
   // Fetch post details for the recommended IDs
   const posts = await prisma.post.findMany({
     where: { id: { in: recommendedIds } },
-    select: {
-      id: true,
-      hash: true,
-      width: true,
-      height: true,
-      blurhash: true,
-      mimeType: true,
-    },
+    select: postCardSelect,
   });
 
   const postMap = new Map(posts.map((p) => [p.id, p]));
@@ -316,14 +303,7 @@ export async function getTagNeighborhoodsForSeeds(
     where: { postId: { in: uniqueIds } },
     include: {
       recommended: {
-        select: {
-          id: true,
-          hash: true,
-          width: true,
-          height: true,
-          blurhash: true,
-          mimeType: true,
-        },
+        select: postCardSelect,
       },
     },
     orderBy: { score: "desc" },
@@ -367,14 +347,7 @@ export async function getTagNeighborhoodsForSeeds(
     recommendedIds.length > 0
       ? await prisma.post.findMany({
           where: { id: { in: recommendedIds } },
-          select: {
-            id: true,
-            hash: true,
-            width: true,
-            height: true,
-            blurhash: true,
-            mimeType: true,
-          },
+          select: postCardSelect,
         })
       : [];
   const postMap = new Map(posts.map((p) => [p.id, p]));

@@ -21,6 +21,7 @@ import {
   findRelatedPostsByEmbeddingForPosts,
 } from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
+import { feedLog } from "@/lib/logger";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
   getEmbeddingOpenRouterSettings,
@@ -707,7 +708,7 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   try {
     return toEmbeddingConfig(await getEmbeddingOpenRouterSettings());
   } catch (error) {
-    console.error("Feed: embeddings unavailable, falling back to tag similarity only:", error);
+    feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: embeddings unavailable, falling back to tag similarity only");
     return null;
   }
 }
@@ -734,7 +735,7 @@ async function fetchEmbeddingNeighborhoods(
     limit: config.neighborsPerSeed,
     minScore: config.minEmbeddingScore,
   }).catch((error): Map<number, EmbeddedRelatedPost[]> => {
-    console.error("Feed: batched embedding neighbors failed:", error);
+    feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched embedding neighbors failed");
     return new Map();
   });
 }
@@ -913,7 +914,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     }),
     getTagNeighborhoodsForSeeds(allSeedIds, config.neighborsPerSeed).catch(
       (error): Map<number, RecommendedPost[]> => {
-        console.error("Feed: batched tag recommendations failed:", error);
+        feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched tag recommendations failed");
         return new Map();
       }
     ),

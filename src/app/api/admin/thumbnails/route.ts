@@ -9,14 +9,13 @@ import {
 } from "@/lib/thumbnails";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, thumbnailLog } from "@/lib/logger";
+import { createBatchRunner } from "@/lib/batch-runner";
 
 // Sane upper bounds for the batch-generation request body.
 const MAX_BATCH_SIZE = 1000;
 const MAX_LIMIT = 10_000_000;
 
-// Track if batch generation is running
-let batchRunning = false;
-let batchProgress = { processed: 0, total: 0 };
+const batch = createBatchRunner<{ processed: number; succeeded: number; failed: number }>();
 
 // GET - Get thumbnail generation statistics
 export async function GET() {
@@ -28,8 +27,7 @@ export async function GET() {
 
     return NextResponse.json({
       ...stats,
-      batchRunning,
-      batchProgress: batchRunning ? batchProgress : null,
+      ...batch.snapshot(),
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get thumbnail stats');
@@ -71,36 +69,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if batch is already running
-    if (batchRunning) {
+    if (batch.running) {
       return NextResponse.json(
         { error: "Batch generation is already running" },
         { status: 409 }
       );
     }
 
-    // Start batch generation in background
-    batchRunning = true;
-    batchProgress = { processed: 0, total: 0 };
-
     thumbnailLog.info({ limit: limit || 'unlimited', batchSize: batchSize || 50 }, 'Starting batch thumbnail generation');
 
-    batchGenerateThumbnails({
-      limit,
-      batchSize,
-      onProgress: (processed, total) => {
-        batchProgress = { processed, total };
-      },
-    })
-      .then((result) => {
-        thumbnailLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, 'Batch thumbnail generation completed');
-      })
-      .catch((error) => {
-        thumbnailLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Batch thumbnail generation failed');
-      })
-      .finally(() => {
-        batchRunning = false;
-      });
+    batch.start(
+      (onProgress) => batchGenerateThumbnails({ limit, batchSize, onProgress }),
+      {
+        onCompleted: (result) => {
+          thumbnailLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, 'Batch thumbnail generation completed');
+        },
+        onFailed: (message) => {
+          thumbnailLog.error({ error: message }, 'Batch thumbnail generation failed');
+        },
+      }
+    );
 
     return NextResponse.json({
       message: "Batch thumbnail generation started",
@@ -128,7 +116,7 @@ export async function DELETE(request: NextRequest) {
 
     if (clearAll) {
       // Don't allow clearing while generation is running
-      if (batchRunning) {
+      if (batch.running) {
         return NextResponse.json(
           { error: "Cannot clear thumbnails while generation is running" },
           { status: 409 }

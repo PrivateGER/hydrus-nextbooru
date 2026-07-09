@@ -3,12 +3,9 @@ import { prisma } from "@/lib/db";
 import { getPhashStats, batchComputePhashes } from "@/lib/phash";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, phashLog } from "@/lib/logger";
+import { createBatchRunner } from "@/lib/batch-runner";
 
-// Track batch computation state
-let batchRunning = false;
-let batchProgress = { processed: 0, total: 0 };
-let batchStatus: "idle" | "running" | "completed" | "failed" = "idle";
-let batchError: string | null = null;
+const batch = createBatchRunner<{ processed: number; succeeded: number; failed: number }>();
 
 // GET - Get phash computation statistics
 export async function GET() {
@@ -20,10 +17,7 @@ export async function GET() {
 
     return NextResponse.json({
       ...stats,
-      batchRunning,
-      batchProgress: batchRunning ? batchProgress : null,
-      batchStatus,
-      batchError,
+      ...batch.snapshot(),
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to get phash stats");
@@ -51,39 +45,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "limit must be a non-negative integer" }, { status: 400 });
     }
 
-    if (batchRunning) {
+    if (batch.running) {
       return NextResponse.json(
         { error: "Batch computation is already running" },
         { status: 409 }
       );
     }
 
-    batchRunning = true;
-    batchProgress = { processed: 0, total: 0 };
-    batchStatus = "running";
-    batchError = null;
-
     phashLog.info({ limit: limit || "unlimited", batchSize: batchSize || 50 }, "Starting batch phash computation");
 
-    batchComputePhashes({
-      limit,
-      batchSize,
-      onProgress: (processed, total) => {
-        batchProgress = { processed, total };
-      },
-    })
-      .then((result) => {
-        batchStatus = "completed";
-        phashLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, "Batch phash computation completed");
-      })
-      .catch((error) => {
-        batchStatus = "failed";
-        batchError = error instanceof Error ? error.message : String(error);
-        phashLog.error({ error: batchError }, "Batch phash computation failed");
-      })
-      .finally(() => {
-        batchRunning = false;
-      });
+    batch.start(
+      (onProgress) => batchComputePhashes({ limit, batchSize, onProgress }),
+      {
+        onCompleted: (result) => {
+          phashLog.info({ processed: result.processed, succeeded: result.succeeded, failed: result.failed }, "Batch phash computation completed");
+        },
+        onFailed: (message) => {
+          phashLog.error({ error: message }, "Batch phash computation failed");
+        },
+      }
+    );
 
     return NextResponse.json({
       message: "Batch phash computation started",
@@ -115,7 +96,7 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    if (batchRunning) {
+    if (batch.running) {
       return NextResponse.json(
         { error: "Cannot reset while batch computation is running" },
         { status: 409 }

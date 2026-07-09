@@ -1,17 +1,10 @@
 "use client";
 
 import { PostCard } from "@/components/post-card";
-
-interface Post {
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
-}
+import type { PostSummary } from "@/types/post";
 
 interface RandomHighlightsProps {
-  posts: Post[];
+  posts: PostSummary[];
 }
 
 export function RandomHighlights({ posts }: RandomHighlightsProps) {

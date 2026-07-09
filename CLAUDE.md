@@ -114,9 +114,9 @@ under a multi-worker or multi-replica deployment:
   before scaling out.
 - **In-process batch locks** on the admin maintenance routes — thumbnails,
   phash, and embeddings (`src/app/api/admin/{thumbnails,phash,embeddings}/route.ts`)
-  use a module-level `let batchRunning` flag to prevent overlapping batch runs.
-  Across multiple processes the guard does not hold and batches can run
-  concurrently against the same data.
+  each hold a module-level `createBatchRunner()` instance (`src/lib/batch-runner.ts`)
+  whose running flag prevents overlapping batch runs. Across multiple processes
+  the guard does not hold and batches can run concurrently against the same data.
 - **Recommendation compute coalescing** (`src/lib/recommendations.ts`): the
   in-flight promise map that dedupes concurrent recomputes for the same post is
   per-process. The underlying DB writes are transactional and remain safe

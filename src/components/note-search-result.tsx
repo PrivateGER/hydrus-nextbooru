@@ -2,14 +2,10 @@
 
 import Link from "next/link";
 import DOMPurify from "isomorphic-dompurify";
+import type { PostSummary } from "@/types/post";
 
-interface Post {
+interface Post extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
 }
 
 interface NoteSearchResultProps {

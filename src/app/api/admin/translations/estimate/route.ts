@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyAdminSession } from "@/lib/auth";
+import { apiLog } from "@/lib/logger";
 import {
   getOpenRouterSettings,
   getTranslationSettings,
@@ -99,7 +100,7 @@ export async function GET() {
       );
     }
 
-    console.error("Error estimating translation cost:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Error estimating translation cost");
     return NextResponse.json(
       { error: "Failed to estimate translation cost" },
       { status: 500 }

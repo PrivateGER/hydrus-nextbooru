@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findRelatedPostsByEmbeddingForPosts } from "./store";
+import { aiLog } from "@/lib/logger";
 
 const { mockQueryRaw } = vi.hoisted(() => ({
   mockQueryRaw: vi.fn(),
@@ -28,7 +29,7 @@ describe("findRelatedPostsByEmbeddingForPosts", () => {
   });
 
   it("omits failed chunks while returning neighbors from surviving chunks", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logError = vi.spyOn(aiLog, "error").mockImplementation(() => {});
     mockQueryRaw
       .mockRejectedValueOnce(new Error("database timeout"))
       .mockResolvedValueOnce([
@@ -64,11 +65,11 @@ describe("findRelatedPostsByEmbeddingForPosts", () => {
         score: 0.75,
       },
     ]);
-    expect(consoleError).toHaveBeenCalledWith(
-      "Embedding related-post chunk failed for seeds 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16:",
-      expect.any(Error)
+    expect(logError).toHaveBeenCalledWith(
+      { seeds: "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16", error: "database timeout" },
+      "Embedding related-post chunk failed"
     );
-    consoleError.mockRestore();
+    logError.mockRestore();
   });
 
   it("returns an empty entry for embedded seeds with no related rows", async () => {
