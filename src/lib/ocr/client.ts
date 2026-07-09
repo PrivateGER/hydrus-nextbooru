@@ -1,5 +1,5 @@
 import { getOcrServiceUrl, getOcrTimeoutMs, isOcrEnabled, OCR_PAGE_INPAINT_CONFIG, OCR_PIPELINE_CONFIG } from "./config";
-import { OcrServiceResponseError, OcrServiceUnavailableError } from "./errors";
+import { OcrServiceBusyError, OcrServiceResponseError, OcrServiceUnavailableError } from "./errors";
 import { parseSidecarResponse } from "./parse";
 import type { ParsedRegion } from "./types";
 import { aiLog } from "@/lib/logger";
@@ -17,6 +17,33 @@ const STREAM_HEADER_BYTES = 5;
 // as an error. The skip state is authoritative: the page simply has no text,
 // which is a COMPLETE scan with zero regions, not a failure.
 const NO_TEXT_PROGRESS_STATES = new Set(["skip-no-regions", "skip-no-text"]);
+
+// The sidecar's gateway keeps its task queue unbounded, but the single worker
+// behind it guards itself with a non-blocking lock and rejects overlapping
+// work with HTTP 429 ("some Method is already being executed"). On the
+// streaming endpoints that rejection is relayed to us inside a stream ERROR
+// frame (the HTTP response itself stays 200), so busy-ness must be detected
+// from the frame text as well as from a literal 429 status.
+const BUSY_STREAM_ERROR_PATTERN = /\b429\b|too many requests|already being executed/i;
+
+function classifyStreamError(text: string): OcrServiceResponseError {
+  if (BUSY_STREAM_ERROR_PATTERN.test(text)) {
+    return new OcrServiceBusyError(`OCR service is busy: ${text}`);
+  }
+  return new OcrServiceResponseError(`OCR service stream error: ${text}`);
+}
+
+function responseStatusError(response: Response): OcrServiceResponseError {
+  if (response.status === 429) {
+    return new OcrServiceBusyError(
+      `OCR service is busy: ${response.status} ${response.statusText}`
+    );
+  }
+  return new OcrServiceResponseError(
+    `OCR service error: ${response.status} ${response.statusText}`,
+    response.status
+  );
+}
 
 
 /**
@@ -68,10 +95,7 @@ export async function scanImage(
       { status: response.status, body: body.slice(0, 500) },
       "OCR sidecar returned an error"
     );
-    throw new OcrServiceResponseError(
-      `OCR service error: ${response.status} ${response.statusText}`,
-      response.status
-    );
+    throw responseStatusError(response);
   }
 
   const frame = await readScanResultPayload(response);
@@ -140,10 +164,7 @@ export async function renderInpaintedPage(
       { status: response.status, body: body.slice(0, 500) },
       "OCR sidecar returned a page inpaint error"
     );
-    throw new OcrServiceResponseError(
-      `OCR service error: ${response.status} ${response.statusText}`,
-      response.status
-    );
+    throw responseStatusError(response);
   }
 
   const payload = await readStreamResultPayload(response);
@@ -200,7 +221,7 @@ async function readStreamResultPayload(response: Response): Promise<Uint8Array> 
   const bytes = await readStreamBytes(response);
   for (const { status, frame } of iterateStreamFrames(bytes)) {
     if (status === STREAM_ERROR) {
-      throw new OcrServiceResponseError(`OCR service stream error: ${new TextDecoder().decode(frame)}`);
+      throw classifyStreamError(new TextDecoder().decode(frame));
     }
     if (status === STREAM_RESULT) return frame;
   }
@@ -224,7 +245,7 @@ async function readScanResultPayload(response: Response): Promise<Uint8Array | n
     }
     if (status === STREAM_ERROR) {
       if (sawNoText) return null;
-      throw new OcrServiceResponseError(`OCR service stream error: ${new TextDecoder().decode(frame)}`);
+      throw classifyStreamError(new TextDecoder().decode(frame));
     }
     if (status === STREAM_RESULT) return frame;
   }

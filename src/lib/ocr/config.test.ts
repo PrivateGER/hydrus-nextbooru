@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isOcrEnabled, getOcrServiceUrl, getOcrTimeoutMs, OCR_PIPELINE_CONFIG, OCR_PAGE_INPAINT_CONFIG } from "./config";
+import {
+  isOcrEnabled,
+  getOcrServiceUrl,
+  getOcrTimeoutMs,
+  getOcrBusyRetryDelaysMs,
+  OCR_PIPELINE_CONFIG,
+  OCR_PAGE_INPAINT_CONFIG,
+} from "./config";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -7,6 +14,7 @@ describe("ocr config", () => {
   beforeEach(() => {
     delete process.env.OCR_SERVICE_URL;
     delete process.env.OCR_SERVICE_TIMEOUT_MS;
+    delete process.env.OCR_BUSY_RETRY_DELAYS_MS;
   });
 
   afterEach(() => {
@@ -37,6 +45,16 @@ describe("ocr config", () => {
     expect(getOcrTimeoutMs()).toBe(120000);
     process.env.OCR_SERVICE_TIMEOUT_MS = "30000";
     expect(getOcrTimeoutMs()).toBe(30000);
+  });
+
+  it("busy retry delays default to a growing schedule and accept a comma list", () => {
+    expect(getOcrBusyRetryDelaysMs()).toEqual([5_000, 15_000, 45_000, 90_000]);
+
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0, 10,250";
+    expect(getOcrBusyRetryDelaysMs()).toEqual([0, 10, 250]);
+
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "garbage,-3";
+    expect(getOcrBusyRetryDelaysMs()).toEqual([5_000, 15_000, 45_000, 90_000]);
   });
 
   it("uses separate sidecar configs for OCR JSON and page inpaint calls", () => {

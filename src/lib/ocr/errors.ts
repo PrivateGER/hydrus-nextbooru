@@ -16,3 +16,17 @@ export class OcrServiceResponseError extends Error {
     this.statusCode = statusCode;
   }
 }
+
+/**
+ * The sidecar's single worker rejected the request because it is already
+ * executing another one (HTTP 429 / "some Method is already being executed").
+ * The image is fine — the service is momentarily (or persistently, when its
+ * worker lock wedges) occupied, so callers should back off and retry rather
+ * than fail the post. Maps to 503 with Retry-After.
+ */
+export class OcrServiceBusyError extends OcrServiceResponseError {
+  constructor(message: string) {
+    super(message, 429);
+    this.name = "OcrServiceBusyError";
+  }
+}

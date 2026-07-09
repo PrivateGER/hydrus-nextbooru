@@ -39,6 +39,26 @@ export function getOcrServiceUrl(): string {
   return raw.replace(/\/+$/, "");
 }
 
+const DEFAULT_BUSY_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 90_000];
+
+/**
+ * Backoff schedule for retrying a sidecar call that was rejected as busy
+ * (429). The sidecar's single worker keeps grinding a job even after its
+ * client times out and disconnects, and during that window its gateway can
+ * dispatch new work straight into the worker's busy lock — so busy responses
+ * are transient service state, never a property of the post being scanned.
+ * Override with OCR_BUSY_RETRY_DELAYS_MS as a comma-separated ms list.
+ */
+export function getOcrBusyRetryDelaysMs(): number[] {
+  const raw = process.env.OCR_BUSY_RETRY_DELAYS_MS;
+  if (!raw?.trim()) return DEFAULT_BUSY_RETRY_DELAYS_MS;
+  const parsed = raw
+    .split(",")
+    .map((part) => Number.parseInt(part.trim(), 10))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return parsed.length > 0 ? parsed : DEFAULT_BUSY_RETRY_DELAYS_MS;
+}
+
 /** Per-request sidecar timeout in milliseconds. */
 export function getOcrTimeoutMs(): number {
   const raw = process.env.OCR_SERVICE_TIMEOUT_MS;
