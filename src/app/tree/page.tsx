@@ -94,7 +94,10 @@ function TagTreeContent() {
     params.set("limit", POSTS_PER_PAGE.toString());
 
     fetch(`/api/posts/search?${params.toString()}`, { signal: controller.signal })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) throw new Error(`Search failed with status ${response.status}`);
+        return response.json();
+      })
       .then((data: PostsResponse) => {
         setFetched({ key, posts: data.posts, totalCount: data.totalCount, totalPages: data.totalPages });
       })

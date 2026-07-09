@@ -52,9 +52,9 @@ export function useThumbnails(
   // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
   const fetchStats = useCallback(() => {
     return fetch("/api/admin/thumbnails")
-      .then((response) => response.json())
+      .then((response) => (response.ok ? (response.json() as Promise<ThumbnailStats>) : null))
       .then((data) => {
-        if (mountedRef.current) {
+        if (data && mountedRef.current) {
           setThumbStats(data);
           setIsGenerating(data.batchRunning);
           // Resume live updates if a batch was already running when this mounted.

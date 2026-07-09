@@ -78,8 +78,9 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
 
         return fetch(`/api/tags/tree?${params.toString()}`, { signal });
       })
-      .then((response) => response.json())
-      .then((data: TagTreeResponse) => {
+      .then((response) => (response.ok ? (response.json() as Promise<TagTreeResponse>) : null))
+      .then((data) => {
+        if (!data || !Array.isArray(data.tags)) return;
         setTags(data.tags);
         setPostCount(data.postCount);
       })

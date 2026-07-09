@@ -84,8 +84,11 @@ export function useTagSuggestions({
           signal: controller.signal,
         });
       })
-      .then((response) => response.json())
+      .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
+        // An error payload without a tags array must not reach setSuggestions.
+        if (!data || !Array.isArray(data.tags)) return;
+
         // Filter out omnipresent tags when there are selected tags
         const filtered = selectedTags.length > 0
           ? data.tags.filter((t: TagSuggestion) => t.remainingCount === null || t.remainingCount > 0)
@@ -172,7 +175,9 @@ export function useTagSuggestions({
         const response = await fetch(`/api/tags/search?${params.toString()}`, {
           signal: controller.signal,
         });
-        const data = await response.json();
+        const data = response.ok ? await response.json() : null;
+        // An error payload without a tags array must not reach setSuggestions.
+        if (!data || !Array.isArray(data.tags)) return;
         setSuggestions(data.tags);
         setShowSuggestions(true);
         setHighlightedIndex(-1);

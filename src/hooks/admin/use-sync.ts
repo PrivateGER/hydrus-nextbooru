@@ -59,9 +59,9 @@ export function useSync(
   // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
   const fetchStatus = useCallback(() => {
     return fetch("/api/admin/sync")
-      .then((response) => response.json())
+      .then((response) => (response.ok ? (response.json() as Promise<SyncStatus>) : null))
       .then((data) => {
-        if (mountedRef.current) {
+        if (data && mountedRef.current) {
           setSyncStatus(data);
           setIsSyncing(data.status === "running");
           // Resume live updates if a sync was already running when this mounted.
