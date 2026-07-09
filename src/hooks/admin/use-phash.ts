@@ -25,6 +25,13 @@ export function usePhash(
     isActive: (data) => data.batchRunning,
     onStop: (data) => {
       setIsComputing(false);
+      if (data.batchStatus === "failed") {
+        setMessage({
+          type: "error",
+          text: data.batchError || "Phash computation failed",
+        });
+        return;
+      }
       triggerSuccessAnimation();
       setMessage({
         type: "success",
@@ -48,11 +55,14 @@ export function usePhash(
       if (mountedRef.current) {
         setPhashStats(data);
         setIsComputing(data.batchRunning);
+        // Resume live updates if a batch was already running (e.g. started in
+        // another tab) when this hook mounted.
+        if (data.batchRunning) startPolling();
       }
     } catch (error) {
       console.error("Error fetching phash stats:", error);
     }
-  }, [mountedRef]);
+  }, [mountedRef, startPolling]);
 
   useEffect(() => {
     fetchStats();

@@ -98,11 +98,13 @@ export function useEmbeddings(
       const data: EmbeddingAdminStatus = await response.json();
       if (mountedRef.current) {
         applyStatus(data);
+        // Resume live updates if a batch was already running when this mounted.
+        if (data.batchRunning) startPolling();
       }
     } catch (error) {
       console.error("Error fetching embedding status:", error);
     }
-  }, [applyStatus, mountedRef]);
+  }, [applyStatus, mountedRef, startPolling]);
 
   useEffect(() => {
     fetchStatus();

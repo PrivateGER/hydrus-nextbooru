@@ -42,7 +42,7 @@ export function useSync(
       } else if (data.status === "error") {
         setMessage({
           type: "error",
-          text: `Sync failed: ${data.errorMessage}`,
+          text: data.errorMessage ? `Sync failed: ${data.errorMessage}` : "Sync failed",
         });
       }
     },
@@ -62,6 +62,8 @@ export function useSync(
       if (mountedRef.current) {
         setSyncStatus(data);
         setIsSyncing(data.status === "running");
+        // Resume live updates if a sync was already running when this mounted.
+        if (data.status === "running") startPolling();
       }
     } catch (error) {
       console.error("Error fetching sync status:", error);
@@ -70,7 +72,7 @@ export function useSync(
         setIsLoading(false);
       }
     }
-  }, [mountedRef]);
+  }, [mountedRef, startPolling]);
 
   // Initial fetch
   useEffect(() => {

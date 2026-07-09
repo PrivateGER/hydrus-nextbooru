@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    thumbnailLog.info({ limit: limit || 'unlimited', batchSize: batchSize || 50 }, 'Starting batch thumbnail generation');
+    thumbnailLog.info({ limit: limit ?? 'unlimited', batchSize: batchSize ?? 50 }, 'Starting batch thumbnail generation');
 
     batch.start(
       (onProgress) => batchGenerateThumbnails({ limit, batchSize, onProgress }),
@@ -92,8 +92,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       message: "Batch thumbnail generation started",
-      limit: limit || "unlimited",
-      batchSize: batchSize || 50,
+      limit: limit ?? "unlimited",
+      batchSize: batchSize ?? 50,
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to start batch generation');

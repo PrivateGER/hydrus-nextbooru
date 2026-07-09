@@ -73,9 +73,18 @@ export function createBatchRunner<R>(): BatchRunner<R> {
       error = null;
       lastResult = null;
 
-      run((processed, total) => {
-        progress = { processed, total };
-      })
+      // A synchronous throw from `run` is funneled into the same rejection
+      // path below, so the runner can't stay locked as "running".
+      let batchPromise: Promise<R>;
+      try {
+        batchPromise = run((processed, total) => {
+          progress = { processed, total };
+        });
+      } catch (err) {
+        batchPromise = Promise.reject(err);
+      }
+
+      batchPromise
         .then((result) => {
           status = "completed";
           lastResult = result;

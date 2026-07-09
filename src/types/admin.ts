@@ -20,6 +20,8 @@ export interface ThumbnailStats {
   unsupported: number;
   batchRunning: boolean;
   batchProgress: { processed: number; total: number } | null;
+  batchStatus: "idle" | "running" | "completed" | "failed";
+  batchError: string | null;
 }
 
 export interface TranslationSettings {

@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { postCardSelect } from "@/lib/post-select";
+import type { PostSummary } from "@/types/post";
 
 // Cache TTL: 24 hours in milliseconds
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -54,13 +55,8 @@ export const MAX_SOURCE_TAG_FREQUENCY = 0.3;
  */
 export const MIN_SOURCE_TAG_PRUNE_COUNT = 500;
 
-export interface RecommendedPost {
+export interface RecommendedPost extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
   /**
    * IDF-weighted tag cosine similarity in [0, 1]; 1 = tag-identical posts.
    * Comparable across source posts (see migration 20260707120000).
@@ -96,14 +92,7 @@ function clampRecommendationLimit(limit: number): number {
 }
 
 function mapRecommendation(rec: {
-  recommended: {
-    id: number;
-    hash: string;
-    width: number | null;
-    height: number | null;
-    blurhash: string | null;
-    mimeType: string;
-  };
+  recommended: PostSummary & { id: number };
   score: number;
 }): RecommendedPost {
   return {

@@ -27,6 +27,7 @@ interface BatchPollingOptions<T> {
  */
 export function useBatchPolling<T>(options: BatchPollingOptions<T>) {
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollInFlightRef = useRef(false);
   const mountedRef = useRef(true);
 
   const optionsRef = useRef(options);
@@ -51,9 +52,15 @@ export function useBatchPolling<T>(options: BatchPollingOptions<T>) {
   const startPolling = useCallback(() => {
     if (pollIntervalRef.current) return;
     pollIntervalRef.current = setInterval(async () => {
+      // A slow response must not overlap the next tick — a stale reply could
+      // otherwise arrive after a newer final one and regress the UI.
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
       const o = optionsRef.current;
       try {
         const response = await fetch(o.url);
+        // Skip (rather than abort on) non-OK responses: a transient 5xx while
+        // the server is busy with the batch shouldn't kill the poll loop.
         if (!response.ok) return;
         const data: T = await response.json();
         if (!mountedRef.current) return;
@@ -69,6 +76,8 @@ export function useBatchPolling<T>(options: BatchPollingOptions<T>) {
         if (mountedRef.current) {
           o.onPollError?.();
         }
+      } finally {
+        pollInFlightRef.current = false;
       }
     }, optionsRef.current.intervalMs ?? 2000);
   }, [stopPolling]);

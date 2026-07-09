@@ -26,6 +26,13 @@ export function useThumbnails(
     isActive: (data) => data.batchRunning,
     onStop: (data) => {
       setIsGenerating(false);
+      if (data.batchStatus === "failed") {
+        setMessage({
+          type: "error",
+          text: data.batchError || "Thumbnail generation failed",
+        });
+        return;
+      }
       triggerSuccessAnimation();
       setMessage({
         type: "success",
@@ -48,11 +55,13 @@ export function useThumbnails(
       if (mountedRef.current) {
         setThumbStats(data);
         setIsGenerating(data.batchRunning);
+        // Resume live updates if a batch was already running when this mounted.
+        if (data.batchRunning) startPolling();
       }
     } catch (error) {
       console.error("Error fetching thumbnail stats:", error);
     }
-  }, [mountedRef]);
+  }, [mountedRef, startPolling]);
 
   // Initial fetch
   useEffect(() => {

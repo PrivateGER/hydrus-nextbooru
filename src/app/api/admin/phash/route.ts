@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    phashLog.info({ limit: limit || "unlimited", batchSize: batchSize || 50 }, "Starting batch phash computation");
+    phashLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? 50 }, "Starting batch phash computation");
 
     batch.start(
       (onProgress) => batchComputePhashes({ limit, batchSize, onProgress }),
@@ -68,8 +68,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       message: "Batch phash computation started",
-      limit: limit || "unlimited",
-      batchSize: batchSize || 50,
+      limit: limit ?? "unlimited",
+      batchSize: batchSize ?? 50,
     });
   } catch (error) {
     apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Failed to start batch phash computation");
