@@ -127,3 +127,72 @@ describe("POST /api/admin/thumbnails body validation", () => {
     expect(mockBatchGenerateThumbnails).not.toHaveBeenCalled();
   });
 });
+
+describe("thumbnail batch lifecycle", () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyAdminSession.mockResolvedValue({ authorized: true });
+    mockGetThumbnailStats.mockResolvedValue({ total: 1, pending: 0, complete: 1 });
+  });
+
+  it("reports a completed batch in the GET snapshot", async () => {
+    mockBatchGenerateThumbnails.mockResolvedValueOnce({ processed: 2, succeeded: 2, failed: 0 });
+    const { GET, POST } = await import("./route");
+
+    await POST(postRequest({}));
+    await flush();
+
+    const data = await (await GET()).json();
+    expect(data.batchRunning).toBe(false);
+    expect(data.batchStatus).toBe("completed");
+    expect(data.batchError).toBeNull();
+    expect(data.lastBatchResult).toEqual({ processed: 2, succeeded: 2, failed: 0 });
+    expect(mockThumbnailLogInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ processed: 2, succeeded: 2, failed: 0 }),
+      expect.stringContaining("completed")
+    );
+  });
+
+  it("reports a failed batch with its error in the GET snapshot", async () => {
+    mockBatchGenerateThumbnails.mockRejectedValueOnce(new Error("disk full"));
+    const { GET, POST } = await import("./route");
+
+    await POST(postRequest({}));
+    await flush();
+
+    const data = await (await GET()).json();
+    expect(data.batchStatus).toBe("failed");
+    expect(data.batchError).toBe("disk full");
+    expect(mockThumbnailLogError).toHaveBeenCalledWith(
+      { error: "disk full" },
+      expect.stringContaining("failed")
+    );
+  });
+
+  it("returns 409 for POST and blocking DELETE while a batch is running", async () => {
+    let resolveBatch!: (value: { processed: number; succeeded: number; failed: number }) => void;
+    mockBatchGenerateThumbnails.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveBatch = resolve;
+      })
+    );
+    const { POST, DELETE } = await import("./route");
+
+    expect((await POST(postRequest({}))).status).toBe(200);
+    expect((await POST(postRequest({}))).status).toBe(409);
+
+    const deleteResponse = await DELETE(
+      new NextRequest("http://localhost/api/admin/thumbnails", {
+        method: "DELETE",
+        body: JSON.stringify({ clearAll: true }),
+        headers: { "content-type": "application/json" },
+      })
+    );
+    expect(deleteResponse.status).toBe(409);
+
+    resolveBatch({ processed: 0, succeeded: 0, failed: 0 });
+    await flush();
+  });
+});

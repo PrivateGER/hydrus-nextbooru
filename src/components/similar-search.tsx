@@ -3,14 +3,10 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { ArrowUpTrayIcon } from "@heroicons/react/24/outline";
 import { PostCard } from "@/components/post-card";
+import type { PostSummary } from "@/types/post";
 
-interface SimilarResult {
+interface SimilarResult extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
   distance: number;
 }
 

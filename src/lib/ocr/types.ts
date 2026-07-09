@@ -1,19 +1,3 @@
-/** One entry of the sidecar's TranslationResponse.translations array. */
-export interface SidecarTranslation {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-  angle?: number;
-  prob?: number;
-  /** lang-key -> text. Source key is a 2-letter langid code; target keys are MIT codes like "ENG". */
-  text: Record<string, string>;
-}
-
-export interface SidecarResponse {
-  translations: SidecarTranslation[];
-}
-
 /** Region in sidecar pixel space after text extraction. Array order = reading order. */
 export interface ParsedRegion {
   minX: number;

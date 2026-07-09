@@ -6,15 +6,10 @@ import { ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/24/outline";
 import { ThumbnailCard } from "../thumbnail-card";
 import { Filmstrip } from "../filmstrip";
 import { buildPostUrl } from "@/lib/post-navigation";
+import type { PostSummary } from "@/types/post";
 
 interface GroupPost {
-  post: {
-    hash: string;
-    width: number | null;
-    height: number | null;
-    blurhash: string | null;
-    mimeType: string;
-  };
+  post: PostSummary;
   position: number | null;
 }
 

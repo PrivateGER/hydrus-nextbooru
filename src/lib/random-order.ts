@@ -1,14 +1,10 @@
 import { createHash } from 'crypto';
 import { PrismaClient } from '@/generated/prisma/client';
 import { prisma as defaultPrisma } from '@/lib/db';
+import type { PostSummary } from '@/types/post';
 
-export interface RandomPostSummary {
+export interface RandomPostSummary extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
 }
 
 export function seedToHexCursor(seed: string, length: 32 | 64): string {

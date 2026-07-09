@@ -12,7 +12,7 @@ import {
 } from "@heroicons/react/24/outline";
 import type { Section, NavItem } from "@/types/admin";
 
-export const NAV_ITEMS: NavItem[] = [
+const NAV_ITEMS: NavItem[] = [
   { id: "sync", label: "Sync", icon: CloudArrowDownIcon, description: "Import files from Hydrus" },
   { id: "thumbnails", label: "Thumbnails", icon: PhotoIcon, description: "Generate preview images" },
   { id: "phash", label: "Similarity", icon: FingerPrintIcon, description: "Perceptual image hashing" },

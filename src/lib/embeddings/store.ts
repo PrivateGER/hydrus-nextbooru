@@ -5,6 +5,7 @@ import {
   type EmbeddingConfig,
   isSupportedEmbeddingDimensions,
 } from "@/lib/embeddings/settings";
+import { aiLog } from "@/lib/logger";
 import {
   parseVectorLiteral,
   toVectorLiteral,
@@ -105,7 +106,7 @@ export async function getEmbeddingStats(config: EmbeddingConfig): Promise<Embedd
   };
 }
 
-export async function getVectorExtensionVersions(): Promise<EmbeddingStats["extensions"]> {
+async function getVectorExtensionVersions(): Promise<EmbeddingStats["extensions"]> {
   const rows = await prisma.$queryRaw<{ extname: string; extversion: string }[]>`
     SELECT extname, extversion
     FROM pg_extension
@@ -535,7 +536,7 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
           ORDER BY seed.source_id, nearest.distance
         `;
       } catch (error) {
-        console.error(`Embedding related-post chunk failed for seeds ${chunk.join(",")}:`, error);
+        aiLog.error({ seeds: chunk.join(","), error: error instanceof Error ? error.message : String(error) }, "Embedding related-post chunk failed");
         return [];
       }
     })

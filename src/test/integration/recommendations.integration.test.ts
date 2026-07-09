@@ -8,7 +8,6 @@ import {
   createPostInGroup,
   createTag,
   createPostsBulk,
-  createTagsBulk,
   linkPostsToTagsBulk,
 } from './factories';
 import { SourceType } from '@/generated/prisma/client';

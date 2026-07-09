@@ -10,6 +10,9 @@
 
 import DOMPurify from "isomorphic-dompurify";
 import { prisma } from "@/lib/db";
+import { searchLog } from "@/lib/logger";
+import { postCardSelect } from "@/lib/post-select";
+import type { PostSummary } from "@/types/post";
 import { Prisma, TagCategory } from "@/generated/prisma/client";
 import {
   isWildcardPattern,
@@ -58,13 +61,8 @@ export const SEMANTIC_SEARCH_RATE_LIMIT_CONFIG = {
  * Minimal post data returned in search results.
  * Contains only fields needed for rendering thumbnails and links.
  */
-export interface PostResult {
+export interface PostResult extends PostSummary {
   id: number;
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
   extension?: string;
   rating?: string;
   distance?: number;
@@ -420,7 +418,7 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
       queryTimeMs: performance.now() - startTime,
     };
   } catch (err) {
-    console.error("Notes search error:", err);
+    searchLog.error({ error: err instanceof Error ? err.message : String(err) }, "Notes search error");
     return { notes: [], totalCount: 0, totalPages: 0, queryTimeMs: 0, error: "Failed to search notes" };
   }
 }
@@ -490,7 +488,11 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   for (const tag of includeTags) {
     if (isWildcardPattern(tag)) {
       const v = validateWildcardPattern(tag);
-      v.valid ? wildcard.include.push(tag) : errors.push(v.error ?? "Invalid pattern");
+      if (v.valid) {
+        wildcard.include.push(tag);
+      } else {
+        errors.push(v.error ?? "Invalid pattern");
+      }
     } else {
       regular.include.push(tag);
     }
@@ -499,7 +501,11 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   for (const tag of excludeTags) {
     if (isWildcardPattern(tag)) {
       const v = validateWildcardPattern(`-${tag}`);
-      v.valid ? wildcard.exclude.push(tag) : errors.push(v.error ?? "Invalid pattern");
+      if (v.valid) {
+        wildcard.exclude.push(tag);
+      } else {
+        errors.push(v.error ?? "Invalid pattern");
+      }
     } else {
       regular.exclude.push(tag);
     }
@@ -637,16 +643,7 @@ export async function searchPosts(
       orderBy: [{ importedAt: "desc" }, { id: "desc" }],
       skip,
       take: limit,
-      select: {
-        id: true,
-        hash: true,
-        width: true,
-        height: true,
-        blurhash: true,
-        mimeType: true,
-        extension: true,
-        rating: true,
-      },
+      select: { ...postCardSelect, extension: true, rating: true },
     }),
     prisma.post.count({ where }),
   ]);
@@ -878,7 +875,7 @@ export async function searchSemanticPosts(
       queryTimeMs: performance.now() - startTime,
     };
   } catch (error) {
-    console.error("Semantic search error:", error);
+    searchLog.error({ error: error instanceof Error ? error.message : String(error) }, "Semantic search error");
 
     const message =
       error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
@@ -946,7 +943,7 @@ export async function prepareImageQueryEmbedding(
   try {
     processed = await preprocessImageBufferForEmbedding(buffer, embeddingConfig.imageMaxResolution);
   } catch (error) {
-    console.error("Image query decode error:", error);
+    searchLog.error({ error: error instanceof Error ? error.message : String(error) }, "Image query decode error");
     return { error: "Could not read the uploaded file as an image", reason: "invalid_image" };
   }
 
@@ -970,7 +967,7 @@ export async function prepareImageQueryEmbedding(
 
     return { imageHash };
   } catch (error) {
-    console.error("Image query embedding error:", error);
+    searchLog.error({ error: error instanceof Error ? error.message : String(error) }, "Image query embedding error");
     const message =
       error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
         ? error.message
@@ -1040,7 +1037,7 @@ export async function searchSemanticPostsByImageHash(
       queryTimeMs: performance.now() - startTime,
     };
   } catch (error) {
-    console.error("Image semantic search error:", error);
+    searchLog.error({ error: error instanceof Error ? error.message : String(error) }, "Image semantic search error");
     const message =
       error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
         ? error.message
@@ -1114,7 +1111,7 @@ export async function searchSemanticPostsByPostHash(
       queryTimeMs: performance.now() - startTime,
     };
   } catch (error) {
-    console.error("Post semantic search error:", error);
+    searchLog.error({ error: error instanceof Error ? error.message : String(error) }, "Post semantic search error");
     const message =
       error instanceof OpenRouterConfigError || error instanceof OpenRouterApiError
         ? error.message

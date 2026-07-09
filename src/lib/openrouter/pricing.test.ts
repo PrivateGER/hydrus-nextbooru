@@ -3,9 +3,6 @@ import {
   estimateTokens,
   formatCost,
   getModelPricingSync,
-  getModelPricing,
-  warmPricingCache,
-  estimateTranslationCost,
   DEFAULT_PRICING,
   SYSTEM_PROMPT_TOKENS,
   AVG_OUTPUT_TOKENS,
@@ -152,53 +149,6 @@ describe("getModelPricing", () => {
 
     expect(pricing).toEqual(DEFAULT_PRICING);
     expect(fetchSpy).not.toHaveBeenCalled();
-  });
-});
-
-describe("warmPricingCache", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("should not throw when API key is not configured", async () => {
-    vi.doMock("./settings", () => ({
-      getTranslationSettings: vi.fn().mockResolvedValue({
-        provider: "openrouter",
-        targetLang: "en",
-        openrouter: { apiKey: null, model: null, baseUrl: null },
-        local: { apiKey: null, model: null, baseUrl: null },
-      }),
-      isCustomEndpoint: vi.fn().mockReturnValue(false),
-    }));
-
-    const { warmPricingCache: warmPricingCacheMocked } = await import(
-      "./pricing"
-    );
-    await expect(warmPricingCacheMocked()).resolves.not.toThrow();
-  });
-
-  it("should not throw when fetch fails", async () => {
-    vi.doMock("./settings", () => ({
-      getTranslationSettings: vi.fn().mockResolvedValue({
-        provider: "openrouter",
-        targetLang: "en",
-        openrouter: { apiKey: "test-key", model: null, baseUrl: null },
-        local: { apiKey: null, model: null, baseUrl: null },
-      }),
-      isCustomEndpoint: vi.fn().mockReturnValue(false),
-    }));
-
-    // Mock global fetch to fail
-    vi.spyOn(global, "fetch").mockRejectedValue(new Error("Network error"));
-
-    const { warmPricingCache: warmPricingCacheMocked } = await import(
-      "./pricing"
-    );
-    await expect(warmPricingCacheMocked()).resolves.not.toThrow();
   });
 });
 

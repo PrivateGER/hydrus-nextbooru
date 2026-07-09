@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { postCardSelect } from "@/lib/post-select";
 
 interface RouteParams {
   params: Promise<{ hash: string }>;
@@ -35,15 +36,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
               posts: {
                 include: {
                   post: {
-                    select: {
-                      id: true,
-                      hash: true,
-                      extension: true,
-                      width: true,
-                      height: true,
-                      blurhash: true,
-                      mimeType: true,
-                    },
+                    select: { ...postCardSelect, extension: true },
                   },
                 },
                 orderBy: { position: "asc" },

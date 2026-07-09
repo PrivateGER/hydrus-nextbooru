@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 import { sanitizePositiveInt, MAX_LIMIT, MAX_PAGE } from "@/lib/search";
 import { getFeedPage } from "@/lib/feed";
+import { apiLog } from "@/lib/logger";
 
 const RATE_LIMIT_CONFIG = {
   prefix: "feed",
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
     const result = await getFeedPage(page, limit);
     return NextResponse.json(result);
   } catch (error) {
-    console.error("Error building feed:", error);
+    apiLog.error({ error: error instanceof Error ? error.message : String(error) }, "Error building feed");
     return NextResponse.json({ error: "Failed to build feed" }, { status: 500 });
   }
 }

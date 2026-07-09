@@ -102,32 +102,3 @@ export function GroupCardSkeleton() {
   );
 }
 
-/** Sidebar skeleton for tag list */
-export function SidebarSkeleton({ count = 10 }: { count?: number }) {
-  return (
-    <div className="w-64 space-y-4" aria-busy="true" aria-label="Loading sidebar">
-      <div className="h-6 w-24 bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
-      <div className="space-y-2">
-        {Array.from({ length: count }).map((_, i) => (
-          <div key={i} className="h-6 w-full bg-zinc-200 dark:bg-zinc-800 rounded animate-pulse" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** Media viewer skeleton */
-export function MediaViewerSkeleton() {
-  return (
-    <div aria-busy="true" aria-label="Loading media">
-      <div className="aspect-video bg-zinc-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
-    </div>
-  );
-}
-
-/** Details card skeleton */
-export function DetailsCardSkeleton() {
-  return (
-    <div className="rounded-lg bg-zinc-200 dark:bg-zinc-800 p-4 h-32 animate-pulse" aria-busy="true" />
-  );
-}

@@ -52,3 +52,5 @@ export const thumbnailLog = createLogger("thumbnail");
 export const fileLog = createLogger("file");
 export const aiLog = createLogger("ai");
 export const phashLog = createLogger("phash");
+export const searchLog = createLogger("search");
+export const feedLog = createLogger("feed");

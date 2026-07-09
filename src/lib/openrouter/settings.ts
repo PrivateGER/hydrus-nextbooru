@@ -105,20 +105,6 @@ export async function getOpenRouterSettings(): Promise<OpenRouterSettings> {
 }
 
 /**
- * Upserts a settings entry in the database for the given key with the provided value.
- *
- * @param key - The settings key to create or update
- * @param value - The value to assign to the settings key
- */
-export async function updateSetting(key: string, value: string): Promise<void> {
-  await prisma.settings.upsert({
-    where: { key },
-    update: { value },
-    create: { key, value },
-  });
-}
-
-/**
  * Upserts multiple configuration settings in a single transactional operation.
  *
  * Filters out entries whose value is `undefined` and creates or updates each remaining key/value pair.

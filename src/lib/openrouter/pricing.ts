@@ -5,6 +5,7 @@
  */
 
 import { getTranslationSettings, isCustomEndpoint } from "./settings";
+import { aiLog } from "@/lib/logger";
 
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
@@ -99,7 +100,7 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
     return pricingCache.get(modelId) ?? DEFAULT_PRICING;
   } catch (error) {
     // Log for debugging but don't fail - fallback to cache/default
-    console.debug?.("Failed to refresh pricing cache:", error);
+    aiLog.debug({ err: error }, "Failed to refresh pricing cache");
     // If fetch fails, use cached data if available, otherwise default
     if (pricingCache) {
       return pricingCache.get(modelId) ?? DEFAULT_PRICING;
@@ -115,27 +116,6 @@ export async function getModelPricing(modelId: string): Promise<ModelPricing> {
  */
 export function getModelPricingSync(modelId: string): ModelPricing {
   return pricingCache?.get(modelId) ?? DEFAULT_PRICING;
-}
-
-/**
- * Pre-warm the pricing cache.
- */
-export async function warmPricingCache(): Promise<void> {
-  try {
-    const settings = await getTranslationSettings();
-    const openrouterSettings = settings.openrouter;
-    if (
-      settings.provider === "openrouter" &&
-      openrouterSettings.apiKey &&
-      !isCustomEndpoint(openrouterSettings.baseUrl)
-    ) {
-      pricingCache = await fetchModelPricing(openrouterSettings.apiKey);
-      cacheTimestamp = Date.now();
-    }
-  } catch (error) {
-    // Log for debugging but don't fail during warmup
-    console.debug?.("Failed to warm pricing cache:", error);
-  }
 }
 
 /**

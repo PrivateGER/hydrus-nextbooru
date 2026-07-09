@@ -11,7 +11,7 @@ export interface PreparedSidecarImage {
   resized: boolean;
 }
 
-export function getOcrMaxImageSide(): number {
+function getOcrMaxImageSide(): number {
   const raw = process.env.OCR_MAX_IMAGE_SIDE;
   if (!raw) return DEFAULT_MAX_IMAGE_SIDE;
   const parsed = Number.parseInt(raw, 10);

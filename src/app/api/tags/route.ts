@@ -3,8 +3,7 @@ import { prisma } from "@/lib/db";
 import { TagCategory, Prisma } from "@/generated/prisma/client";
 
 const VALID_CATEGORIES = Object.values(TagCategory);
-const VALID_SORT_OPTIONS = ["count", "name", "-count", "-name"] as const;
-type SortOption = (typeof VALID_SORT_OPTIONS)[number];
+type SortOption = "count" | "name" | "-count" | "-name";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;

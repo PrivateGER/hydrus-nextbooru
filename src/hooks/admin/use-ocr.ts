@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useBatchPolling } from "./use-batch-polling";
 import type { OcrStats, Message } from "@/types/admin";
 
 export interface UseOcrReturn {
@@ -19,43 +20,20 @@ export function useOcr(
   const [ocrStats, setOcrStats] = useState<OcrStats | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
+  const isBatchActive = (data: OcrStats) =>
+    data.batch.status === "running" || data.batch.status === "cancelling";
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      clearInterval(pollIntervalRef.current ?? undefined);
-    };
-  }, []);
-
-  const stopPolling = useCallback(() => {
-    clearInterval(pollIntervalRef.current ?? undefined);
-    pollIntervalRef.current = null;
-  }, []);
-
-  // Imperative poll loop (mirrors use-phash): started from user actions only,
-  // refreshes stats every 2s, and self-stops once the batch is no longer active.
-  const startPolling = useCallback(() => {
-    if (pollIntervalRef.current) return;
-    pollIntervalRef.current = setInterval(async () => {
-      try {
-        const response = await fetch("/api/admin/ocr");
-        if (!response.ok) return;
-        const data = (await response.json()) as OcrStats;
-        if (!mountedRef.current) return;
-        setOcrStats(data);
-        const active = data.batch.status === "running" || data.batch.status === "cancelling";
-        setIsRunning(active);
-        if (!active) stopPolling();
-      } catch (error) {
-        console.error("Error polling OCR stats:", error);
-        stopPolling();
-        if (mountedRef.current) setIsRunning(false);
-      }
-    }, 2000);
-  }, [stopPolling]);
+  // Poll loop started from user actions only; refreshes stats every 2s and
+  // self-stops once the batch is no longer active.
+  const { mountedRef, startPolling } = useBatchPolling<OcrStats>({
+    url: "/api/admin/ocr",
+    onData: (data) => {
+      setOcrStats(data);
+      setIsRunning(isBatchActive(data));
+    },
+    isActive: isBatchActive,
+    onPollError: () => setIsRunning(false),
+  });
 
   const fetchStats = useCallback(async () => {
     try {
@@ -73,7 +51,7 @@ export function useOcr(
     } catch (error) {
       console.error("Error fetching OCR stats:", error);
     }
-  }, [startPolling]);
+  }, [startPolling, mountedRef]);
 
   useEffect(() => {
     fetchStats();

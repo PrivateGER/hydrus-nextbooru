@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useBatchPolling } from "./use-batch-polling";
 import type { ThumbnailStats, Message } from "@/types/admin";
 
 export interface UseThumbnailsReturn {
@@ -19,20 +20,33 @@ export function useThumbnails(
   const [thumbStats, setThumbStats] = useState<ThumbnailStats | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+  const { mountedRef, startPolling } = useBatchPolling<ThumbnailStats>({
+    url: "/api/admin/thumbnails",
+    onData: setThumbStats,
+    isActive: (data) => data.batchRunning,
+    onStop: (data) => {
+      setIsGenerating(false);
+      if (data.batchStatus === "failed") {
+        setMessage({
+          type: "error",
+          text: data.batchError || "Thumbnail generation failed",
+        });
+        return;
       }
-    };
-  }, []);
+      triggerSuccessAnimation();
+      setMessage({
+        type: "success",
+        text: `Done! ${data.complete.toLocaleString()} thumbnails ready.`,
+      });
+    },
+    onPollError: () => {
+      setIsGenerating(false);
+      setMessage({
+        type: "error",
+        text: "Failed to check thumbnail generation status",
+      });
+    },
+  });
 
   const fetchStats = useCallback(async () => {
     try {
@@ -41,11 +55,13 @@ export function useThumbnails(
       if (mountedRef.current) {
         setThumbStats(data);
         setIsGenerating(data.batchRunning);
+        // Resume live updates if a batch was already running when this mounted.
+        if (data.batchRunning) startPolling();
       }
     } catch (error) {
       console.error("Error fetching thumbnail stats:", error);
     }
-  }, []);
+  }, [mountedRef, startPolling]);
 
   // Initial fetch
   useEffect(() => {
@@ -70,44 +86,7 @@ export function useThumbnails(
       }
 
       setMessage({ type: "success", text: "Generating thumbnails..." });
-
-      // Start polling for completion
-      pollIntervalRef.current = setInterval(async () => {
-        try {
-          const statsResponse = await fetch("/api/admin/thumbnails");
-          const statsData = await statsResponse.json();
-
-          if (!mountedRef.current) return;
-
-          setThumbStats(statsData);
-
-          if (!statsData.batchRunning) {
-            if (pollIntervalRef.current) {
-              clearInterval(pollIntervalRef.current);
-              pollIntervalRef.current = null;
-            }
-            setIsGenerating(false);
-            triggerSuccessAnimation();
-            setMessage({
-              type: "success",
-              text: `Done! ${statsData.complete.toLocaleString()} thumbnails ready.`,
-            });
-          }
-        } catch (error) {
-          console.error("Error polling thumbnail status:", error);
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          if (mountedRef.current) {
-            setIsGenerating(false);
-            setMessage({
-              type: "error",
-              text: "Failed to check thumbnail generation status",
-            });
-          }
-        }
-      }, 2000);
+      startPolling();
     } catch (error) {
       setIsGenerating(false);
       setMessage({
@@ -115,7 +94,7 @@ export function useThumbnails(
         text: error instanceof Error ? error.message : "Failed to start thumbnail generation",
       });
     }
-  }, [setMessage, triggerSuccessAnimation]);
+  }, [setMessage, startPolling]);
 
   const resetFailed = useCallback(async () => {
     try {

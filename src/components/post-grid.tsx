@@ -2,13 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { PostCard, LayoutMode } from "./post-card";
+import type { PostSummary } from "@/types/post";
 
-interface Post {
-  hash: string;
-  width: number | null;
-  height: number | null;
-  blurhash: string | null;
-  mimeType: string;
+interface Post extends PostSummary {
   favorited?: boolean;
 }
 

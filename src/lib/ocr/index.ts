@@ -16,8 +16,6 @@ export {
   type ScanPostOutcome,
 } from "./scan-post";
 export type {
-  SidecarTranslation,
-  SidecarResponse,
   ParsedRegion,
   NormalizedRegion,
   OcrRegionDto,

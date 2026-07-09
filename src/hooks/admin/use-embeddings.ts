@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useBatchPolling } from "./use-batch-polling";
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
   DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION,
@@ -48,20 +49,6 @@ export function useEmbeddings(
   const [dimensions, setDimensions] = useState(DEFAULT_EMBEDDING_DIMENSIONS);
   const [imageMaxResolution, setImageMaxResolution] = useState(DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    };
-  }, []);
-
   const applyStatus = useCallback((data: EmbeddingAdminStatus) => {
     setStatus(data);
     setIsComputing(data.batchRunning);
@@ -78,6 +65,32 @@ export function useEmbeddings(
     }
   }, []);
 
+  const { mountedRef, startPolling } = useBatchPolling<EmbeddingAdminStatus>({
+    url: "/api/admin/embeddings",
+    onData: applyStatus,
+    isActive: (data) => data.batchRunning,
+    onStop: (data) => {
+      setIsComputing(false);
+
+      if (data.batchStatus === "completed") {
+        triggerSuccessAnimation();
+        setMessage({
+          type: "success",
+          text: `Done! ${data.stats.embedded.toLocaleString()} images embedded.`,
+        });
+      } else if (data.batchStatus === "failed") {
+        setMessage({
+          type: "error",
+          text: data.batchError || "Embedding batch failed",
+        });
+      }
+    },
+    onPollError: () => {
+      setIsComputing(false);
+      setMessage({ type: "error", text: "Failed to check embedding status" });
+    },
+  });
+
   const fetchStatus = useCallback(async () => {
     try {
       const response = await fetch("/api/admin/embeddings");
@@ -85,11 +98,13 @@ export function useEmbeddings(
       const data: EmbeddingAdminStatus = await response.json();
       if (mountedRef.current) {
         applyStatus(data);
+        // Resume live updates if a batch was already running when this mounted.
+        if (data.batchRunning) startPolling();
       }
     } catch (error) {
       console.error("Error fetching embedding status:", error);
     }
-  }, [applyStatus]);
+  }, [applyStatus, mountedRef, startPolling]);
 
   useEffect(() => {
     fetchStatus();
@@ -163,49 +178,7 @@ export function useEmbeddings(
       }
 
       setMessage({ type: "success", text: retryFailed ? "Retrying failed embeddings..." : "Computing image embeddings..." });
-
-      pollIntervalRef.current = setInterval(async () => {
-        try {
-          const statsResponse = await fetch("/api/admin/embeddings");
-          if (!statsResponse.ok) return;
-          const statsData: EmbeddingAdminStatus = await statsResponse.json();
-
-          if (!mountedRef.current) return;
-          applyStatus(statsData);
-
-          if (!statsData.batchRunning) {
-            if (pollIntervalRef.current) {
-              clearInterval(pollIntervalRef.current);
-              pollIntervalRef.current = null;
-            }
-
-            setIsComputing(false);
-
-            if (statsData.batchStatus === "completed") {
-              triggerSuccessAnimation();
-              setMessage({
-                type: "success",
-                text: `Done! ${statsData.stats.embedded.toLocaleString()} images embedded.`,
-              });
-            } else if (statsData.batchStatus === "failed") {
-              setMessage({
-                type: "error",
-                text: statsData.batchError || "Embedding batch failed",
-              });
-            }
-          }
-        } catch (error) {
-          console.error("Error polling embedding status:", error);
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          if (mountedRef.current) {
-            setIsComputing(false);
-            setMessage({ type: "error", text: "Failed to check embedding status" });
-          }
-        }
-      }, 2000);
+      startPolling();
     } catch (error) {
       setIsComputing(false);
       setMessage({
@@ -213,7 +186,7 @@ export function useEmbeddings(
         text: error instanceof Error ? error.message : "Failed to start embedding batch",
       });
     }
-  }, [setMessage, triggerSuccessAnimation, applyStatus]);
+  }, [setMessage, startPolling]);
 
   const deleteEmbeddings = useCallback(async (body: Record<string, boolean>, successMessage: string) => {
     try {
