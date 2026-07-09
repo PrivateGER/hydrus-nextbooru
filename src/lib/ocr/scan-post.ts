@@ -4,6 +4,7 @@ import { buildFilePath } from "@/lib/hydrus/paths";
 import { getOpenRouterClient, OpenRouterApiError } from "@/lib/openrouter";
 import { aiLog } from "@/lib/logger";
 import { renderInpaintedPage, scanImage } from "./client";
+import { OcrServiceBusyError } from "./errors";
 import { normalizeRegions } from "./normalize";
 import { deleteInpaintedPage, storeInpaintedPage } from "./crops";
 import { prepareSidecarImage } from "./image-prep";
@@ -240,7 +241,12 @@ export async function scanPost(post: ScannablePost, targetLang?: string): Promis
   try {
     regions = await ocrPost(post);
   } catch (error) {
-    await markScanFailed(post.id).catch(() => {});
+    // Busy is transient service state and the caller is told to retry (503 +
+    // Retry-After); recording it as FAILED would drop the post out of default
+    // batch scans, which only select PENDING. Leave its status untouched.
+    if (!(error instanceof OcrServiceBusyError)) {
+      await markScanFailed(post.id).catch(() => {});
+    }
     throw error;
   }
 
