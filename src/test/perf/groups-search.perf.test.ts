@@ -42,7 +42,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ order: 'random', seed: SEED_PARAM, page: 1, pageSize: 50 });
         expect(result.groups.length).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });
@@ -54,7 +54,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ order: 'newest', page: 1, pageSize: 50 });
         expect(result.groups.length).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });
@@ -67,7 +67,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ query: 'sunset', order: 'random', seed: SEED_PARAM, page: 1, pageSize: 50 });
         expect(result.filteredCount).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });
@@ -79,7 +79,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ query: 'sunset', order: 'newest', page: 1, pageSize: 50 });
         expect(result.filteredCount).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });
@@ -92,7 +92,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ creatorFilter: 'artist_tag_1', order: 'random', seed: SEED_PARAM, page: 1, pageSize: 50 });
         expect(result.filteredCount).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });
@@ -104,7 +104,7 @@ describe('Performance: Groups search', () => {
         const result = await searchGroups({ typeFilter: SourceType.PIXIV, order: 'newest', page: 1, pageSize: 50 });
         expect(result.filteredCount).toBeGreaterThan(0);
       },
-      { iterations: 20, warmup: 3 }
+      { iterations: 100, warmup: 5 }
     );
     expect(s.p50).toBeGreaterThan(0);
   });

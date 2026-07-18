@@ -52,7 +52,7 @@ describe('Performance: Recommendations', () => {
       async () => {
         await computeRecommendationsForPost(nextPostId(), 10);
       },
-      { iterations: 30, warmup: 3 }
+      { iterations: 200, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 500 });

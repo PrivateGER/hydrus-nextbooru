@@ -50,7 +50,7 @@ describe('Performance: Semantic vector search', () => {
           resultCap: 288,
         });
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 200, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 150 });
@@ -68,7 +68,7 @@ describe('Performance: Semantic vector search', () => {
           resultCap: 288,
         });
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 200, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 150 });
@@ -87,7 +87,7 @@ describe('Performance: Semantic vector search', () => {
           resultCap: 288,
         });
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 200, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 150 });

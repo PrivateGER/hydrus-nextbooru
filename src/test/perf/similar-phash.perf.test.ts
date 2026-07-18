@@ -50,7 +50,7 @@ describe('Performance: Similar-image phash search', () => {
         );
         await similarGET(request);
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 300, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 150 });
@@ -65,7 +65,7 @@ describe('Performance: Similar-image phash search', () => {
         );
         await similarGET(request);
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 300, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 200 });

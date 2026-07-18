@@ -41,7 +41,7 @@ describe('Performance: Random-order browsing', () => {
           prisma,
         });
       },
-      { iterations: 50, warmup: 5 }
+      { iterations: 300, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 50 });
@@ -91,7 +91,7 @@ describe('Performance: Random-order browsing', () => {
           prisma,
         });
       },
-      { iterations: 30, warmup: 3 }
+      { iterations: 150, warmup: 10 }
     );
 
     assertPerformance(s, { p95: 100 });

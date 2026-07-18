@@ -93,12 +93,16 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      # Large runs serialize test files: each perf file starts a Postgres
-      # container with tmpfs-backed storage, so eight parallel containers
-      # holding large datasets in RAM would exhaust the standard runner's
-      # memory (4 vCPU / 16 GB) and contend timings into noise.
+      # CI benchmark runs always serialize test files. Each perf file starts
+      # its own Postgres container, so parallel files time their benchmarks
+      # while neighbors seed datasets and run queries on the same 4 vCPUs —
+      # that contention swings same-commit results 2-4x, drowning the trend
+      # signal. Serial runs cost a few minutes of wall time and measure only
+      # the code under test. (For large datasets serialization is also a
+      # memory requirement: parallel tmpfs-backed containers holding large
+      # datasets would exhaust the standard runner's 16 GB.)
       - name: Run timing benchmarks
-        run: npm run test:perf ${{ env.PERF_DATASET_SIZE == 'large' && '-- --no-file-parallelism' || '' }}
+        run: npm run test:perf -- --no-file-parallelism
         env:
           PERF_RESULTS_DIR: perf-results
           TESTCONTAINERS_RYUK_DISABLED: true

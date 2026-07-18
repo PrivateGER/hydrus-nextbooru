@@ -72,7 +72,15 @@ export async function measure<T>(fn: () => Promise<T>): Promise<{ result: T; ms:
 }
 
 /**
- * Run a function multiple times and collect timing measurements
+ * Run a function multiple times and collect timing measurements.
+ *
+ * Iteration counts and percentile stability: p95 over n samples is the
+ * ceil(0.05*n)-th slowest sample. At 50 iterations that is the 3rd-slowest
+ * — close to max, so a single stalled iteration sets the whole series. To
+ * keep trend-fed p95s stable, size iterations so the p95 rank sits several
+ * samples deep: ~300 for sub-10ms benches, ~150-200 for tens-of-ms benches.
+ * Slow macro benches (100ms+) keep smaller counts; their relative variance
+ * is lower and wall time dominates.
  */
 export async function benchmark(
   fn: () => Promise<void>,
