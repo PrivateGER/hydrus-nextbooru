@@ -57,7 +57,11 @@ jobs:
   # Wall-clock benchmarks. Thresholds are report-only on shared runners
   # (assertPerformance does not enforce when CI is set); regressions are
   # caught by trend comparison instead: nightly and master-push runs feed
-  # github-action-benchmark, which alerts and fails on >175% of baseline.
+  # github-action-benchmark, which alerts on >175% of the previous point.
+  # Alerts never fail the job: the comparison is single-run vs single-run,
+  # and nightly re-runs of the SAME commit show 2-4x swings on the fastest
+  # benches, so any threshold tight enough to catch a real regression flaps
+  # on runner noise. Regressions CI must block on belong in the guard suite.
   # workflow_dispatch runs are ad-hoc and never written to the trend data.
   benchmarks:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'))
@@ -121,6 +125,11 @@ jobs:
           auto-push: true
           benchmark-data-dir-path: bench
           alert-threshold: '175%'
-          comment-on-alert: true
-          fail-on-alert: true
+          # Comment only on push runs, where the alert points at an actual
+          # code change; scheduled runs re-benchmark the same commit, so
+          # their alerts are noise by construction and would spam the
+          # commit with a comment every noisy night. Alerts still show in
+          # the job summary and the trend chart either way.
+          comment-on-alert: ${{ github.event_name == 'push' }}
+          fail-on-alert: false
           summary-always: true
