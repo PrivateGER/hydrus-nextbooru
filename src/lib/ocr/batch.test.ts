@@ -294,6 +294,26 @@ describe("runOcrBatch", () => {
     expect(result.errors[0]).toMatch(/busy/i);
   });
 
+  it("persists the busy-stop reason even when an earlier post already failed", async () => {
+    // Per-post failures fill errors[] first; the batch-level stop reason must
+    // still win the single persisted errorMessage or the admin sees the stop
+    // attributed to a random post with no hint the sidecar was wedged.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0";
+    mockPostFindMany.mockResolvedValue([post(1), post(2)]);
+    mockOcrPost
+      .mockRejectedValueOnce(new Error("corrupt file"))
+      .mockRejectedValue(new OcrServiceBusyError("busy"));
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("error");
+    expect(result.failed).toBe(1);
+    const finalizeCall = mockBatchUpdateMany.mock.calls.at(-1)?.[0] as {
+      data: { errorMessage: string | null };
+    };
+    expect(finalizeCall.data.errorMessage).toMatch(/stayed busy/i);
+  });
+
   it("retries a busy page render with backoff and then persists normally", async () => {
     process.env.OCR_BUSY_RETRY_DELAYS_MS = "0,0";
     mockPostFindMany.mockResolvedValue([post(1)]);

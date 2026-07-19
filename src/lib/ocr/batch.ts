@@ -44,6 +44,15 @@ export interface OcrBatchResult {
   processed: number;
   failed: number;
   errors: string[];
+  /**
+   * Why the whole batch stopped, when it stopped for a batch-level reason
+   * (wedged sidecar, auth failure, crash) rather than finishing. Persisted as
+   * the batch errorMessage with priority over per-post errors: those fill
+   * errors[] first, and the admin UI only surfaces one message — without this
+   * a batch-level stop would be attributed to whichever post happened to fail
+   * earlier.
+   */
+  stopReason?: string;
 }
 
 /**
@@ -256,7 +265,7 @@ async function finalize(result: OcrBatchResult): Promise<void> {
       where: { key: SINGLETON_KEY, status: { in: ["running", "cancelling"] } },
       data: {
         status: result.status,
-        errorMessage: result.errors[0] ?? null,
+        errorMessage: result.stopReason ?? result.errors[0] ?? null,
         finishedAt: new Date(),
       },
     });
@@ -293,9 +302,9 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
   // unscanned as PENDING.
   const stopForPersistentlyBusySidecar = (hash: string): void => {
     result.status = "error";
-    pushError(
-      "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING"
-    );
+    result.stopReason =
+      "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING";
+    pushError(result.stopReason);
     aiLog.error({ hash }, "OCR batch stopped: sidecar persistently busy");
   };
 
@@ -437,11 +446,13 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
 
     if (abortError) {
       result.status = "error";
-      pushError(`Authentication failed: ${(abortError as OpenRouterApiError).message}`);
+      result.stopReason = `Authentication failed: ${(abortError as OpenRouterApiError).message}`;
+      pushError(result.stopReason);
     }
   } catch (error) {
     result.status = "error";
-    pushError(error instanceof Error ? error.message : String(error));
+    result.stopReason = error instanceof Error ? error.message : String(error);
+    pushError(result.stopReason);
     aiLog.error({ error: String(error) }, "OCR batch failed");
   } finally {
     clearInterval(heartbeatTimer);
