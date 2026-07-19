@@ -60,6 +60,23 @@ describe("ocr config", () => {
     expect(getOcrBusyRetryDelaysMs()).toEqual([5_000, 15_000, 45_000, 90_000, 90_000, 90_000]);
   });
 
+  it("rejects a partially-invalid busy schedule outright instead of salvaging entries", () => {
+    const DEFAULT_SCHEDULE = [5_000, 15_000, 45_000, 90_000, 90_000, 90_000];
+
+    // Semicolon separators: parseInt would salvage this to [5000], silently
+    // shrinking a three-step schedule to one 5s retry.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "5000;15000;45000";
+    expect(getOcrBusyRetryDelaysMs()).toEqual(DEFAULT_SCHEDULE);
+
+    // Unit suffix: parseInt("15s") is 15 — a 15ms delay where 15s was meant.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "5000,15s,45000";
+    expect(getOcrBusyRetryDelaysMs()).toEqual(DEFAULT_SCHEDULE);
+
+    // Trailing comma yields an empty entry, which is also a config mistake.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "5000,";
+    expect(getOcrBusyRetryDelaysMs()).toEqual(DEFAULT_SCHEDULE);
+  });
+
   it("default busy schedule always outlasts two request timeouts", () => {
     const sum = (delays: number[]) => delays.reduce((total, delay) => total + delay, 0);
 

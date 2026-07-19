@@ -1,3 +1,5 @@
+import { aiLog } from "@/lib/logger";
+
 const DEFAULT_TIMEOUT_MS = 120000;
 
 /**
@@ -72,14 +74,28 @@ function defaultBusyRetryDelaysMs(): number[] {
  * Override with OCR_BUSY_RETRY_DELAYS_MS as a comma-separated ms list; an
  * explicit override is used as-is (not extended to cover occupancy).
  */
+let warnedInvalidBusyDelays: string | undefined;
+
 export function getOcrBusyRetryDelaysMs(): number[] {
   const raw = process.env.OCR_BUSY_RETRY_DELAYS_MS;
   if (!raw?.trim()) return defaultBusyRetryDelaysMs();
-  const parsed = raw
-    .split(",")
-    .map((part) => Number.parseInt(part.trim(), 10))
-    .filter((value) => Number.isFinite(value) && value >= 0);
-  return parsed.length > 0 ? parsed : defaultBusyRetryDelaysMs();
+  // Every entry must be a plain non-negative integer, and ANY bad entry
+  // rejects the whole override. Salvaging the valid entries would let a typo
+  // silently corrupt the schedule: parseInt turns "5000;15000;45000" into
+  // [5000] (one 5s retry) and "15s" into a 15 MILLISECOND delay, and an
+  // early-exhausted schedule surfaces as the wedged-sidecar batch stop.
+  const parts = raw.split(",").map((part) => part.trim());
+  if (parts.every((part) => /^\d+$/.test(part))) {
+    return parts.map((part) => Number.parseInt(part, 10));
+  }
+  if (warnedInvalidBusyDelays !== raw) {
+    warnedInvalidBusyDelays = raw;
+    aiLog.warn(
+      { raw },
+      "Invalid OCR_BUSY_RETRY_DELAYS_MS (expected comma-separated non-negative integers); using the default busy retry schedule"
+    );
+  }
+  return defaultBusyRetryDelaysMs();
 }
 
 /** Per-request sidecar timeout in milliseconds. */
