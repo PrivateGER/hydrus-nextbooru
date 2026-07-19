@@ -39,7 +39,29 @@ export function getOcrServiceUrl(): string {
   return raw.replace(/\/+$/, "");
 }
 
-const DEFAULT_BUSY_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 90_000];
+const BASE_BUSY_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 90_000];
+const BUSY_OCCUPANCY_MARGIN_MS = 30_000;
+
+/**
+ * Default busy backoff: the base schedule, extended by repeating its last
+ * step until the cumulative wait outlasts the longest LEGITIMATE worker
+ * occupancy — one competing client's two serial sidecar calls (scan + page
+ * inpaint), each capped at the request timeout, plus margin. A schedule
+ * shorter than that misdiagnoses a healthy sidecar serving a single
+ * concurrent request as wedged and stops the whole batch with a false
+ * "restart the container" error.
+ */
+function defaultBusyRetryDelaysMs(): number[] {
+  const target = 2 * getOcrTimeoutMs() + BUSY_OCCUPANCY_MARGIN_MS;
+  const delays = [...BASE_BUSY_RETRY_DELAYS_MS];
+  const step = delays[delays.length - 1];
+  let total = delays.reduce((sum, delay) => sum + delay, 0);
+  while (total < target) {
+    delays.push(step);
+    total += step;
+  }
+  return delays;
+}
 
 /**
  * Backoff schedule for retrying a sidecar call that was rejected as busy
@@ -47,16 +69,17 @@ const DEFAULT_BUSY_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 90_000];
  * client times out and disconnects, and during that window its gateway can
  * dispatch new work straight into the worker's busy lock — so busy responses
  * are transient service state, never a property of the post being scanned.
- * Override with OCR_BUSY_RETRY_DELAYS_MS as a comma-separated ms list.
+ * Override with OCR_BUSY_RETRY_DELAYS_MS as a comma-separated ms list; an
+ * explicit override is used as-is (not extended to cover occupancy).
  */
 export function getOcrBusyRetryDelaysMs(): number[] {
   const raw = process.env.OCR_BUSY_RETRY_DELAYS_MS;
-  if (!raw?.trim()) return DEFAULT_BUSY_RETRY_DELAYS_MS;
+  if (!raw?.trim()) return defaultBusyRetryDelaysMs();
   const parsed = raw
     .split(",")
     .map((part) => Number.parseInt(part.trim(), 10))
     .filter((value) => Number.isFinite(value) && value >= 0);
-  return parsed.length > 0 ? parsed : DEFAULT_BUSY_RETRY_DELAYS_MS;
+  return parsed.length > 0 ? parsed : defaultBusyRetryDelaysMs();
 }
 
 /** Per-request sidecar timeout in milliseconds. */
