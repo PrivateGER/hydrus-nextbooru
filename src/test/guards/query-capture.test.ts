@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   instrumentPool,
+  instrumentClient,
   startQueryCapture,
   stopQueryCapture,
   selectStatements,
@@ -9,19 +10,36 @@ import {
 } from './query-capture';
 
 /**
- * Minimal stand-in for a pg Pool: the only contract query-capture relies on
- * is the `query` method, which PrismaPg drives for every statement.
+ * Minimal stand-in for a pg Pool and its clients. The contract
+ * query-capture relies on: the pool emits 'connect' with each new client,
+ * and every statement — plain pool.query or transaction-held — runs
+ * through some client's `query` method.
  */
 function makeFakePool(result: unknown = { rows: [] }) {
+  const connectListeners: Array<(client: { query: (...args: unknown[]) => unknown }) => void> = [];
   const calls: unknown[][] = [];
-  return {
-    calls,
-    query: async (...args: unknown[]) => {
-      calls.push(args);
-      if (result instanceof Error) throw result;
-      return result;
+
+  const pool = {
+    on: (event: string, listener: (client: { query: (...args: unknown[]) => unknown }) => void) => {
+      if (event === 'connect') connectListeners.push(listener);
+      return pool;
     },
   };
+
+  /** Simulate the pool establishing a new physical connection. */
+  const connectClient = () => {
+    const client = {
+      query: async (...args: unknown[]) => {
+        calls.push(args);
+        if (result instanceof Error) throw result;
+        return result;
+      },
+    };
+    for (const listener of connectListeners) listener(client);
+    return client;
+  };
+
+  return { pool, connectClient, calls };
 }
 
 afterEach(() => {
@@ -31,80 +49,114 @@ afterEach(() => {
 
 describe('instrumentPool', () => {
   it('passes through results unchanged when not capturing', async () => {
-    const pool = makeFakePool({ rows: [{ id: 1 }] });
+    const { pool, connectClient, calls } = makeFakePool({ rows: [{ id: 1 }] });
     instrumentPool(pool);
+    const client = connectClient();
 
-    const result = await pool.query('SELECT 1');
+    const result = await client.query('SELECT 1');
     expect(result).toEqual({ rows: [{ id: 1 }] });
-    expect(pool.calls).toHaveLength(1);
+    expect(calls).toHaveLength(1);
   });
 
-  it('captures text and values for string-form calls', async () => {
-    const pool = makeFakePool();
+  it('captures statements from every client the pool hands out', async () => {
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
+    const first = connectClient();
+    const second = connectClient();
 
     startQueryCapture();
-    await pool.query('SELECT * FROM "Post" WHERE id = $1', [42]);
+    await first.query('SELECT * FROM "Post" WHERE id = $1', [42]);
+    await second.query('SELECT * FROM "Tag" WHERE id = $1', [7]);
     const captured = stopQueryCapture();
 
     expect(captured).toEqual([
       { text: 'SELECT * FROM "Post" WHERE id = $1', values: [42] },
+      { text: 'SELECT * FROM "Tag" WHERE id = $1', values: [7] },
+    ]);
+  });
+
+  it('captures transaction-held statements on a checked-out client', async () => {
+    // The regression this design fixes: statements between BEGIN and COMMIT
+    // run on one checked-out client and must still be observed.
+    const { pool, connectClient } = makeFakePool();
+    instrumentPool(pool);
+    const client = connectClient();
+
+    startQueryCapture();
+    await client.query('BEGIN');
+    await client.query('DELETE FROM "Favorite" WHERE "postId" = $1', [1]);
+    await client.query('INSERT INTO "FeedDismissal" ("postId") VALUES ($1)', [1]);
+    await client.query('COMMIT');
+    const captured = stopQueryCapture();
+
+    expect(captured).toHaveLength(4);
+    expect(countableStatements(captured).map((q) => q.text)).toEqual([
+      'DELETE FROM "Favorite" WHERE "postId" = $1',
+      'INSERT INTO "FeedDismissal" ("postId") VALUES ($1)',
     ]);
   });
 
   it('captures text and values for config-object calls', async () => {
-    const pool = makeFakePool();
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
+    const client = connectClient();
 
     startQueryCapture();
-    await pool.query({ text: 'SELECT $1::int', values: [7] });
+    await client.query({ text: 'SELECT $1::int', values: [7] });
     const captured = stopQueryCapture();
 
     expect(captured).toEqual([{ text: 'SELECT $1::int', values: [7] }]);
   });
 
   it('defaults values to an empty array when none are provided', async () => {
-    const pool = makeFakePool();
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
+    const client = connectClient();
 
     startQueryCapture();
-    await pool.query('BEGIN');
+    await client.query('BEGIN');
     const captured = stopQueryCapture();
 
     expect(captured).toEqual([{ text: 'BEGIN', values: [] }]);
   });
 
   it('captures the statement even when the query throws, and rethrows', async () => {
-    const pool = makeFakePool(new Error('connection lost'));
+    const { pool, connectClient } = makeFakePool(new Error('connection lost'));
     instrumentPool(pool);
+    const client = connectClient();
 
     startQueryCapture();
-    await expect(pool.query('SELECT 1')).rejects.toThrow('connection lost');
+    await expect(client.query('SELECT 1')).rejects.toThrow('connection lost');
     const captured = stopQueryCapture();
 
     expect(captured).toHaveLength(1);
   });
 
   it('is idempotent: double instrumentation does not double-capture', async () => {
-    const pool = makeFakePool();
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
     instrumentPool(pool);
+    const client = connectClient();
+    // Even if a client is somehow instrumented again directly, the wrap
+    // must not stack.
+    instrumentClient(client);
 
     startQueryCapture();
-    await pool.query('SELECT 1');
+    await client.query('SELECT 1');
     const captured = stopQueryCapture();
 
     expect(captured).toHaveLength(1);
   });
 
   it('stops capturing after stopQueryCapture', async () => {
-    const pool = makeFakePool();
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
+    const client = connectClient();
 
     startQueryCapture();
-    await pool.query('SELECT 1');
+    await client.query('SELECT 1');
     stopQueryCapture();
-    await pool.query('SELECT 2');
+    await client.query('SELECT 2');
 
     startQueryCapture();
     const captured = stopQueryCapture();
@@ -112,13 +164,14 @@ describe('instrumentPool', () => {
   });
 
   it('startQueryCapture resets any previously captured statements', async () => {
-    const pool = makeFakePool();
+    const { pool, connectClient } = makeFakePool();
     instrumentPool(pool);
+    const client = connectClient();
 
     startQueryCapture();
-    await pool.query('SELECT 1');
+    await client.query('SELECT 1');
     startQueryCapture();
-    await pool.query('SELECT 2');
+    await client.query('SELECT 2');
     const captured = stopQueryCapture();
 
     expect(captured).toHaveLength(1);

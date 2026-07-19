@@ -107,7 +107,7 @@ describe('Performance: Tag Search API', () => {
           const request = tagSearchRequest('http://localhost/api/tags/search?q=general');
           await GET(request);
         },
-        { iterations: 100, warmup: 10 }
+        { iterations: 300, warmup: 10 }
       );
 
       // Assert performance thresholds
@@ -160,7 +160,7 @@ describe('Performance: Tag Search API', () => {
             );
           }
         },
-        { iterations: 50, warmup: 5 }
+        { iterations: 150, warmup: 10 }
       );
 
       assertPerformance(s, { p95: 100 });
@@ -183,7 +183,7 @@ describe('Performance: Tag Search API', () => {
           );
           await GET(request);
         },
-        { iterations: 50, warmup: 5 }
+        { iterations: 150, warmup: 10 }
       );
 
       assertPerformance(s, { p95: 100 });
@@ -204,7 +204,7 @@ describe('Performance: Tag Search API', () => {
           );
           await GET(request);
         },
-        { iterations: 50, warmup: 5 }
+        { iterations: 150, warmup: 10 }
       );
 
       assertPerformance(s, { p95: 150 });
@@ -225,7 +225,7 @@ describe('Performance: Tag Search API', () => {
           );
           await GET(request);
         },
-        { iterations: 50, warmup: 5 }
+        { iterations: 150, warmup: 10 }
       );
 
       assertPerformance(s, { p95: 200 });

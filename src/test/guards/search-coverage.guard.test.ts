@@ -11,18 +11,8 @@ import { invalidateAllCaches } from '@/lib/cache';
 import { seedLargeDataset, seedNotes, getRandomTagNames } from '../perf/seeders';
 import { createPost, createNote, createGroup, createPostInGroup, createTag } from '../integration/factories';
 import { PrismaClient, SourceType, TagCategory } from '@/generated/prisma/client';
-import {
-  startQueryCapture,
-  stopQueryCapture,
-  selectStatements,
-  type CapturedQuery,
-} from './query-capture';
-import {
-  parseExplainRows,
-  seqScannedRelations,
-  indexesUsed,
-  type ExplainJson,
-} from './plan-utils';
+import { indexesUsed } from './plan-utils';
+import { captureQueries, explainSelectsTouching, expectNoSeqScanOn } from './explain-helpers';
 
 /**
  * Plan guards for read paths the original suite missed: the groups creator
@@ -97,61 +87,6 @@ async function seedFillerGroups(prisma: PrismaClient, count: number): Promise<vo
     ) s
     WHERE g.id = s.id
   `);
-}
-
-async function captureQueries(fn: () => Promise<unknown>): Promise<CapturedQuery[]> {
-  startQueryCapture();
-  try {
-    await fn();
-  } catch (err) {
-    stopQueryCapture();
-    throw err;
-  }
-  return stopQueryCapture();
-}
-
-interface ExplainedQuery {
-  text: string;
-  explain: ExplainJson;
-}
-
-/**
- * EXPLAIN every captured SELECT touching `relation`, re-running with the
- * original bind values so the planner reproduces the app's custom plan.
- */
-async function explainSelectsTouching(
-  captured: CapturedQuery[],
-  relation: string
-): Promise<ExplainedQuery[]> {
-  const prisma = getTestPrisma();
-  const seen = new Set<string>();
-  const explained: ExplainedQuery[] = [];
-
-  for (const query of selectStatements(captured)) {
-    const key = `${query.text}|${JSON.stringify(query.values)}`;
-    if (!query.text.includes(`"${relation}"`) || seen.has(key)) continue;
-    seen.add(key);
-
-    const rows = await prisma.$queryRawUnsafe(
-      `EXPLAIN (FORMAT JSON) ${query.text}`,
-      ...(query.values as unknown[])
-    );
-    explained.push({ text: query.text, explain: parseExplainRows(rows) });
-  }
-
-  return explained;
-}
-
-function expectNoSeqScanOn(explained: ExplainedQuery[], relations: string[]): void {
-  expect(explained.length, 'no queries captured — path likely errored').toBeGreaterThan(0);
-
-  for (const { text, explain } of explained) {
-    const offenders = seqScannedRelations(explain).filter((r) => relations.includes(r));
-    expect(
-      offenders,
-      `Sequential scan on ${offenders.join(', ')} in query:\n${text}`
-    ).toEqual([]);
-  }
 }
 
 describe('Search coverage plan guards', () => {

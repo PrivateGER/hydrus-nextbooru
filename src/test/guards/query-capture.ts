@@ -1,10 +1,14 @@
 /**
- * Pool-level SQL capture for guard tests.
+ * Client-level SQL capture for guard tests.
  *
- * PrismaPg drives every statement through `pool.query` (the same fact
- * src/lib/db.ts relies on for tracing), so wrapping it lets guard tests
- * record the exact SQL + parameter values an API route executes — for
- * re-running under EXPLAIN and for N+1 query-count budgets.
+ * Every statement PrismaPg executes ultimately runs on a pg client checked
+ * out of the pool: `pool.query` checks one out internally, and interactive
+ * or batch `$transaction`s hold one for their duration. Instrumenting each
+ * client as the pool creates it (the 'connect' event fires once per new
+ * physical connection) therefore observes plain queries AND statements
+ * inside transactions exactly once each. The previous hook wrapped only
+ * `pool.query`, which made transaction internals invisible — an N+1 inside
+ * a transaction could not trip any query budget.
  *
  * Capture state is module-global, which is safe because each guard file
  * runs in its own fork and tests within a file run sequentially.
@@ -15,8 +19,12 @@ export interface CapturedQuery {
   values: unknown[];
 }
 
-interface QueryablePool {
+interface QueryableClient {
   query: (...args: unknown[]) => unknown;
+}
+
+interface InstrumentablePool {
+  on: (event: 'connect', listener: (client: QueryableClient) => void) => unknown;
 }
 
 const INSTRUMENTED = Symbol('query-capture-instrumented');
@@ -25,18 +33,34 @@ let capturing = false;
 let captured: CapturedQuery[] = [];
 
 /**
- * Wrap a pool's `query` method to record statements while capture is active.
+ * Instrument every client this pool hands out. Attach before the pool
+ * serves its first query so no pre-existing connection escapes the hook.
  * Idempotent; a no-op passthrough when capture is off.
  */
-export function instrumentPool(pool: QueryablePool): void {
-  const marked = pool as QueryablePool & { [INSTRUMENTED]?: boolean };
+export function instrumentPool(pool: InstrumentablePool): void {
+  const marked = pool as InstrumentablePool & { [INSTRUMENTED]?: boolean };
   if (marked[INSTRUMENTED]) {
     return;
   }
   marked[INSTRUMENTED] = true;
 
-  const originalQuery = pool.query.bind(pool);
-  pool.query = (...args: unknown[]) => {
+  pool.on('connect', (client) => instrumentClient(client));
+}
+
+/**
+ * Wrap a single client's `query` method to record statements while capture
+ * is active. Idempotent per client. Exported for tests; production callers
+ * go through {@link instrumentPool}.
+ */
+export function instrumentClient(client: QueryableClient): void {
+  const marked = client as QueryableClient & { [INSTRUMENTED]?: boolean };
+  if (marked[INSTRUMENTED]) {
+    return;
+  }
+  marked[INSTRUMENTED] = true;
+
+  const originalQuery = client.query.bind(client);
+  client.query = (...args: unknown[]) => {
     if (capturing) {
       const first = args[0];
       const text =

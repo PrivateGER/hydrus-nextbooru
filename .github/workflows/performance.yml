@@ -57,7 +57,11 @@ jobs:
   # Wall-clock benchmarks. Thresholds are report-only on shared runners
   # (assertPerformance does not enforce when CI is set); regressions are
   # caught by trend comparison instead: nightly and master-push runs feed
-  # github-action-benchmark, which alerts and fails on >175% of baseline.
+  # github-action-benchmark, which alerts on >175% of the previous point.
+  # Alerts never fail the job: the comparison is single-run vs single-run,
+  # and nightly re-runs of the SAME commit show 2-4x swings on the fastest
+  # benches, so any threshold tight enough to catch a real regression flaps
+  # on runner noise. Regressions CI must block on belong in the guard suite.
   # workflow_dispatch runs are ad-hoc and never written to the trend data.
   benchmarks:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'))
@@ -89,12 +93,16 @@ jobs:
         env:
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
-      # Large runs serialize test files: each perf file starts a Postgres
-      # container with tmpfs-backed storage, so eight parallel containers
-      # holding large datasets in RAM would exhaust the standard runner's
-      # memory (4 vCPU / 16 GB) and contend timings into noise.
+      # CI benchmark runs always serialize test files. Each perf file starts
+      # its own Postgres container, so parallel files time their benchmarks
+      # while neighbors seed datasets and run queries on the same 4 vCPUs —
+      # that contention swings same-commit results 2-4x, drowning the trend
+      # signal. Serial runs cost a few minutes of wall time and measure only
+      # the code under test. (For large datasets serialization is also a
+      # memory requirement: parallel tmpfs-backed containers holding large
+      # datasets would exhaust the standard runner's 16 GB.)
       - name: Run timing benchmarks
-        run: npm run test:perf ${{ env.PERF_DATASET_SIZE == 'large' && '-- --no-file-parallelism' || '' }}
+        run: npm run test:perf -- --no-file-parallelism
         env:
           PERF_RESULTS_DIR: perf-results
           TESTCONTAINERS_RYUK_DISABLED: true
@@ -121,6 +129,11 @@ jobs:
           auto-push: true
           benchmark-data-dir-path: bench
           alert-threshold: '175%'
-          comment-on-alert: true
-          fail-on-alert: true
+          # Comment only on push runs, where the alert points at an actual
+          # code change; scheduled runs re-benchmark the same commit, so
+          # their alerts are noise by construction and would spam the
+          # commit with a comment every noisy night. Alerts still show in
+          # the job summary and the trend chart either way.
+          comment-on-alert: ${{ github.event_name == 'push' }}
+          fail-on-alert: false
           summary-always: true
