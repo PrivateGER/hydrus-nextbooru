@@ -7,45 +7,31 @@ const {
   mockPostFindUnique,
   mockCheckApiRateLimit,
   MockOcrFileMissingError,
-  MockOcrServiceUnavailableError,
-  MockOcrServiceResponseError,
-  MockOcrServiceBusyError,
 } = vi.hoisted(() => {
   class TestOcrFileMissingError extends Error {}
-  class TestOcrServiceUnavailableError extends Error {}
-  class TestOcrServiceResponseError extends Error {
-    statusCode?: number;
-    constructor(message: string, statusCode?: number) {
-      super(message);
-      this.statusCode = statusCode;
-    }
-  }
-  // Mirrors the real hierarchy: busy IS-A response error.
-  class TestOcrServiceBusyError extends TestOcrServiceResponseError {
-    constructor(message: string) {
-      super(message, 429);
-    }
-  }
   return {
     mockScanPost: vi.fn(),
     mockIsOcrEnabled: vi.fn(),
     mockPostFindUnique: vi.fn(),
     mockCheckApiRateLimit: vi.fn(() => null),
     MockOcrFileMissingError: TestOcrFileMissingError,
-    MockOcrServiceUnavailableError: TestOcrServiceUnavailableError,
-    MockOcrServiceResponseError: TestOcrServiceResponseError,
-    MockOcrServiceBusyError: TestOcrServiceBusyError,
   };
 });
 
-vi.mock("@/lib/ocr", () => ({
-  scanPost: mockScanPost,
-  isOcrEnabled: mockIsOcrEnabled,
-  OcrFileMissingError: MockOcrFileMissingError,
-  OcrServiceUnavailableError: MockOcrServiceUnavailableError,
-  OcrServiceResponseError: MockOcrServiceResponseError,
-  OcrServiceBusyError: MockOcrServiceBusyError,
-}));
+vi.mock("@/lib/ocr", async () => {
+  // The route's 503-vs-502 mapping depends on the real error hierarchy, so the
+  // service error classes must be the production ones — a hand-mirrored copy
+  // would keep this suite green if errors.ts were restructured. errors.ts is
+  // dependency-free and safe to import here; OcrFileMissingError stays a stub
+  // because it lives in scan-post.ts, which pulls in the DB client.
+  const errors = await vi.importActual<typeof import("@/lib/ocr/errors")>("@/lib/ocr/errors");
+  return {
+    ...errors,
+    scanPost: mockScanPost,
+    isOcrEnabled: mockIsOcrEnabled,
+    OcrFileMissingError: MockOcrFileMissingError,
+  };
+});
 
 vi.mock("@/lib/db", () => ({
   prisma: { post: { findUnique: mockPostFindUnique } },
