@@ -120,7 +120,8 @@ and start it on demand.
 The sidecar's single worker rejects overlapping requests with `429`; the app treats those as
 "worker still busy" and retries with backoff (`OCR_BUSY_RETRY_DELAYS_MS`, comma-separated ms).
 The default schedule grows 5s/15s/45s/90s and repeats the last step until it outlasts two full
-request timeouts, so one concurrent scan holding the worker can never exhaust it; an explicit
+request timeouts plus a 30s margin, so one concurrent scan holding the worker can never exhaust
+it; an explicit
 override is used as-is. If the sidecar stays busy through the whole schedule, a bulk scan stops
 with an error and leaves unscanned posts PENDING — a persistently-busy sidecar has a wedged
 worker lock and needs a container restart (`docker compose restart ocr`).
