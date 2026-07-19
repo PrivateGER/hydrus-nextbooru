@@ -294,6 +294,27 @@ describe("runOcrBatch", () => {
     expect(result.errors[0]).toMatch(/busy/i);
   });
 
+  it("records a cancel that lands during busy exhaustion as cancelled, not error", async () => {
+    // requestOcrBatchCancel flips the row to 'cancelling' before aborting the
+    // signal; a busy exhaustion inside that gap must not report the admin's
+    // cancel as a wedged-sidecar batch failure.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0";
+    mockPostFindMany.mockResolvedValue([post(1)]);
+    mockOcrPost.mockRejectedValue(new OcrServiceBusyError("busy"));
+    mockBatchFindUnique
+      .mockResolvedValueOnce({ status: "running" }) // pre-post cancellation poll
+      .mockResolvedValue({ status: "cancelling" }); // cancel landed during the backoff
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("cancelled");
+    expect(result.errors).toHaveLength(0);
+    const finalizeCall = mockBatchUpdateMany.mock.calls.at(-1)?.[0] as {
+      data: { status: string };
+    };
+    expect(finalizeCall.data.status).toBe("cancelled");
+  });
+
   it("persists the busy-stop reason even when an earlier post already failed", async () => {
     // Per-post failures fill errors[] first; the batch-level stop reason must
     // still win the single persisted errorMessage or the admin sees the stop

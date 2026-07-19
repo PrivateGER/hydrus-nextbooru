@@ -300,7 +300,16 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
   // post would hammer the wedged service and flip hundreds of ocrStatus rows
   // to FAILED in seconds, so stop the batch instead and leave everything
   // unscanned as PENDING.
-  const stopForPersistentlyBusySidecar = (hash: string): void => {
+  const stopForPersistentlyBusySidecar = async (hash: string): Promise<void> => {
+    // requestOcrBatchCancel commits the row to 'cancelling' BEFORE it aborts
+    // the signal, so a busy exhaustion landing inside that gap passes the
+    // signal.aborted check while the admin's cancel is already on record —
+    // and finalize would then overwrite the 'cancelling' row with a
+    // wedged-sidecar error. Prefer the cancel.
+    if (await isCancelling()) {
+      result.status = "cancelled";
+      return;
+    }
     result.status = "error";
     result.stopReason =
       "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING";
@@ -358,7 +367,7 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
           break;
         }
         if (error instanceof OcrServiceBusyError) {
-          stopForPersistentlyBusySidecar(post.hash);
+          await stopForPersistentlyBusySidecar(post.hash);
           break;
         }
         result.failed++;
@@ -390,7 +399,7 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
           break;
         }
         if (error instanceof OcrServiceBusyError) {
-          stopForPersistentlyBusySidecar(post.hash);
+          await stopForPersistentlyBusySidecar(post.hash);
           break;
         }
         throw error;
