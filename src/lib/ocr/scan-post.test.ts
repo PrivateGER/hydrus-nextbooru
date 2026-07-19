@@ -278,6 +278,23 @@ describe("scanPost", () => {
     expect(mockPostUpdate).not.toHaveBeenCalled();
   });
 
+  it("rethrows a busy page render without persisting or deleting the existing inpainted page", async () => {
+    // finalizeScan(null) deletes the stored full-page inpaint, so if a
+    // transient 429 on the render call were swallowed into the null degrade
+    // path, a rescan of a COMPLETE post would destroy its typeset overlay
+    // permanently (and default batches never revisit COMPLETE posts).
+    mockScanImage.mockResolvedValue([
+      { minX: 100, minY: 200, maxX: 300, maxY: 600, ocrText: "こん", sourceLanguage: "ja", confidence: 0.9, angle: 0, textColorFg: null, textColorBg: null },
+    ]);
+    mockRenderInpaintedPage.mockRejectedValue(new OcrServiceBusyError("worker occupied"));
+
+    await expect(scanPost(POST)).rejects.toBeInstanceOf(OcrServiceBusyError);
+    expect(mockDeleteInpaintedPage).not.toHaveBeenCalled();
+    expect(mockStoreInpaintedPage).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockPostUpdate).not.toHaveBeenCalled();
+  });
+
   it("marks FAILED and throws OcrFileMissingError when the file is unreadable", async () => {
     mockReadFile.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     await expect(scanPost(POST)).rejects.toBeInstanceOf(OcrFileMissingError);

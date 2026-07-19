@@ -309,13 +309,23 @@ describe("ocr client", () => {
   });
 
   it("keeps non-busy stream errors as plain OcrServiceResponseError", async () => {
-    fetchMock.mockResolvedValueOnce(
-      multiFrameResponse(streamFrame(2, "Translation failed: model exploded"))
-    );
+    // Terminal per-post errors whose text happens to contain 429-ish tokens
+    // must NOT be classified busy: busy triggers the batch's stop-everything
+    // policy, so a false positive here wedges every subsequent batch run on
+    // the same poison post.
+    const terminalTexts = [
+      "Translation failed: model exploded",
+      'File "detection.py", line 429, in forward',
+      "CUDA out of memory. Tried to allocate 429.00 MiB",
+      "429 Client Error: Too Many Requests for url: https://huggingface.co/models",
+    ];
 
-    const error = await scanImage(Buffer.from([1]), "image/png").catch((e) => e);
-    expect(error).toBeInstanceOf(OcrServiceResponseError);
-    expect(error).not.toBeInstanceOf(OcrServiceBusyError);
+    for (const text of terminalTexts) {
+      fetchMock.mockResolvedValueOnce(multiFrameResponse(streamFrame(2, text)));
+      const error = await scanImage(Buffer.from([1]), "image/png").catch((e) => e);
+      expect(error, text).toBeInstanceOf(OcrServiceResponseError);
+      expect(error, text).not.toBeInstanceOf(OcrServiceBusyError);
+    }
   });
 
   it("maps invalid JSON body to OcrServiceResponseError", async () => {

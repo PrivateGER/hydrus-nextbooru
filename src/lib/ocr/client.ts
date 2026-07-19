@@ -23,8 +23,13 @@ const NO_TEXT_PROGRESS_STATES = new Set(["skip-no-regions", "skip-no-text"]);
 // work with HTTP 429 ("some Method is already being executed"). On the
 // streaming endpoints that rejection is relayed to us inside a stream ERROR
 // frame (the HTTP response itself stays 200), so busy-ness must be detected
-// from the frame text as well as from a literal 429 status.
-const BUSY_STREAM_ERROR_PATTERN = /\b429\b|too many requests|already being executed/i;
+// from the frame text. Match ONLY the worker-lock message: stream ERROR frames
+// carry arbitrary exception text (tracebacks, byte counts, relayed upstream
+// errors) in which a bare "429" or "too many requests" can appear for reasons
+// that are terminal for the post, and busy classification triggers the batch's
+// stop-everything policy — a false positive here wedges all batch scanning.
+// Literal HTTP 429 statuses are classified exactly in responseStatusError.
+const BUSY_STREAM_ERROR_PATTERN = /already being executed/i;
 
 function classifyStreamError(text: string): OcrServiceResponseError {
   if (BUSY_STREAM_ERROR_PATTERN.test(text)) {
