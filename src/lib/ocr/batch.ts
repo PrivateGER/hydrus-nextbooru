@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import pLimit from "p-limit";
 import { prisma } from "@/lib/db";
 import { OpenRouterApiError } from "@/lib/openrouter";
@@ -207,25 +208,6 @@ async function heartbeat(): Promise<void> {
   }
 }
 
-/** Resolve after ms, or immediately once the batch abort signal fires. */
-function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (ms <= 0 || signal.aborted) {
-      resolve();
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /**
  * Run one serial-path sidecar call with busy backoff. A 429 means the
  * sidecar's single worker is occupied — typically still grinding a request
@@ -253,7 +235,10 @@ async function withBusyRetry<T>(
         { hash, attempt: attempt + 1, retryInMs: delays[attempt] },
         "OCR sidecar busy; backing off before retrying"
       );
-      await abortableDelay(delays[attempt], signal);
+      // The promisified setTimeout rejects with AbortError when the signal
+      // fires (its only rejection path); swallowing that and re-checking
+      // aborted below rethrows the original busy error instead.
+      await sleep(delays[attempt], undefined, { signal }).catch(() => {});
       if (signal.aborted) throw error;
     }
   }
