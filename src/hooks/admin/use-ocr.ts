@@ -35,22 +35,24 @@ export function useOcr(
     onPollError: () => setIsRunning(false),
   });
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/ocr");
-      if (!response.ok) return;
-      const data = (await response.json()) as OcrStats;
-      if (!mountedRef.current) return;
-      const active = data.batch.status === "running" || data.batch.status === "cancelling";
-      setOcrStats(data);
-      setIsRunning(active);
-      // If a batch is already active when this mounts (e.g. started in another
-      // tab), start polling so updatedAt keeps refreshing and the stalled gate
-      // isn't tripped by an aging one-shot fetch.
-      if (active) startPolling();
-    } catch (error) {
-      console.error("Error fetching OCR stats:", error);
-    }
+  // Promise-chain rather than async/await so the initial-fetch effect below
+  // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
+  const fetchStats = useCallback(() => {
+    return fetch("/api/admin/ocr")
+      .then((response) => (response.ok ? (response.json() as Promise<OcrStats>) : null))
+      .then((data) => {
+        if (!data || !mountedRef.current) return;
+        const active = data.batch.status === "running" || data.batch.status === "cancelling";
+        setOcrStats(data);
+        setIsRunning(active);
+        // If a batch is already active when this mounts (e.g. started in another
+        // tab), start polling so updatedAt keeps refreshing and the stalled gate
+        // isn't tripped by an aging one-shot fetch.
+        if (active) startPolling();
+      })
+      .catch((error) => {
+        console.error("Error fetching OCR stats:", error);
+      });
   }, [startPolling, mountedRef]);
 
   useEffect(() => {

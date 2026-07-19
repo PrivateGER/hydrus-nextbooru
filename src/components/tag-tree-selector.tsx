@@ -56,38 +56,48 @@ export function TagTreeSelector({ selectedTags, onTagsChange }: TagTreeSelectorP
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchTags = useCallback(async (signal?: AbortSignal) => {
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (selectedTags.length > 0) {
-        params.set("selected", selectedTags.join(","));
-      }
-      if (categoryFilter) {
-        params.set("category", categoryFilter);
-      }
-      if (debouncedQuery) {
-        params.set("q", debouncedQuery);
-      }
-      params.set("limit", "100");
+  // Promise-chain with the loading flag set inside it (one microtask later)
+  // so the fetch effect below can call this without setting state
+  // synchronously from the effect body.
+  const fetchTags = useCallback((signal?: AbortSignal) => {
+    return Promise.resolve()
+      .then(() => {
+        setIsLoading(true);
 
-      const response = await fetch(`/api/tags/tree?${params.toString()}`, { signal });
-      const data: TagTreeResponse = await response.json();
-      setTags(data.tags);
-      setPostCount(data.postCount);
-    } catch (error) {
-      // Ignore AbortError - request was intentionally cancelled
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
-      console.error("Error fetching tags:", error);
-    } finally {
-      // A stale aborted request resolving later must not clear the loading
-      // state belonging to the newer in-flight request.
-      if (!signal?.aborted) {
-        setIsLoading(false);
-      }
-    }
+        const params = new URLSearchParams();
+        if (selectedTags.length > 0) {
+          params.set("selected", selectedTags.join(","));
+        }
+        if (categoryFilter) {
+          params.set("category", categoryFilter);
+        }
+        if (debouncedQuery) {
+          params.set("q", debouncedQuery);
+        }
+        params.set("limit", "100");
+
+        return fetch(`/api/tags/tree?${params.toString()}`, { signal });
+      })
+      .then((response) => (response.ok ? (response.json() as Promise<TagTreeResponse>) : null))
+      .then((data) => {
+        if (!data || !Array.isArray(data.tags)) return;
+        setTags(data.tags);
+        setPostCount(data.postCount);
+      })
+      .catch((error) => {
+        // Ignore AbortError - request was intentionally cancelled
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+        console.error("Error fetching tags:", error);
+      })
+      .finally(() => {
+        // A stale aborted request resolving later must not clear the loading
+        // state belonging to the newer in-flight request.
+        if (!signal?.aborted) {
+          setIsLoading(false);
+        }
+      });
   }, [selectedTags, categoryFilter, debouncedQuery]);
 
   useEffect(() => {

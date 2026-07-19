@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 
 // Re-exported from the sharp-free module for existing importers.
 export { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/mimes";
@@ -32,7 +32,7 @@ export async function preprocessImageBufferForEmbedding(
 }
 
 async function preprocessSharpImage(
-  image: sharp.Sharp,
+  image: Sharp,
   imageMaxResolution: number
 ): Promise<ProcessedEmbeddingImage> {
   if (!Number.isInteger(imageMaxResolution) || imageMaxResolution < 1) {

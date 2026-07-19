@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PostGrid } from "@/components/post-grid";
 import type { FeedPost } from "@/lib/feed";
 
@@ -17,10 +17,13 @@ export function FeedGrid({ posts }: FeedGridProps) {
 
   // Resync when the caller passes a new page's posts. The page also remounts
   // via key={page}, but relying on that alone would silently drop a prop
-  // change if the key ever stopped varying.
-  useEffect(() => {
+  // change if the key ever stopped varying. Adjusted during render instead of
+  // in an effect so the old page's posts never paint.
+  const [prevPosts, setPrevPosts] = useState(posts);
+  if (prevPosts !== posts) {
+    setPrevPosts(posts);
     setVisible(posts);
-  }, [posts]);
+  }
 
   const handleDismiss = (hash: string) => {
     setVisible((current) => current.filter((post) => post.hash !== hash));

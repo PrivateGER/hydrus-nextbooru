@@ -55,23 +55,27 @@ export function useSync(
     },
   });
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/sync");
-      const data = await response.json();
-      if (mountedRef.current) {
-        setSyncStatus(data);
-        setIsSyncing(data.status === "running");
-        // Resume live updates if a sync was already running when this mounted.
-        if (data.status === "running") startPolling();
-      }
-    } catch (error) {
-      console.error("Error fetching sync status:", error);
-    } finally {
-      if (mountedRef.current) {
-        setIsLoading(false);
-      }
-    }
+  // Promise-chain rather than async/await so the initial-fetch effect below
+  // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
+  const fetchStatus = useCallback(() => {
+    return fetch("/api/admin/sync")
+      .then((response) => (response.ok ? (response.json() as Promise<SyncStatus>) : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
+          setSyncStatus(data);
+          setIsSyncing(data.status === "running");
+          // Resume live updates if a sync was already running when this mounted.
+          if (data.status === "running") startPolling();
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching sync status:", error);
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setIsLoading(false);
+        }
+      });
   }, [mountedRef, startPolling]);
 
   // Initial fetch

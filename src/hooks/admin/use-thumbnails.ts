@@ -48,19 +48,22 @@ export function useThumbnails(
     },
   });
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const response = await fetch("/api/admin/thumbnails");
-      const data = await response.json();
-      if (mountedRef.current) {
-        setThumbStats(data);
-        setIsGenerating(data.batchRunning);
-        // Resume live updates if a batch was already running when this mounted.
-        if (data.batchRunning) startPolling();
-      }
-    } catch (error) {
-      console.error("Error fetching thumbnail stats:", error);
-    }
+  // Promise-chain rather than async/await so the initial-fetch effect below
+  // satisfies react-hooks/set-state-in-effect (state is only set in callbacks).
+  const fetchStats = useCallback(() => {
+    return fetch("/api/admin/thumbnails")
+      .then((response) => (response.ok ? (response.json() as Promise<ThumbnailStats>) : null))
+      .then((data) => {
+        if (data && mountedRef.current) {
+          setThumbStats(data);
+          setIsGenerating(data.batchRunning);
+          // Resume live updates if a batch was already running when this mounted.
+          if (data.batchRunning) startPolling();
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching thumbnail stats:", error);
+      });
   }, [mountedRef, startPolling]);
 
   // Initial fetch
