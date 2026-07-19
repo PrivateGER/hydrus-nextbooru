@@ -40,8 +40,10 @@ function storageGlobalWorks(key: 'localStorage' | 'sessionStorage'): boolean {
   }
 }
 
-beforeAll(() => {
-  if (!('window' in globalThis)) return;
+// Patch synchronously at setup-file evaluation, not in beforeAll: setup files
+// run before test modules are imported, so this also covers storage access at
+// module top level in an imported component, which a beforeAll would miss.
+if ('window' in globalThis) {
   for (const key of ['localStorage', 'sessionStorage'] as const) {
     if (!storageGlobalWorks(key)) {
       Object.defineProperty(globalThis, key, {
@@ -51,7 +53,7 @@ beforeAll(() => {
       });
     }
   }
-});
+}
 
 afterEach(() => {
   vi.clearAllMocks();
