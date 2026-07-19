@@ -9,6 +9,14 @@ export class OcrServiceUnavailableError extends Error {
 /** Sidecar answered but unusably: non-2xx status or unparseable payload. Maps to 502. */
 export class OcrServiceResponseError extends Error {
   public statusCode?: number;
+  /**
+   * Transient service state (worker busy): back off and retry instead of
+   * treating the error as terminal for the post. Response mapping must branch
+   * on this flag, not on instanceof-check ordering — a catch site that tests
+   * the base class first would otherwise silently turn retryable-busy into a
+   * terminal error.
+   */
+  public readonly retryable: boolean = false;
 
   constructor(message: string, statusCode?: number) {
     super(message);
@@ -25,6 +33,8 @@ export class OcrServiceResponseError extends Error {
  * than fail the post. Maps to 503 with Retry-After.
  */
 export class OcrServiceBusyError extends OcrServiceResponseError {
+  public override readonly retryable: boolean = true;
+
   constructor(message: string) {
     super(message, 429);
     this.name = "OcrServiceBusyError";
