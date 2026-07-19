@@ -294,6 +294,44 @@ describe("runOcrBatch", () => {
     expect(result.errors[0]).toMatch(/busy/i);
   });
 
+  it("retries a busy page render with backoff and then persists normally", async () => {
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0,0";
+    mockPostFindMany.mockResolvedValue([post(1)]);
+    mockOcrPost.mockResolvedValue([region()]);
+    mockRenderPostInpaintedPage
+      .mockRejectedValueOnce(new OcrServiceBusyError("busy"))
+      .mockResolvedValueOnce(Buffer.from([9]));
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("completed");
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(mockRenderPostInpaintedPage).toHaveBeenCalledTimes(2);
+    expect(mockFinalizeScan).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the batch when the render stage stays busy, leaving posts PENDING", async () => {
+    // Both sidecar stages share the single worker; busy on the render call
+    // must not degrade to a page-less COMPLETE post (that would delete an
+    // existing inpaint) nor fail the post — it stops the batch like a busy
+    // OCR call.
+    process.env.OCR_BUSY_RETRY_DELAYS_MS = "0,0";
+    mockPostFindMany.mockResolvedValue([post(1), post(2)]);
+    mockOcrPost.mockResolvedValue([region()]);
+    mockRenderPostInpaintedPage.mockRejectedValue(new OcrServiceBusyError("busy"));
+
+    const result = await runOcrBatch({});
+
+    expect(result.status).toBe("error");
+    expect(result.processed).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(mockMarkScanFailed).not.toHaveBeenCalled();
+    expect(mockRenderPostInpaintedPage).toHaveBeenCalledTimes(3); // initial + 2 retries, post 1 only
+    expect(mockFinalizeScan).not.toHaveBeenCalled();
+    expect(result.errors[0]).toMatch(/busy/i);
+  });
+
   it("stops between posts when cancellation was requested", async () => {
     mockPostFindMany.mockResolvedValue([post(1), post(2)]);
     mockOcrPost.mockResolvedValue([]);

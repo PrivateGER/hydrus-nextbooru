@@ -195,6 +195,13 @@ export async function renderPostInpaintedPage(
     const prepared = await prepareSidecarImage(image, post.mimeType);
     return await renderInpaintedPage(prepared.image, prepared.mimeType, { signal: options?.signal });
   } catch (error) {
+    // Busy is transient service state, not a property of this page: rethrow so
+    // callers retry or surface a retryable error. Swallowing it into the null
+    // degrade path would make finalizeScan(null) DELETE the post's existing
+    // inpainted page and persist COMPLETE — a transient 429 permanently
+    // destroying typeset state with no repair path (default batches only
+    // select PENDING).
+    if (error instanceof OcrServiceBusyError) throw error;
     aiLog.warn(
       { hash: post.hash, error: error instanceof Error ? error.message : String(error) },
       "OCR full-page inpaint unavailable; typeset overlay will degrade to notes"

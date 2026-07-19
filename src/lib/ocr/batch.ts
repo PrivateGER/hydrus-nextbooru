@@ -218,27 +218,30 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Serial-path OCR with busy backoff. A 429 means the sidecar's single worker
- * is occupied — typically still grinding a request whose client already timed
- * out and disconnected — so the post itself is fine and the right move is to
- * wait the worker out, not to fail the post. Rethrows the busy error once the
- * backoff schedule is exhausted (a persistently busy sidecar is wedged and the
- * batch must stop instead of hammering it).
+ * Run one serial-path sidecar call with busy backoff. A 429 means the
+ * sidecar's single worker is occupied — typically still grinding a request
+ * whose client already timed out and disconnected — so the post itself is
+ * fine and the right move is to wait the worker out, not to fail the post.
+ * Rethrows the busy error once the backoff schedule is exhausted (a
+ * persistently busy sidecar is wedged and the batch must stop instead of
+ * hammering it). Covers BOTH sidecar stages (OCR scan and page inpaint):
+ * they share the single worker, so either can be rejected as busy.
  */
-async function ocrPostWithBusyRetry(
-  post: ScannablePost,
-  signal: AbortSignal
-): Promise<NormalizedRegion[]> {
+async function withBusyRetry<T>(
+  work: () => Promise<T>,
+  signal: AbortSignal,
+  hash: string
+): Promise<T> {
   const delays = getOcrBusyRetryDelaysMs();
   for (let attempt = 0; ; attempt++) {
     try {
-      return await ocrPost(post, { signal });
+      return await work();
     } catch (error) {
       if (!(error instanceof OcrServiceBusyError) || attempt >= delays.length || signal.aborted) {
         throw error;
       }
       aiLog.warn(
-        { hash: post.hash, attempt: attempt + 1, retryInMs: delays[attempt] },
+        { hash, attempt: attempt + 1, retryInMs: delays[attempt] },
         "OCR sidecar busy; backing off before retrying"
       );
       await abortableDelay(delays[attempt], signal);
@@ -283,6 +286,18 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
   const pushError = (message: string): void => {
     if (result.errors.length < MAX_ERROR_ENTRIES) result.errors.push(message);
   };
+  // The sidecar stayed busy through the whole backoff schedule: its worker is
+  // wedged (or hogged by another client). Failing this and every remaining
+  // post would hammer the wedged service and flip hundreds of ocrStatus rows
+  // to FAILED in seconds, so stop the batch instead and leave everything
+  // unscanned as PENDING.
+  const stopForPersistentlyBusySidecar = (hash: string): void => {
+    result.status = "error";
+    pushError(
+      "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING"
+    );
+    aiLog.error({ hash }, "OCR batch stopped: sidecar persistently busy");
+  };
 
   // Keep the lock fresh for as long as this process is alive — across serial
   // OCR/render AND the trailing Promise.all translation drain. Cleared in the
@@ -326,7 +341,7 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
       // Stage 1: serial OCR.
       let regions: NormalizedRegion[];
       try {
-        regions = await ocrPostWithBusyRetry(post, batchSignal);
+        regions = await withBusyRetry(() => ocrPost(post, { signal: batchSignal }), batchSignal, post.hash);
       } catch (error) {
         if (batchSignal.aborted) {
           // Cancellation aborted the in-flight OCR call: not a post failure.
@@ -334,16 +349,7 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
           break;
         }
         if (error instanceof OcrServiceBusyError) {
-          // The sidecar stayed busy through the whole backoff schedule: its
-          // worker is wedged (or hogged by another client). Failing this and
-          // every remaining post would hammer the wedged service and flip
-          // hundreds of ocrStatus rows to FAILED in seconds, so stop the
-          // batch instead and leave everything unscanned as PENDING.
-          result.status = "error";
-          pushError(
-            "OCR sidecar stayed busy (429) through all retries; batch stopped — unscanned posts remain PENDING"
-          );
-          aiLog.error({ hash: post.hash }, "OCR batch stopped: sidecar persistently busy");
+          stopForPersistentlyBusySidecar(post.hash);
           break;
         }
         result.failed++;
@@ -354,10 +360,32 @@ export async function runOcrBatch(options: OcrBatchOptions = {}): Promise<OcrBat
       }
 
       // Stage 1b: render the full-page inpaint on the serial path so every
-      // sidecar call stays strictly serial. No regions means no page; a render
-      // failure degrades to per-region crops, but an abort means cancellation.
-      const inpaintedPage =
-        regions.length > 0 ? await renderPostInpaintedPage(post, { signal: batchSignal }) : null;
+      // sidecar call stays strictly serial. No regions means no page; a
+      // non-busy render failure degrades to per-region crops (null), but busy
+      // gets the same backoff-then-stop treatment as the OCR stage — the two
+      // calls share the sidecar's single worker, and letting busy through as
+      // null would delete an existing inpainted page in finalizeScan.
+      let inpaintedPage: Buffer | null = null;
+      try {
+        inpaintedPage =
+          regions.length > 0
+            ? await withBusyRetry(
+                () => renderPostInpaintedPage(post, { signal: batchSignal }),
+                batchSignal,
+                post.hash
+              )
+            : null;
+      } catch (error) {
+        if (batchSignal.aborted) {
+          result.status = "cancelled";
+          break;
+        }
+        if (error instanceof OcrServiceBusyError) {
+          stopForPersistentlyBusySidecar(post.hash);
+          break;
+        }
+        throw error;
+      }
       if (batchSignal.aborted) {
         result.status = "cancelled";
         break;
