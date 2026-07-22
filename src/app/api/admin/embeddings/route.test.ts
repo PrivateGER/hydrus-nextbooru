@@ -10,6 +10,7 @@ const {
   mockGetEmbeddingStats,
   mockUpdateEmbeddingSettings,
   mockInvalidateFeedCache,
+  mockInvalidateEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
   mockBatchComputeImageEmbeddings: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockGetEmbeddingStats: vi.fn(),
   mockUpdateEmbeddingSettings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
+  mockInvalidateEmbeddingCalibration: vi.fn(),
 }));
 
 vi.mock("@/lib/embeddings", () => ({
@@ -44,6 +46,10 @@ vi.mock("@/lib/logger", () => ({
 
 vi.mock("@/lib/feed", () => ({
   invalidateFeedCache: mockInvalidateFeedCache,
+}));
+
+vi.mock("@/lib/embeddings/calibration", () => ({
+  invalidateEmbeddingCalibration: mockInvalidateEmbeddingCalibration,
 }));
 
 const SETTINGS = {
@@ -182,6 +188,9 @@ describe("admin embeddings route", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(12);
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // The wiped store was the calibration sample source — the persisted
+    // baseline must drop with it.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
   });
 
   it("DELETE clears failed embeddings without touching the feed cache", async () => {
@@ -194,6 +203,8 @@ describe("admin embeddings route", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(3);
     expect(mockInvalidateFeedCache).not.toHaveBeenCalled();
+    // FAILED rows never feed the calibration sample; the baseline survives.
+    expect(mockInvalidateEmbeddingCalibration).not.toHaveBeenCalled();
   });
 
   it("DELETE without an action returns 400", async () => {

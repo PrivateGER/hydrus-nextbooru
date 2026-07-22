@@ -169,6 +169,21 @@ export async function estimateEmbeddingBaseline(
 }
 
 /**
+ * Drop the persisted calibration baseline.
+ *
+ * Call when the embedding store for the active config is cleared or rebuilt:
+ * the cached baseline is keyed only by config, so a wipe-and-refill under the
+ * SAME config would otherwise keep serving a baseline estimated from the old
+ * store contents. The next feed build re-estimates (or degrades to the
+ * identity rescale while the store refills).
+ */
+export async function invalidateEmbeddingCalibration(): Promise<void> {
+  await prisma.settings.deleteMany({
+    where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+  });
+}
+
+/**
  * The calibration baseline for a config: cached in Settings, estimated (and
  * persisted) on miss, 0 whenever the store is too small or estimation fails —
  * so callers can apply {@link calibrateEmbeddingScore} unconditionally.

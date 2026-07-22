@@ -209,6 +209,24 @@ describe("/api/admin/embeddings", () => {
       processedHeight: 100,
     });
 
+    // A persisted calibration baseline was estimated from the store being
+    // wiped; clearing the active config's embeddings must drop it so a
+    // rebuild re-estimates instead of inheriting stale scale.
+    await prisma.settings.create({
+      data: {
+        key: "openrouter.embedding.calibration",
+        value: JSON.stringify({
+          baseline: 0.75,
+          sampleSize: 48,
+          computedAt: new Date().toISOString(),
+          baseUrl: config.baseUrl,
+          model: config.model,
+          dimensions: config.dimensions,
+          imageMaxResolution: config.imageMaxResolution,
+        }),
+      },
+    });
+
     const request = new NextRequest("http://localhost/api/admin/embeddings", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -221,6 +239,9 @@ describe("/api/admin/embeddings", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(1);
     expect(await prisma.postEmbedding.count()).toBe(1);
+    expect(
+      await prisma.settings.findUnique({ where: { key: "openrouter.embedding.calibration" } })
+    ).toBeNull();
   });
 
   it("selects only failed embeddings when retrying failed rows", async () => {
