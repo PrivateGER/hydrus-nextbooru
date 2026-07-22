@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calibrateEmbeddingScore, rawMinScoreFor } from "./calibration";
+import { calibrateEmbeddingScore } from "./calibration";
 
 // Prod-measured anchor points for gemini-embedding-2 @3072d: random pairs
 // p50 0.66 / p90 ~0.75, top-20 neighbors 0.81–0.99.
@@ -40,24 +40,5 @@ describe("calibrateEmbeddingScore", () => {
     const score = calibrateEmbeddingScore(0.97, 0.999);
     expect(score).toBeGreaterThanOrEqual(0);
     expect(score).toBeLessThanOrEqual(1);
-  });
-});
-
-describe("rawMinScoreFor", () => {
-  it("converts a calibrated floor to the raw cosine the ANN prefilter needs", () => {
-    // Calibrated 0.25 with the prod baseline lands just above the weakest
-    // observed neighbor — the floor finally trims something.
-    expect(rawMinScoreFor(0.25, BASELINE)).toBeCloseTo(0.8125, 4);
-  });
-
-  it("is the exact inverse of calibrateEmbeddingScore above the baseline", () => {
-    for (const calibratedMin of [0, 0.1, 0.25, 0.5, 0.9]) {
-      const raw = rawMinScoreFor(calibratedMin, BASELINE);
-      expect(calibrateEmbeddingScore(raw, BASELINE)).toBeCloseTo(calibratedMin, 10);
-    }
-  });
-
-  it("passes the floor through unchanged without a baseline (legacy raw behavior)", () => {
-    expect(rawMinScoreFor(0.25, 0)).toBe(0.25);
   });
 });

@@ -88,15 +88,13 @@ export function calibrateEmbeddingScore(raw: number, baseline: number): number {
   return Math.max(0, Math.min(1, (raw - b) / (1 - b)));
 }
 
-/**
- * Convert a calibrated-space minimum score to the raw cosine the ANN query's
- * distance prefilter understands (inverse of {@link calibrateEmbeddingScore}).
+/*
+ * There is deliberately no helper converting a calibrated floor back to a
+ * raw cosine for use as an ANN distance predicate. When a seed's
+ * neighborhood cannot satisfy such a predicate, the index scan never
+ * reaches its LIMIT and falls back to walking the entire vector index.
+ * Apply floors to the fetched top-K in application code instead.
  */
-export function rawMinScoreFor(calibratedMin: number, baseline: number): number {
-  if (baseline <= 0) return calibratedMin;
-  const b = Math.min(baseline, MAX_BASELINE);
-  return b + calibratedMin * (1 - b);
-}
 
 function isCalibrationForConfig(
   value: unknown,

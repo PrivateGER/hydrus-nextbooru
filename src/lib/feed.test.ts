@@ -841,34 +841,47 @@ describe("fetchEmbeddingNeighborhoods (calibration wiring)", () => {
     mockFindRelated.mockReset();
   });
 
-  it("passes the raw floor through untouched and never rescales at baseline 0 (legacy behavior)", async () => {
-    const raw = new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.47)]]]);
-    mockFindRelated.mockResolvedValue(raw);
+  it("never pushes a distance floor into the ANN query", async () => {
+    // A minScore in the kNN WHERE clause is unbounded work: a seed whose
+    // neighborhood cannot satisfy it forces a full vector-index walk. The
+    // floor must be applied to the fetched top-K in JS instead.
+    mockFindRelated.mockResolvedValue(new Map());
+
+    await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0.75);
+    await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0);
+
+    for (const call of mockFindRelated.mock.calls) {
+      expect(call[0].minScore).toBeUndefined();
+    }
+  });
+
+  it("applies the floor to raw scores at baseline 0 (legacy semantics)", async () => {
+    // 0.88 and 0.47 clear the 0.25 floor; 0.2 does not.
+    mockFindRelated.mockResolvedValue(
+      new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.47), neighbor(12, 0.2)]]])
+    );
 
     const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0);
 
-    expect(mockFindRelated).toHaveBeenCalledWith(
-      expect.objectContaining({ minScore: FEED_CONFIG.minEmbeddingScore })
-    );
-    // Identity fallback returns the store's map as-is: scores untouched.
-    expect(result).toBe(raw);
-    expect(result.get(1)!.map((n) => n.score)).toEqual([0.88, 0.47]);
+    expect(result.get(1)!.map((n) => [n.id, n.score])).toEqual([
+      [10, 0.88],
+      [11, 0.47],
+    ]);
   });
 
-  it("converts the calibrated floor to raw for the ANN prefilter and rescales returned scores", async () => {
-    mockFindRelated.mockResolvedValue(new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.99)]]]));
-    const baseline = 0.75;
-
-    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, baseline);
-
-    // Calibrated minEmbeddingScore 0.25 -> raw 0.75 + 0.25*(1-0.75) = 0.8125.
-    expect(mockFindRelated).toHaveBeenCalledWith(
-      expect.objectContaining({ minScore: 0.8125 })
+  it("rescales scores against the baseline and floors in calibrated space", async () => {
+    // baseline 0.75: raw 0.88 -> 0.52, raw 0.99 -> 0.96, raw 0.80 -> 0.2
+    // which falls below the 0.25 calibrated floor and is dropped.
+    mockFindRelated.mockResolvedValue(
+      new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.99), neighbor(12, 0.8)]]])
     );
-    // raw 0.88 -> (0.88-0.75)/0.25 = 0.52; raw 0.99 -> 0.96.
-    const scores = result.get(1)!.map((n) => n.score);
-    expect(scores[0]).toBeCloseTo(0.52, 10);
-    expect(scores[1]).toBeCloseTo(0.96, 10);
+
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0.75);
+
+    const entries = result.get(1)!.map((n) => [n.id, n.score] as const);
+    expect(entries.map(([id]) => id)).toEqual([10, 11]);
+    expect(entries[0][1]).toBeCloseTo(0.52, 10);
+    expect(entries[1][1]).toBeCloseTo(0.96, 10);
   });
 
   it("returns an empty map without querying when embeddings are unconfigured", async () => {
