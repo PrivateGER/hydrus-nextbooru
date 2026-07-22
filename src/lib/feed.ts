@@ -974,11 +974,11 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   // sampled seeds: a page of a set the user already favorited must never be
   // re-served, even when that favorite lost the seed lottery this build
   // (observed in prod: 13 of the top-100 feed items were siblings of
-  // unsampled favorites). Seeds stay in the anchor set so view/dismissal
-  // seeds keep their existing sibling exclusion.
-  const exclusionAnchorIds = [
-    ...new Set([...allSeedIds, ...favorites.map((fav) => fav.postId)]),
-  ];
+  // unsampled favorites). Favorites are matched server-side via the
+  // Favorite relation — never materialized into the client-side IN list,
+  // which would grow with the whole favorites table and can exceed bind-
+  // parameter limits. Only the bounded seed ids (which include view and
+  // dismissal seeds with no Favorite row) travel as parameters.
 
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
   // neighborhoods are fetched in bounded chunks so the ANN work can use several
@@ -986,7 +986,16 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const [excludedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
-        group: { posts: { some: { postId: { in: exclusionAnchorIds } } } },
+        group: {
+          posts: {
+            some: {
+              OR: [
+                { postId: { in: allSeedIds } },
+                { post: { favorite: { isNot: null } } },
+              ],
+            },
+          },
+        },
       },
       select: { postId: true },
     }),
