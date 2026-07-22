@@ -11,10 +11,21 @@ export function randomHash(): string {
 }
 
 /**
- * Generate a random integer
+ * Collision-free default for Post.hydrusFileId (unique column).
+ *
+ * A random default in [0, 1_000_000) is a birthday problem: tests that
+ * create hundreds of posts (e.g. the recommendation rerank suites) hit the
+ * unique constraint with ~N²/2e6 probability per test — a real CI flake
+ * (release run 29964599487). Defaults draw from a strictly NEGATIVE
+ * monotonic counter instead: disjoint by sign from createPostsBulk's
+ * MAX+1-based allocation (always positive) and from the small positive ids
+ * tests pass explicitly, and race-free without a DB round trip since the
+ * decrement is synchronous. Hydrus ids are positive in production, but no
+ * default-consuming test depends on the sign.
  */
-export function randomInt(max = 1000000): number {
-  return Math.floor(Math.random() * max);
+let nextSyntheticHydrusFileId = 0;
+function syntheticHydrusFileId(): number {
+  return --nextSyntheticHydrusFileId;
 }
 
 /**
@@ -40,7 +51,7 @@ export async function createPost(
   return prisma.post.create({
     data: {
       hash: overrides.hash ?? randomHash(),
-      hydrusFileId: overrides.hydrusFileId ?? randomInt(),
+      hydrusFileId: overrides.hydrusFileId ?? syntheticHydrusFileId(),
       mimeType: overrides.mimeType ?? 'image/png',
       extension: overrides.extension ?? '.png',
       fileSize: overrides.fileSize ?? 1024,
@@ -153,11 +164,14 @@ export async function createPostsBulk(
   // (and successive calls) never overlap. A previous random base in
   // [0, 1_000_000) let two batches land within BATCH_SIZE of each other and
   // violate the hydrusFileId unique constraint (flaky seeding failures).
+  // GREATEST clamps the base to the positive band: single-post defaults draw
+  // from a NEGATIVE counter (see syntheticHydrusFileId), and bulk must never
+  // allocate below zero or the sign-disjointness argument breaks.
   const posts = await prisma.$queryRawUnsafe<{ id: number }[]>(`
     INSERT INTO "Post" (hash, "hydrusFileId", "mimeType", extension, "fileSize", width, height, rating, "importedAt", "thumbnailStatus", "updatedAt")
     SELECT
       encode(sha256((COALESCE($8::text, random()::text) || '|' || generate_series::text)::bytea), 'hex'),
-      (SELECT COALESCE(MAX("hydrusFileId"), 0) FROM "Post") + 1 + generate_series,
+      (SELECT GREATEST(COALESCE(MAX("hydrusFileId"), 0), 0) FROM "Post") + 1 + generate_series,
       $1,
       $2,
       $3,
