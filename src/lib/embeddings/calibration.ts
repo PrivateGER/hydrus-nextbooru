@@ -63,6 +63,14 @@ export interface EmbeddingCalibration {
   sampleSize: number;
   /** ISO timestamp of estimation. */
   computedAt: string;
+  /**
+   * Invalidation generation the estimate was sampled under (see
+   * {@link invalidateEmbeddingCalibration}). A stored row whose stamp does
+   * not match the CURRENT generation is stale — its sample predates a store
+   * wipe or batch settlement — and is rejected at read time, even if it was
+   * written after the invalidation by a racing estimator in any process.
+   */
+  generation: number;
   /** Config identity — a mismatch on any field invalidates the cache. */
   baseUrl: string;
   model: string;
@@ -92,7 +100,8 @@ export function rawMinScoreFor(calibratedMin: number, baseline: number): number 
 
 function isCalibrationForConfig(
   value: unknown,
-  config: EmbeddingConfig
+  config: EmbeddingConfig,
+  generation: number
 ): value is EmbeddingCalibration {
   if (typeof value !== "object" || value === null) return false;
   const cal = value as Partial<EmbeddingCalibration>;
@@ -107,11 +116,27 @@ function isCalibrationForConfig(
     // transiently and re-estimated each build until the store reaches
     // CALIBRATION_SAMPLE_SIZE).
     cal.sampleSize >= CALIBRATION_SAMPLE_SIZE &&
+    // Generation fence: rows stamped under an older invalidation generation
+    // are stale regardless of who wrote them or when the write landed.
+    cal.generation === generation &&
     cal.baseUrl === config.baseUrl &&
     cal.model === config.model &&
     cal.dimensions === config.dimensions &&
     cal.imageMaxResolution === config.imageMaxResolution
   );
+}
+
+/**
+ * The current durable invalidation generation (0 when never invalidated).
+ * Tolerates a hand-corrupted value by treating it as 0.
+ */
+async function readCalibrationGeneration(): Promise<number> {
+  const row = await prisma.settings.findUnique({
+    where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION },
+    select: { value: true },
+  });
+  const parsed = row ? Number(row.value) : 0;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 /**
@@ -169,18 +194,38 @@ export async function estimateEmbeddingBaseline(
 }
 
 /**
- * Drop the persisted calibration baseline.
+ * Drop the persisted calibration baseline and advance the DURABLE
+ * invalidation generation.
  *
  * Call when the embedding store for the active config is cleared or rebuilt:
  * the cached baseline is keyed only by config, so a wipe-and-refill under the
  * SAME config would otherwise keep serving a baseline estimated from the old
  * store contents. The next feed build re-estimates (or degrades to the
  * identity rescale while the store refills).
+ *
+ * The generation bump also fences IN-FLIGHT estimations across processes:
+ * an estimate that started before this call persists a row stamped with the
+ * OLD generation, which every reader rejects (see isCalibrationForConfig) —
+ * so a racing write-after-delete cannot restore a stale baseline. The
+ * increment is a single atomic upsert; a non-numeric (corrupted) stored
+ * value heals to 1.
  */
 export async function invalidateEmbeddingCalibration(): Promise<void> {
-  await prisma.settings.deleteMany({
-    where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
-  });
+  await prisma.$transaction([
+    prisma.$executeRaw`
+      INSERT INTO "Settings" ("key", "value", "updatedAt")
+      VALUES (${SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION}, '1', NOW())
+      ON CONFLICT ("key") DO UPDATE SET
+        "value" =
+          (CASE WHEN "Settings"."value" ~ '^[0-9]+$'
+                THEN "Settings"."value"::bigint + 1
+                ELSE 1 END)::text,
+        "updatedAt" = NOW()
+    `,
+    prisma.settings.deleteMany({
+      where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+    }),
+  ]);
 }
 
 /**
@@ -190,6 +235,11 @@ export async function invalidateEmbeddingCalibration(): Promise<void> {
  */
 export async function getEmbeddingBaseline(config: EmbeddingConfig): Promise<number> {
   try {
+    // The generation is read BEFORE the cached row and before estimation:
+    // any invalidation that lands afterwards moves the generation, which
+    // both invalidates the row we might read now and marks the estimate we
+    // might persist below as stale for every future reader.
+    const generationAtStart = await readCalibrationGeneration();
     const row = await prisma.settings.findUnique({
       where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
       select: { value: true },
@@ -197,7 +247,9 @@ export async function getEmbeddingBaseline(config: EmbeddingConfig): Promise<num
     if (row) {
       try {
         const parsed: unknown = JSON.parse(row.value);
-        if (isCalibrationForConfig(parsed, config)) return parsed.baseline;
+        if (isCalibrationForConfig(parsed, config, generationAtStart)) {
+          return parsed.baseline;
+        }
       } catch {
         // Corrupt JSON: fall through to re-estimation, which overwrites it.
       }
@@ -209,17 +261,21 @@ export async function getEmbeddingBaseline(config: EmbeddingConfig): Promise<num
     const calibration: EmbeddingCalibration = {
       ...estimate,
       computedAt: new Date().toISOString(),
+      generation: generationAtStart,
       baseUrl: config.baseUrl,
       model: config.model,
       dimensions: config.dimensions,
       imageMaxResolution: config.imageMaxResolution,
     };
-    // Persist ONLY full-sample calibrations. A partial estimate (store still
-    // filling: 16..47 embeddings) is used for THIS build but re-estimated on
-    // the next one, so the cached value can never be a permanently skewed
-    // small-sample artifact. Best-effort: a failed Settings write must not
-    // discard a good estimate — the next build simply re-estimates
-    // (deterministic sample, same result).
+    // Persist ONLY full-sample calibrations. The row is stamped with the
+    // generation captured before estimation: if an invalidation raced this
+    // estimate, readers reject the row by generation mismatch, so the write
+    // is harmless either way and needs no lock. A partial estimate (store
+    // still filling: 16..47 embeddings) is used for THIS build but
+    // re-estimated on the next one, so the cached value can never be a
+    // permanently skewed small-sample artifact. Best-effort: a failed
+    // Settings write must not discard a good estimate — the next build
+    // simply re-estimates (deterministic sample, same result).
     if (estimate.sampleSize >= CALIBRATION_SAMPLE_SIZE) {
       try {
         await updateSettings({

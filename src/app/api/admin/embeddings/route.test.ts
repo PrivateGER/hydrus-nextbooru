@@ -134,8 +134,13 @@ describe("admin embeddings route", () => {
     expect(data.lastBatchResult).toEqual({ processed: 5, succeeded: 5, failed: 0 });
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
     // Settlement must also drop the persisted calibration baseline: its
-    // sample may predate rows this batch added.
+    // sample may predate rows this batch added. Ordering matters — the feed
+    // cache falls AFTER the calibration delete, or a racing feed build could
+    // cache the stale baseline with nothing left to evict it.
     expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateEmbeddingCalibration.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInvalidateFeedCache.mock.invocationCallOrder[0]
+    );
   });
 
   it("POST reports a failed batch and still invalidates the feed cache", async () => {

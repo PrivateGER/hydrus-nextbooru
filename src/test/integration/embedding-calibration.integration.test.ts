@@ -6,6 +6,7 @@ import { upsertCompleteEmbedding } from "@/lib/embeddings/store";
 import {
   estimateEmbeddingBaseline,
   getEmbeddingBaseline,
+  invalidateEmbeddingCalibration,
 } from "@/lib/embeddings/calibration";
 import { SETTINGS_KEYS } from "@/lib/openrouter/types";
 
@@ -122,5 +123,64 @@ describe("embedding calibration (integration)", () => {
     // served for it, and with nothing to sample the baseline degrades to 0.
     const otherModel = { ...config, model: "some/other-model" };
     expect(await getEmbeddingBaseline(otherModel)).toBe(0);
+  });
+
+  it("rejects a cached baseline stamped under an older invalidation generation", async () => {
+    // Simulates the write-after-invalidate race: a row persisted by an
+    // estimator that started BEFORE an invalidation carries the old
+    // generation stamp and must be treated as a miss by every reader, no
+    // matter when its write landed.
+    const prisma = getTestPrisma();
+    await prisma.settings.create({
+      data: {
+        key: SETTINGS_KEYS.EMBEDDING_CALIBRATION,
+        value: JSON.stringify({
+          baseline: 0.9,
+          sampleSize: 48,
+          computedAt: new Date().toISOString(),
+          generation: 0, // stale stamp
+          ...config,
+        }),
+      },
+    });
+    await prisma.settings.create({
+      data: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION, value: "1" },
+    });
+
+    // Empty store: a rejected cache row cannot be re-estimated, so the
+    // stale 0.9 must NOT be served — identity baseline instead.
+    expect(await getEmbeddingBaseline(config)).toBe(0);
+  });
+
+  it("re-estimates and re-persists under the new generation after invalidation", async () => {
+    const prisma = getTestPrisma();
+    for (let i = 0; i < 12; i++) {
+      await insertEmbedding(basisVector(i));
+    }
+    for (let i = 0; i < 36; i++) {
+      await insertEmbedding(basisVector(100));
+    }
+
+    expect(await getEmbeddingBaseline(config)).toBe(0.95);
+
+    await invalidateEmbeddingCalibration();
+    expect(
+      await prisma.settings.findUnique({ where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION } })
+    ).toBeNull();
+    expect(
+      (await prisma.settings.findUnique({
+        where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION },
+      }))?.value
+    ).toBe("1");
+
+    // Store unchanged: re-estimation lands the same value, now stamped with
+    // generation 1 — proven by the cache surviving a store wipe.
+    expect(await getEmbeddingBaseline(config)).toBe(0.95);
+    await prisma.postEmbedding.deleteMany();
+    expect(await getEmbeddingBaseline(config)).toBe(0.95);
+
+    // A second invalidation moves the fence again and drops the row.
+    await invalidateEmbeddingCalibration();
+    expect(await getEmbeddingBaseline(config)).toBe(0);
   });
 });
