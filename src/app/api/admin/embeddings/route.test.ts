@@ -10,6 +10,7 @@ const {
   mockGetEmbeddingStats,
   mockUpdateEmbeddingSettings,
   mockInvalidateFeedCache,
+  mockInvalidateEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
   mockBatchComputeImageEmbeddings: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockGetEmbeddingStats: vi.fn(),
   mockUpdateEmbeddingSettings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
+  mockInvalidateEmbeddingCalibration: vi.fn(),
 }));
 
 vi.mock("@/lib/embeddings", () => ({
@@ -44,6 +46,10 @@ vi.mock("@/lib/logger", () => ({
 
 vi.mock("@/lib/feed", () => ({
   invalidateFeedCache: mockInvalidateFeedCache,
+}));
+
+vi.mock("@/lib/embeddings/calibration", () => ({
+  invalidateEmbeddingCalibration: mockInvalidateEmbeddingCalibration,
 }));
 
 const SETTINGS = {
@@ -127,6 +133,14 @@ describe("admin embeddings route", () => {
     expect(data.batchStatus).toBe("completed");
     expect(data.lastBatchResult).toEqual({ processed: 5, succeeded: 5, failed: 0 });
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // Settlement must also drop the persisted calibration baseline: its
+    // sample may predate rows this batch added. Ordering matters — the feed
+    // cache falls AFTER the calibration delete, or a racing feed build could
+    // cache the stale baseline with nothing left to evict it.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateEmbeddingCalibration.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInvalidateFeedCache.mock.invocationCallOrder[0]
+    );
   });
 
   it("POST reports a failed batch and still invalidates the feed cache", async () => {
@@ -140,6 +154,8 @@ describe("admin embeddings route", () => {
     expect(data.batchStatus).toBe("failed");
     expect(data.batchError).toBe("provider down");
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // Even a failed batch commits partial rows before dying — re-sample.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -182,6 +198,9 @@ describe("admin embeddings route", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(12);
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // The wiped store was the calibration sample source — the persisted
+    // baseline must drop with it.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
   });
 
   it("DELETE clears failed embeddings without touching the feed cache", async () => {
@@ -194,6 +213,8 @@ describe("admin embeddings route", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(3);
     expect(mockInvalidateFeedCache).not.toHaveBeenCalled();
+    // FAILED rows never feed the calibration sample; the baseline survives.
+    expect(mockInvalidateEmbeddingCalibration).not.toHaveBeenCalled();
   });
 
   it("DELETE without an action returns 400", async () => {

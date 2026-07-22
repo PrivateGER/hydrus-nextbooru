@@ -1,6 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock ONLY the ANN store call so fetchEmbeddingNeighborhoods' calibration
+// wiring (floor conversion + score rescale) is testable without a database.
+const { mockFindRelated } = vi.hoisted(() => ({ mockFindRelated: vi.fn() }));
+vi.mock("@/lib/embeddings/store", () => ({
+  findRelatedPostsByEmbeddingForPosts: mockFindRelated,
+}));
 import {
   FEED_CONFIG,
+  fetchEmbeddingNeighborhoods,
   seedWeight,
   selectSeeds,
   selectNegativeSeeds,
@@ -8,6 +16,7 @@ import {
   mulberry32,
   mergeSeedCandidates,
   dedupeRankedByGroup,
+  dedupeRankedByBlurhash,
   collapseSignalsByGroup,
   applyViewedPenalty,
   applyFreshnessBoost,
@@ -560,6 +569,51 @@ describe("dedupeRankedByGroup", () => {
   });
 });
 
+describe("dedupeRankedByBlurhash", () => {
+  const post = (
+    id: number,
+    blurhash: string | null,
+    width: number | null = 1920,
+    height: number | null = 1080
+  ): FeedPost => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width,
+    height,
+    blurhash,
+    mimeType: "image/png",
+    score: 1 / id,
+  });
+
+  it("keeps only the highest-ranked of visually identical posts", () => {
+    // Mirrors the prod case: two re-encodes of one clip, same blurhash and
+    // dimensions, different file hashes, adjacent in the ranking.
+    const posts = [post(1, "AAAA"), post(2, "AAAA"), post(3, "BBBB")];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 3]);
+  });
+
+  it("does not collapse same-blurhash posts with different dimensions", () => {
+    // Flat/low-detail images can collide on blurhash alone; differing pixel
+    // dimensions mean they are not the same picture.
+    const posts = [post(1, "AAAA", 1920, 1080), post(2, "AAAA", 512, 512)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 2]);
+  });
+
+  it("never collapses posts without a blurhash", () => {
+    const posts = [post(1, null), post(2, null), post(3, null)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
+  });
+
+  it("treats missing dimensions as their own key, not a wildcard", () => {
+    const posts = [post(1, "AAAA", null, null), post(2, "AAAA", null, null), post(3, "AAAA", 100, 100)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 3]);
+  });
+});
+
 describe("feed ranking pipeline", () => {
   const config: FeedConfig = {
     ...FEED_CONFIG,
@@ -761,5 +815,71 @@ describe("applyViewedPenalty", () => {
     const posts = [post(1, 0.9)];
     applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, FEED_CONFIG);
     expect(posts[0].score).toBe(0.9);
+  });
+});
+
+describe("fetchEmbeddingNeighborhoods (calibration wiring)", () => {
+  const embeddingConfig = {
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "google/gemini-embedding-2-preview",
+    dimensions: 3072,
+    imageMaxResolution: 2048,
+  };
+  const seeds = [{ postId: 1, hash: "a".repeat(64), weight: 1 }];
+  const neighbor = (id: number, score: number) => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width: 100,
+    height: 100,
+    blurhash: null,
+    mimeType: "image/png",
+    distance: 1 - score,
+    score,
+  });
+
+  beforeEach(() => {
+    mockFindRelated.mockReset();
+  });
+
+  it("passes the raw floor through untouched and never rescales at baseline 0 (legacy behavior)", async () => {
+    const raw = new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.47)]]]);
+    mockFindRelated.mockResolvedValue(raw);
+
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0);
+
+    expect(mockFindRelated).toHaveBeenCalledWith(
+      expect.objectContaining({ minScore: FEED_CONFIG.minEmbeddingScore })
+    );
+    // Identity fallback returns the store's map as-is: scores untouched.
+    expect(result).toBe(raw);
+    expect(result.get(1)!.map((n) => n.score)).toEqual([0.88, 0.47]);
+  });
+
+  it("converts the calibrated floor to raw for the ANN prefilter and rescales returned scores", async () => {
+    mockFindRelated.mockResolvedValue(new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.99)]]]));
+    const baseline = 0.75;
+
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, baseline);
+
+    // Calibrated minEmbeddingScore 0.25 -> raw 0.75 + 0.25*(1-0.75) = 0.8125.
+    expect(mockFindRelated).toHaveBeenCalledWith(
+      expect.objectContaining({ minScore: 0.8125 })
+    );
+    // raw 0.88 -> (0.88-0.75)/0.25 = 0.52; raw 0.99 -> 0.96.
+    const scores = result.get(1)!.map((n) => n.score);
+    expect(scores[0]).toBeCloseTo(0.52, 10);
+    expect(scores[1]).toBeCloseTo(0.96, 10);
+  });
+
+  it("returns an empty map without querying when embeddings are unconfigured", async () => {
+    const result = await fetchEmbeddingNeighborhoods(seeds, null, FEED_CONFIG, 0.75);
+    expect(result.size).toBe(0);
+    expect(mockFindRelated).not.toHaveBeenCalled();
+  });
+
+  it("degrades to an empty map when the store query fails", async () => {
+    mockFindRelated.mockRejectedValue(new Error("ann backend down"));
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0.75);
+    expect(result.size).toBe(0);
   });
 });

@@ -9,7 +9,7 @@ import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
 import * as viewRoute from '@/app/api/posts/[hash]/view/route';
-import { invalidateFeedCache } from '@/lib/feed';
+import { buildFeed, FEED_CONFIG, invalidateFeedCache } from '@/lib/feed';
 import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
 
 const TASTE_TAGS = ['1girl', 'blue hair', 'school uniform'];
@@ -184,6 +184,72 @@ describe('GET /api/feed (Integration)', () => {
     const hashes = data.posts.map((p: { hash: string }) => p.hash);
     expect(hashes).not.toContain(sibling.hash);
     expect(hashes).toContain(outsider.hash);
+  });
+
+  it('excludes group siblings of favorites that were not sampled as seeds', async () => {
+    const prisma = getTestPrisma();
+    const seedFav = await createPostWithTags(prisma, TASTE_TAGS); // newest favorite -> the only seed
+    const oldFav = await createPostWithTags(prisma, TASTE_TAGS); // older favorite, NOT a seed
+    const sibling = await createPostWithTags(prisma, TASTE_TAGS); // same set as oldFav
+    const outsider = await createPostWithTags(prisma, TASTE_TAGS);
+    await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
+
+    const group = await prisma.group.create({
+      data: { sourceType: 'PIXIV', sourceId: 'unsampled-favorite-group' },
+    });
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: oldFav.id, groupId: group.id, position: 0 },
+        { postId: sibling.id, groupId: group.id, position: 1 },
+      ],
+    });
+
+    await prisma.favorite.create({
+      data: { postId: oldFav.id, favoritedAt: new Date(Date.now() - 30 * 86_400_000) },
+    });
+    await prisma.favorite.create({
+      data: { postId: seedFav.id, favoritedAt: new Date() },
+    });
+
+    // One recent seed, no sampled/view/negative strata: oldFav is a favorite
+    // that is NOT a seed this build — its set sibling must still be excluded.
+    const posts = await buildFeed({
+      ...FEED_CONFIG,
+      recentSeedCount: 1,
+      sampledSeedCount: 0,
+      viewSeedCount: 0,
+      negativeSeedCount: 0,
+    });
+
+    const hashes = posts.map((p) => p.hash);
+    expect(hashes).not.toContain(sibling.hash);
+    expect(hashes).toContain(outsider.hash);
+  });
+
+  it('collapses perceptual near-duplicates (same blurhash and dimensions) to one', async () => {
+    const prisma = getTestPrisma();
+    const seed = await createPostWithTags(prisma, TASTE_TAGS);
+    const dupBlurhash = 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH';
+    const dupA = await createPostWithTags(prisma, TASTE_TAGS, {
+      blurhash: dupBlurhash, width: 1920, height: 1080,
+    });
+    const dupB = await createPostWithTags(prisma, TASTE_TAGS, {
+      blurhash: dupBlurhash, width: 1920, height: 1080,
+    });
+    const distinct = await createPostWithTags(prisma, TASTE_TAGS, {
+      blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj', width: 1920, height: 1080,
+    });
+    await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
+
+    await favorite(seed.hash);
+    const data = await fetchFeed();
+
+    const hashes = feedHashes(data);
+    const dupsServed = [dupA.hash, dupB.hash].filter((h) => hashes.includes(h));
+    expect(dupsServed).toHaveLength(1);
+    expect(hashes).toContain(distinct.hash);
   });
 
   it('collapses group siblings among candidates to one representative', async () => {

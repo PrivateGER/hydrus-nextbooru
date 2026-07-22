@@ -13,6 +13,7 @@ import {
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
 import { invalidateFeedCache } from "@/lib/feed";
+import { invalidateEmbeddingCalibration } from "@/lib/embeddings/calibration";
 import { createBatchRunner } from "@/lib/batch-runner";
 
 type EmbeddingBatchResult = { processed: number; succeeded: number; failed: number };
@@ -111,8 +112,28 @@ export async function POST(request: NextRequest) {
           aiLog.error({ error: message }, "Image embedding batch failed");
         },
         // A batch — even one that failed partway — commits new embeddings that
-        // feed the "For You" k-NN, so drop the cached feed regardless of outcome.
-        onSettled: () => invalidateFeedCache(),
+        // feed the "For You" k-NN, so both caches drop on settlement. The
+        // calibration baseline drops because its 48-row sample may have been
+        // drawn mid-backfill from an early slice of the store, and new rows
+        // can displace the deterministic md5-ordered sample; re-estimating
+        // once per settled batch is cheap (~2s worst case). ORDER MATTERS:
+        // the feed cache is invalidated in finally AFTER the calibration
+        // delete settles — invalidating first would let a feed build race
+        // the delete, read the stale baseline, and stay cached with nothing
+        // to evict it. Fire-and-forget overall: onSettled is sync, and even
+        // if the delete fails the generation fence in
+        // invalidateEmbeddingCalibration's readers plus the next
+        // clearCurrent/config change bound the staleness.
+        onSettled: () => {
+          Promise.resolve(invalidateEmbeddingCalibration())
+            .catch((error) => {
+              aiLog.error(
+                { error: error instanceof Error ? error.message : String(error) },
+                "Failed to invalidate embedding calibration after batch"
+              );
+            })
+            .finally(() => invalidateFeedCache());
+        },
       }
     );
 
@@ -143,6 +164,10 @@ export async function DELETE(request: NextRequest) {
 
     if (body.clearCurrent === true) {
       const count = await clearEmbeddingsForConfig(config);
+      // The persisted calibration baseline was estimated from the store that
+      // was just wiped; a rebuild under the same config must re-estimate
+      // rather than inherit it.
+      await invalidateEmbeddingCalibration();
       invalidateFeedCache();
       return NextResponse.json({ message: `Deleted ${count} embeddings`, count });
     }

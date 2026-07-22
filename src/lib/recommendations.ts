@@ -16,19 +16,22 @@ const MAX_SOURCE_TAGS = 64;
 
 /**
  * Phase-1 retrieval cap: candidates are discovered from the source's top 16
- * retained tags, then the best {@link SOURCE_TAG_RERANK_CANDIDATES} candidates
- * are reranked by the full {@link MAX_SOURCE_TAGS} scoring set. Prod measured
- * mean overlap@10 against direct K=64 cosine improving from 0.76 (plain K=16)
- * to ~0.95 with rerank, while phase-1 scan volume stayed ~1.76M rows for 109
- * seeds versus ~57M for the set-based K=64 scan.
+ * retained tags, ranked by an approximate cosine (partial dot over these tags
+ * divided by the candidate's exact precomputed tagIdfNorm), then the best
+ * {@link SOURCE_TAG_RERANK_CANDIDATES} candidates are reranked by the full
+ * {@link MAX_SOURCE_TAGS} scoring set. Top-16 keeps phase-1 scan volume
+ * bounded (~1.76M rows for 109 seeds versus ~57M for the set-based K=64
+ * scan); the norm-aware ordering stops high-tag-count hub posts from crowding
+ * the rerank cutoff (migration 20260722150000: 17/24 -> 23/24 sampled prod
+ * seeds with perfect overlap@10 against the exact K=64 cosine).
  */
 export const SOURCE_TAG_RETRIEVAL_CAP = 16;
 
 /**
  * Number of phase-1 candidates kept per source for exact top-64 cosine rerank.
- * Hardcoded in migration 20260708130000_lateral_recommendation_compute.
+ * Hardcoded in migration 20260722150000_normed_phase1_retrieval.
  */
-export const SOURCE_TAG_RERANK_CANDIDATES = 400;
+export const SOURCE_TAG_RERANK_CANDIDATES = 800;
 
 /**
  * Distinctiveness floor: a source tag present on more than this FRACTION of the
@@ -42,7 +45,7 @@ export const SOURCE_TAG_RERANK_CANDIDATES = 400;
  *
  * Both are HARDCODED in the SQL functions (compute_post_recommendations /
  * compute_recommendations_for_posts, latest definition in migration
- * 20260708130000_lateral_recommendation_compute) and mirrored here for
+ * 20260722150000_normed_phase1_retrieval) and mirrored here for
  * discoverability — the two MUST stay in sync. See migration 20260707000000
  * for the measured quality/scan tradeoff behind the 0.30 default.
  */

@@ -24,6 +24,11 @@ import { prisma } from "@/lib/db";
 import { feedLog } from "@/lib/logger";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
+  calibrateEmbeddingScore,
+  getEmbeddingBaseline,
+  rawMinScoreFor,
+} from "@/lib/embeddings/calibration";
+import {
   getEmbeddingOpenRouterSettings,
   toEmbeddingConfig,
   type EmbeddingConfig,
@@ -48,7 +53,13 @@ export interface FeedConfig {
   idfWeight: number;
   /** Seed weight halves every this many days since the favorite. */
   recencyHalfLifeDays: number;
-  /** Minimum cosine similarity for embedding candidates. */
+  /**
+   * Minimum CALIBRATED embedding similarity for candidates (see
+   * @/lib/embeddings/calibration): 0 = random-pair baseline, 1 = identical.
+   * Converted to the model's raw cosine for the ANN prefilter. When no
+   * baseline is available (tiny store / estimation failure) calibration is
+   * the identity, so this is applied as a raw cosine — the legacy behavior.
+   */
   minEmbeddingScore: number;
   /**
    * Contribution-weight floor for sampled (older-stratum) seeds: sampled seeds
@@ -700,6 +711,33 @@ export function dedupeRankedByGroup(
   return result;
 }
 
+/**
+ * Collapse perceptual near-duplicates in a ranked feed.
+ *
+ * Hydrus imports can hold the same image/clip re-encoded under a different
+ * file hash — and a different group — so group dedupe cannot collapse them,
+ * yet they render as identical thumbnails (observed in prod: two re-encodes
+ * of one clip served adjacently at the same score). The key is blurhash plus
+ * pixel dimensions: identical blurhash at identical dimensions means visually
+ * near-identical previews (dimensions guard against the rare blurhash
+ * collision on flat/low-detail images), and the highest-ranked one represents
+ * them all. Posts without a blurhash are always kept. Input order is
+ * preserved.
+ */
+export function dedupeRankedByBlurhash(posts: FeedPost[]): FeedPost[] {
+  const seenKeys = new Set<string>();
+  const result: FeedPost[] = [];
+  for (const post of posts) {
+    if (post.blurhash) {
+      const key = `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    result.push(post);
+  }
+  return result;
+}
+
 // ============================================
 // Feed build
 // ============================================
@@ -714,30 +752,50 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
 }
 
 /**
- * Image-embedding nearest neighbors for every seed, keyed by seed post id.
+ * Image-embedding nearest neighbors for every seed, keyed by seed post id,
+ * with CALIBRATED scores (see @/lib/embeddings/calibration).
  *
  * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
  * avoid per-seed round trips, small enough to keep Postgres parallelism across
- * chunks. Returns an empty map when embeddings are unconfigured. Missing source
- * embeddings are absent from the map, and chunk-level failures degrade to empty
- * neighborhoods rather than failing the whole build.
+ * chunks. The calibrated `config.minEmbeddingScore` floor is converted to the
+ * model's raw cosine for the ANN distance prefilter, and every returned score
+ * is rescaled against the baseline before ranking. Returns an empty map when
+ * embeddings are unconfigured. Missing source embeddings are absent from the
+ * map, and chunk-level failures degrade to empty neighborhoods rather than
+ * failing the whole build.
  */
-async function fetchEmbeddingNeighborhoods(
+export async function fetchEmbeddingNeighborhoods(
   seeds: FeedSeed[],
   embeddingConfig: EmbeddingConfig | null,
-  config: FeedConfig
+  config: FeedConfig,
+  baseline: number
 ): Promise<Map<number, EmbeddedRelatedPost[]>> {
   if (!embeddingConfig || seeds.length === 0) return new Map();
 
-  return findRelatedPostsByEmbeddingForPosts({
-    postIds: seeds.map((seed) => seed.postId),
-    config: embeddingConfig,
-    limit: config.neighborsPerSeed,
-    minScore: config.minEmbeddingScore,
-  }).catch((error): Map<number, EmbeddedRelatedPost[]> => {
+  try {
+    const bySeed = await findRelatedPostsByEmbeddingForPosts({
+      postIds: seeds.map((seed) => seed.postId),
+      config: embeddingConfig,
+      limit: config.neighborsPerSeed,
+      minScore: rawMinScoreFor(config.minEmbeddingScore, baseline),
+    });
+    if (baseline <= 0) return bySeed;
+
+    const calibrated = new Map<number, EmbeddedRelatedPost[]>();
+    for (const [seedId, neighbors] of bySeed) {
+      calibrated.set(
+        seedId,
+        neighbors.map((neighbor) => ({
+          ...neighbor,
+          score: calibrateEmbeddingScore(neighbor.score, baseline),
+        }))
+      );
+    }
+    return calibrated;
+  } catch (error) {
     feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched embedding neighbors failed");
     return new Map();
-  });
+  }
 }
 
 /**
@@ -901,14 +959,43 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const allSeedIds = allSeeds.map((s) => s.postId);
 
   const embeddingConfig = await resolveEmbeddingConfig();
+  // Model-specific random-pair baseline for score calibration; 0 (identity)
+  // when unconfigured, the store is too small, or estimation fails. Chained
+  // (not awaited) into the embedding branch so the baseline read/estimation
+  // overlaps the independent group-sibling and tag-IDF queries below.
+  const embeddingBySeedPromise = (embeddingConfig
+    ? getEmbeddingBaseline(embeddingConfig)
+    : Promise.resolve(0)
+  ).then((baseline) =>
+    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config, baseline)
+  );
+
+  // Group-sibling exclusion anchors on EVERY favorite, not just this build's
+  // sampled seeds: a page of a set the user already favorited must never be
+  // re-served, even when that favorite lost the seed lottery this build
+  // (observed in prod: 13 of the top-100 feed items were siblings of
+  // unsampled favorites). Favorites are matched server-side via the
+  // Favorite relation — never materialized into the client-side IN list,
+  // which would grow with the whole favorites table and can exceed bind-
+  // parameter limits. Only the bounded seed ids (which include view and
+  // dismissal seeds with no Favorite row) travel as parameters.
 
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
   // neighborhoods are fetched in bounded chunks so the ANN work can use several
   // backends without one round trip per seed.
-  const [seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
+  const [excludedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
-        group: { posts: { some: { postId: { in: allSeedIds } } } },
+        group: {
+          posts: {
+            some: {
+              OR: [
+                { postId: { in: allSeedIds } },
+                { post: { favorite: { isNot: null } } },
+              ],
+            },
+          },
+        },
       },
       select: { postId: true },
     }),
@@ -918,7 +1005,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         return new Map();
       }
     ),
-    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config),
+    embeddingBySeedPromise,
   ]);
 
   const contributions = [
@@ -929,7 +1016,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const excluded = new Set<number>([
     ...favorites.map((fav) => fav.postId),
     ...dismissedIds.map((d) => d.postId),
-    ...seedGroupSiblings.map((g) => g.postId),
+    ...excludedGroupSiblings.map((g) => g.postId),
   ]);
 
   // Exact embedding availability for the merge's per-pair achievable-weight
@@ -1012,9 +1099,12 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   // Collapse multi-post sets (a candidate whose group sibling is also a
   // candidate) to one representative each, so a large set near the user's
-  // taste cannot flood the feed. Slice only after collapse so group siblings
-  // cannot leave fillable holes.
-  return dedupeRankedByGroup(penalized, groupIdsByPostId).slice(0, config.maxFeedSize);
+  // taste cannot flood the feed, then collapse cross-group perceptual
+  // near-duplicates by blurhash. Slice only after both collapses so dropped
+  // entries cannot leave fillable holes.
+  return dedupeRankedByBlurhash(
+    dedupeRankedByGroup(penalized, groupIdsByPostId)
+  ).slice(0, config.maxFeedSize);
 }
 
 /**

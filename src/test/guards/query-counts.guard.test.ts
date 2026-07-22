@@ -87,23 +87,29 @@ const QUERY_BUDGETS = {
   // capture). A non-empty merged list then costs THREE extra batched
   // `postId IN (...)` lookups (postGroup for per-group feed dedup + postView
   // for the already-seen penalty + post importedAt for the freshness boost,
-  // which is on by default — single indexed batches, not N+1s). The budget is
-  // a loose ceiling: batching left the real count on this path well under it.
-  feed: 23,
+  // which is on by default — single indexed batches, not N+1s). Embedding
+  // calibration adds a constant TWO statements on this cold path: the
+  // Settings read for the cached baseline plus the (empty-store) estimation
+  // sample query — nothing is persisted because the sample is empty. The
+  // budget keeps headroom above the observed count.
+  feed: 25,
   // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
   // embedding neighborhood phase should add a small constant number of
-  // statements (two k-NN chunks + one availability read), not one query per
-  // seed.
+  // statements (two k-NN chunks + one availability read + the calibration
+  // Settings read and estimation sample; a store with a full 48-embedding
+  // sample would also persist the baseline once — headroom covers it), not
+  // one query per seed.
   feedWithEmbeddings: 28,
   // PUT = getPostIdByHash + the setFavorite/setDismissal transaction:
-  // advisory-lock SELECT, delete-opposite, upsert-self. The upsert is 1
-  // statement when Prisma plants a native INSERT ... ON CONFLICT and 2
-  // (SELECT then INSERT/UPDATE) when it does not, so 5 is the enumerated
-  // ceiling — tighten to the observed count if a run shows 4. DELETE is not
-  // transactional — 2 (lookup + delete).
-  favoritePut: 5,
+  // advisory-lock SELECT, delete-opposite, upsert-self. Prisma 7.8 plants
+  // SELECT-then-INSERT/UPDATE (2 statements) for this upsert instead of a
+  // native INSERT ... ON CONFLICT, so the enumerated count is 6 — first
+  // observed on the master push run for the 7.8 dep update (#161), not a
+  // route change. Tighten if a Prisma upgrade restores the native upsert.
+  // DELETE is not transactional — 2 (lookup + delete).
+  favoritePut: 6,
   favoriteDelete: 2,
-  dismissalPut: 5,
+  dismissalPut: 6,
   dismissalDelete: 2,
   // getOcrAdminStatus fans out to a fixed Promise.all of five aggregates
   // (three post.count by ocrStatus, imageTextRegion.count, ocrBatchState
