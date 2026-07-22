@@ -163,6 +163,7 @@ export const SETTINGS_KEYS = {
   EMBEDDING_MODEL: "openrouter.embedding.model",
   EMBEDDING_DIMENSIONS: "openrouter.embedding.dimensions",
   EMBEDDING_IMAGE_MAX_RESOLUTION: "openrouter.embedding.imageMaxResolution",
+  EMBEDDING_CALIBRATION: "openrouter.embedding.calibration",
 } as const;
 
 export interface OpenRouterSettings {

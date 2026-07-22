@@ -24,6 +24,11 @@ import { prisma } from "@/lib/db";
 import { feedLog } from "@/lib/logger";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
+  calibrateEmbeddingScore,
+  getEmbeddingBaseline,
+  rawMinScoreFor,
+} from "@/lib/embeddings/calibration";
+import {
   getEmbeddingOpenRouterSettings,
   toEmbeddingConfig,
   type EmbeddingConfig,
@@ -48,7 +53,13 @@ export interface FeedConfig {
   idfWeight: number;
   /** Seed weight halves every this many days since the favorite. */
   recencyHalfLifeDays: number;
-  /** Minimum cosine similarity for embedding candidates. */
+  /**
+   * Minimum CALIBRATED embedding similarity for candidates (see
+   * @/lib/embeddings/calibration): 0 = random-pair baseline, 1 = identical.
+   * Converted to the model's raw cosine for the ANN prefilter. When no
+   * baseline is available (tiny store / estimation failure) calibration is
+   * the identity, so this is applied as a raw cosine — the legacy behavior.
+   */
   minEmbeddingScore: number;
   /**
    * Contribution-weight floor for sampled (older-stratum) seeds: sampled seeds
@@ -741,30 +752,50 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
 }
 
 /**
- * Image-embedding nearest neighbors for every seed, keyed by seed post id.
+ * Image-embedding nearest neighbors for every seed, keyed by seed post id,
+ * with CALIBRATED scores (see @/lib/embeddings/calibration).
  *
  * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
  * avoid per-seed round trips, small enough to keep Postgres parallelism across
- * chunks. Returns an empty map when embeddings are unconfigured. Missing source
- * embeddings are absent from the map, and chunk-level failures degrade to empty
- * neighborhoods rather than failing the whole build.
+ * chunks. The calibrated `config.minEmbeddingScore` floor is converted to the
+ * model's raw cosine for the ANN distance prefilter, and every returned score
+ * is rescaled against the baseline before ranking. Returns an empty map when
+ * embeddings are unconfigured. Missing source embeddings are absent from the
+ * map, and chunk-level failures degrade to empty neighborhoods rather than
+ * failing the whole build.
  */
-async function fetchEmbeddingNeighborhoods(
+export async function fetchEmbeddingNeighborhoods(
   seeds: FeedSeed[],
   embeddingConfig: EmbeddingConfig | null,
-  config: FeedConfig
+  config: FeedConfig,
+  baseline: number
 ): Promise<Map<number, EmbeddedRelatedPost[]>> {
   if (!embeddingConfig || seeds.length === 0) return new Map();
 
-  return findRelatedPostsByEmbeddingForPosts({
-    postIds: seeds.map((seed) => seed.postId),
-    config: embeddingConfig,
-    limit: config.neighborsPerSeed,
-    minScore: config.minEmbeddingScore,
-  }).catch((error): Map<number, EmbeddedRelatedPost[]> => {
+  try {
+    const bySeed = await findRelatedPostsByEmbeddingForPosts({
+      postIds: seeds.map((seed) => seed.postId),
+      config: embeddingConfig,
+      limit: config.neighborsPerSeed,
+      minScore: rawMinScoreFor(config.minEmbeddingScore, baseline),
+    });
+    if (baseline <= 0) return bySeed;
+
+    const calibrated = new Map<number, EmbeddedRelatedPost[]>();
+    for (const [seedId, neighbors] of bySeed) {
+      calibrated.set(
+        seedId,
+        neighbors.map((neighbor) => ({
+          ...neighbor,
+          score: calibrateEmbeddingScore(neighbor.score, baseline),
+        }))
+      );
+    }
+    return calibrated;
+  } catch (error) {
     feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched embedding neighbors failed");
     return new Map();
-  });
+  }
 }
 
 /**
@@ -928,6 +959,11 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const allSeedIds = allSeeds.map((s) => s.postId);
 
   const embeddingConfig = await resolveEmbeddingConfig();
+  // Model-specific random-pair baseline for score calibration; 0 (identity)
+  // when unconfigured, the store is too small, or estimation fails.
+  const embeddingBaseline = embeddingConfig
+    ? await getEmbeddingBaseline(embeddingConfig)
+    : 0;
 
   // Group-sibling exclusion anchors on EVERY favorite, not just this build's
   // sampled seeds: a page of a set the user already favorited must never be
@@ -955,7 +991,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         return new Map();
       }
     ),
-    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config),
+    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config, embeddingBaseline),
   ]);
 
   const contributions = [

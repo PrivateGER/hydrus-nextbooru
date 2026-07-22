@@ -1,6 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock ONLY the ANN store call so fetchEmbeddingNeighborhoods' calibration
+// wiring (floor conversion + score rescale) is testable without a database.
+const { mockFindRelated } = vi.hoisted(() => ({ mockFindRelated: vi.fn() }));
+vi.mock("@/lib/embeddings/store", () => ({
+  findRelatedPostsByEmbeddingForPosts: mockFindRelated,
+}));
 import {
   FEED_CONFIG,
+  fetchEmbeddingNeighborhoods,
   seedWeight,
   selectSeeds,
   selectNegativeSeeds,
@@ -807,5 +815,71 @@ describe("applyViewedPenalty", () => {
     const posts = [post(1, 0.9)];
     applyViewedPenalty(posts, new Map([[1, viewedAt(0)]]), NOW_, FEED_CONFIG);
     expect(posts[0].score).toBe(0.9);
+  });
+});
+
+describe("fetchEmbeddingNeighborhoods (calibration wiring)", () => {
+  const embeddingConfig = {
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "google/gemini-embedding-2-preview",
+    dimensions: 3072,
+    imageMaxResolution: 2048,
+  };
+  const seeds = [{ postId: 1, hash: "a".repeat(64), weight: 1 }];
+  const neighbor = (id: number, score: number) => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width: 100,
+    height: 100,
+    blurhash: null,
+    mimeType: "image/png",
+    distance: 1 - score,
+    score,
+  });
+
+  beforeEach(() => {
+    mockFindRelated.mockReset();
+  });
+
+  it("passes the raw floor through untouched and never rescales at baseline 0 (legacy behavior)", async () => {
+    const raw = new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.47)]]]);
+    mockFindRelated.mockResolvedValue(raw);
+
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0);
+
+    expect(mockFindRelated).toHaveBeenCalledWith(
+      expect.objectContaining({ minScore: FEED_CONFIG.minEmbeddingScore })
+    );
+    // Identity fallback returns the store's map as-is: scores untouched.
+    expect(result).toBe(raw);
+    expect(result.get(1)!.map((n) => n.score)).toEqual([0.88, 0.47]);
+  });
+
+  it("converts the calibrated floor to raw for the ANN prefilter and rescales returned scores", async () => {
+    mockFindRelated.mockResolvedValue(new Map([[1, [neighbor(10, 0.88), neighbor(11, 0.99)]]]));
+    const baseline = 0.75;
+
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, baseline);
+
+    // Calibrated minEmbeddingScore 0.25 -> raw 0.75 + 0.25*(1-0.75) = 0.8125.
+    expect(mockFindRelated).toHaveBeenCalledWith(
+      expect.objectContaining({ minScore: 0.8125 })
+    );
+    // raw 0.88 -> (0.88-0.75)/0.25 = 0.52; raw 0.99 -> 0.96.
+    const scores = result.get(1)!.map((n) => n.score);
+    expect(scores[0]).toBeCloseTo(0.52, 10);
+    expect(scores[1]).toBeCloseTo(0.96, 10);
+  });
+
+  it("returns an empty map without querying when embeddings are unconfigured", async () => {
+    const result = await fetchEmbeddingNeighborhoods(seeds, null, FEED_CONFIG, 0.75);
+    expect(result.size).toBe(0);
+    expect(mockFindRelated).not.toHaveBeenCalled();
+  });
+
+  it("degrades to an empty map when the store query fails", async () => {
+    mockFindRelated.mockRejectedValue(new Error("ann backend down"));
+    const result = await fetchEmbeddingNeighborhoods(seeds, embeddingConfig, FEED_CONFIG, 0.75);
+    expect(result.size).toBe(0);
   });
 });
