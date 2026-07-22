@@ -26,7 +26,6 @@ import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
   calibrateEmbeddingScore,
   getEmbeddingBaseline,
-  rawMinScoreFor,
 } from "@/lib/embeddings/calibration";
 import {
   getEmbeddingOpenRouterSettings,
@@ -56,9 +55,10 @@ export interface FeedConfig {
   /**
    * Minimum CALIBRATED embedding similarity for candidates (see
    * @/lib/embeddings/calibration): 0 = random-pair baseline, 1 = identical.
-   * Converted to the model's raw cosine for the ANN prefilter. When no
-   * baseline is available (tiny store / estimation failure) calibration is
-   * the identity, so this is applied as a raw cosine — the legacy behavior.
+   * Applied to the fetched top-K in JS after the fixed-LIMIT ANN fetch,
+   * never as a SQL distance predicate (see fetchEmbeddingNeighborhoods).
+   * When no baseline is available calibration is the identity, so this
+   * floors the raw cosine directly.
    */
   minEmbeddingScore: number;
   /**
@@ -757,12 +757,18 @@ async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
  *
  * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
  * avoid per-seed round trips, small enough to keep Postgres parallelism across
- * chunks. The calibrated `config.minEmbeddingScore` floor is converted to the
- * model's raw cosine for the ANN distance prefilter, and every returned score
- * is rescaled against the baseline before ranking. Returns an empty map when
- * embeddings are unconfigured. Missing source embeddings are absent from the
- * map, and chunk-level failures degrade to empty neighborhoods rather than
- * failing the whole build.
+ * chunks. Every returned score is rescaled against the baseline, then the
+ * calibrated `config.minEmbeddingScore` floor is applied in JS, after the
+ * fixed-LIMIT fetch — not as a SQL distance predicate. A distance predicate
+ * on an ANN ORDER BY ... LIMIT query is unbounded: when a seed's
+ * neighborhood cannot satisfy it, the index scan never reaches its LIMIT and
+ * falls back to walking the whole vector index (measured: 60s+ per such
+ * seed versus 0.6s unfiltered). Filtering the fetched top-K afterwards is
+ * result-identical, and the scan always terminates at LIMIT rows.
+ *
+ * Returns an empty map when embeddings are unconfigured. Missing source
+ * embeddings are absent from the map, and chunk-level failures degrade to
+ * empty neighborhoods rather than failing the whole build.
  */
 export async function fetchEmbeddingNeighborhoods(
   seeds: FeedSeed[],
@@ -777,18 +783,22 @@ export async function fetchEmbeddingNeighborhoods(
       postIds: seeds.map((seed) => seed.postId),
       config: embeddingConfig,
       limit: config.neighborsPerSeed,
-      minScore: rawMinScoreFor(config.minEmbeddingScore, baseline),
+      // No minScore: see the doc comment — the floor is applied below.
     });
-    if (baseline <= 0) return bySeed;
 
+    // Calibrate then floor. At baseline 0 the rescale is the identity
+    // (clamped), so the floor applies to the raw cosine — the legacy
+    // semantics of the old SQL prefilter, now race- and scan-safe.
     const calibrated = new Map<number, EmbeddedRelatedPost[]>();
     for (const [seedId, neighbors] of bySeed) {
       calibrated.set(
         seedId,
-        neighbors.map((neighbor) => ({
-          ...neighbor,
-          score: calibrateEmbeddingScore(neighbor.score, baseline),
-        }))
+        neighbors
+          .map((neighbor) => ({
+            ...neighbor,
+            score: calibrateEmbeddingScore(neighbor.score, baseline),
+          }))
+          .filter((neighbor) => neighbor.score >= config.minEmbeddingScore)
       );
     }
     return calibrated;
