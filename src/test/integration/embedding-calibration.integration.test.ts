@@ -70,11 +70,14 @@ describe("embedding calibration (integration)", () => {
     expect(row).toBeNull();
   });
 
-  it("estimates a clamped high-percentile baseline and caches it in Settings", async () => {
+  it("uses a partial-sample estimate transiently without persisting it", async () => {
     // 12 mutually orthogonal vectors (162 random-like pairs at sim 0) plus 8
     // identical vectors (28 pairs at sim 1): 28/190 ≈ 15% of pairwise sims are
     // 1, so the p90 lands at 1 and MUST be clamped to the 0.95 ceiling —
     // exercising estimation, percentile, and conditioning guard in one shape.
+    // 20 embeddings is above MIN_CALIBRATION_SAMPLE but below the full
+    // 48-sample size, so the estimate is used for the build but MUST NOT be
+    // cached (a store-still-filling artifact would otherwise stick forever).
     for (let i = 0; i < 12; i++) {
       await insertEmbedding(basisVector(i));
     }
@@ -87,21 +90,32 @@ describe("embedding calibration (integration)", () => {
     expect(estimate!.sampleSize).toBe(20);
     expect(estimate!.baseline).toBe(0.95);
 
-    const baseline = await getEmbeddingBaseline(config);
-    expect(baseline).toBe(0.95);
-
-    // Cached: wiping the embeddings must not change the answer.
-    await getTestPrisma().postEmbedding.deleteMany();
     expect(await getEmbeddingBaseline(config)).toBe(0.95);
+
+    // NOT cached: no Settings row, and wiping the embeddings degrades to 0
+    // instead of serving a stale partial-sample baseline.
+    const row = await getTestPrisma().settings.findUnique({
+      where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+    });
+    expect(row).toBeNull();
+    await getTestPrisma().postEmbedding.deleteMany();
+    expect(await getEmbeddingBaseline(config)).toBe(0);
   });
 
-  it("invalidates the cached baseline when the embedding config changes", async () => {
+  it("persists a full-sample baseline and invalidates it on config change", async () => {
+    // 48 embeddings = the full calibration sample: 36 identical (630 pairs at
+    // sim 1) + 12 orthogonal (498 pairs at sim 0) → p90 = 1, clamped to 0.95.
     for (let i = 0; i < 12; i++) {
       await insertEmbedding(basisVector(i));
     }
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 36; i++) {
       await insertEmbedding(basisVector(100));
     }
+
+    expect(await getEmbeddingBaseline(config)).toBe(0.95);
+
+    // Cached: wiping the embeddings must not change the answer.
+    await getTestPrisma().postEmbedding.deleteMany();
     expect(await getEmbeddingBaseline(config)).toBe(0.95);
 
     // A different model has no embeddings stored: the stale cache must not be

@@ -33,9 +33,11 @@ import { aiLog } from "@/lib/logger";
 const CALIBRATION_SAMPLE_SIZE = 48;
 
 /**
- * Minimum sampled embeddings for a trustworthy estimate. Below this the
- * baseline is 0 (identity rescale) and nothing is persisted, so calibration
- * kicks in automatically once the store grows.
+ * Minimum sampled embeddings for a usable estimate. Below this the baseline
+ * is 0 (identity rescale). Between this and {@link CALIBRATION_SAMPLE_SIZE}
+ * the estimate is used for the current build but NOT persisted — it is
+ * re-estimated per build until the store can supply the full sample, so a
+ * small-sample artifact can never stick in the cache.
  */
 const MIN_CALIBRATION_SAMPLE = 16;
 
@@ -100,7 +102,11 @@ function isCalibrationForConfig(
     cal.baseline >= 0 &&
     cal.baseline <= MAX_BASELINE &&
     typeof cal.sampleSize === "number" &&
-    cal.sampleSize >= MIN_CALIBRATION_SAMPLE &&
+    // Only FULL-sample calibrations are cache-valid: a partial estimate taken
+    // while the store was still filling must not stick forever (it is used
+    // transiently and re-estimated each build until the store reaches
+    // CALIBRATION_SAMPLE_SIZE).
+    cal.sampleSize >= CALIBRATION_SAMPLE_SIZE &&
     cal.baseUrl === config.baseUrl &&
     cal.model === config.model &&
     cal.dimensions === config.dimensions &&
@@ -193,18 +199,23 @@ export async function getEmbeddingBaseline(config: EmbeddingConfig): Promise<num
       dimensions: config.dimensions,
       imageMaxResolution: config.imageMaxResolution,
     };
-    // Best-effort persist: a failed Settings write must not discard a good
-    // estimate — the next build simply re-estimates (deterministic sample,
-    // same result).
-    try {
-      await updateSettings({
-        [SETTINGS_KEYS.EMBEDDING_CALIBRATION]: JSON.stringify(calibration),
-      });
-    } catch (error) {
-      aiLog.error(
-        { error: error instanceof Error ? error.message : String(error) },
-        "Failed to persist embedding calibration; continuing with estimate"
-      );
+    // Persist ONLY full-sample calibrations. A partial estimate (store still
+    // filling: 16..47 embeddings) is used for THIS build but re-estimated on
+    // the next one, so the cached value can never be a permanently skewed
+    // small-sample artifact. Best-effort: a failed Settings write must not
+    // discard a good estimate — the next build simply re-estimates
+    // (deterministic sample, same result).
+    if (estimate.sampleSize >= CALIBRATION_SAMPLE_SIZE) {
+      try {
+        await updateSettings({
+          [SETTINGS_KEYS.EMBEDDING_CALIBRATION]: JSON.stringify(calibration),
+        });
+      } catch (error) {
+        aiLog.error(
+          { error: error instanceof Error ? error.message : String(error) },
+          "Failed to persist embedding calibration; continuing with estimate"
+        );
+      }
     }
     aiLog.info(
       { baseline: calibration.baseline, sampleSize: calibration.sampleSize, model: config.model },

@@ -960,10 +960,15 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   const embeddingConfig = await resolveEmbeddingConfig();
   // Model-specific random-pair baseline for score calibration; 0 (identity)
-  // when unconfigured, the store is too small, or estimation fails.
-  const embeddingBaseline = embeddingConfig
-    ? await getEmbeddingBaseline(embeddingConfig)
-    : 0;
+  // when unconfigured, the store is too small, or estimation fails. Chained
+  // (not awaited) into the embedding branch so the baseline read/estimation
+  // overlaps the independent group-sibling and tag-IDF queries below.
+  const embeddingBySeedPromise = (embeddingConfig
+    ? getEmbeddingBaseline(embeddingConfig)
+    : Promise.resolve(0)
+  ).then((baseline) =>
+    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config, baseline)
+  );
 
   // Group-sibling exclusion anchors on EVERY favorite, not just this build's
   // sampled seeds: a page of a set the user already favorited must never be
@@ -991,7 +996,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         return new Map();
       }
     ),
-    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config, embeddingBaseline),
+    embeddingBySeedPromise,
   ]);
 
   const contributions = [
