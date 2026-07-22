@@ -46,6 +46,16 @@ RUN rm -f package.json bun.lock && \
     rm -rf ~/.bun/install/cache && \
     mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
 
+# sharp's prebuilt binding (@img/sharp-linuxmusl-x64) is traced into the
+# standalone output, but the libvips runtime it dlopen()s
+# (@img/sharp-libvips-linuxmusl-x64, providing libvips-cpp.so) is a native
+# linker dependency invisible to Next's JS file tracing — without it sharp
+# fails at runtime with ERR_DLOPEN_FAILED. Copy the whole @img scope from the
+# deps install (bun only installs the platform-matching variants) so the
+# binding's $ORIGIN-relative rpath resolves. Placed AFTER the bun add above
+# so no later install step can prune or reshuffle it.
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/@img ./node_modules/@img
+
 USER nextjs
 
 EXPOSE 3000
