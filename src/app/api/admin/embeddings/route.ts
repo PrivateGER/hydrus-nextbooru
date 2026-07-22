@@ -113,7 +113,22 @@ export async function POST(request: NextRequest) {
         },
         // A batch — even one that failed partway — commits new embeddings that
         // feed the "For You" k-NN, so drop the cached feed regardless of outcome.
-        onSettled: () => invalidateFeedCache(),
+        // The calibration baseline drops too: its 48-row sample may have been
+        // drawn mid-backfill from an early, unrepresentative slice of the
+        // store, and new rows can displace the deterministic md5-ordered
+        // sample. Re-estimating once per settled batch is cheap (~2s worst
+        // case) and keeps the persisted baseline representative of the full
+        // store. Fire-and-forget: onSettled is sync, and a failed delete only
+        // means the next clearCurrent/config change still invalidates.
+        onSettled: () => {
+          invalidateFeedCache();
+          Promise.resolve(invalidateEmbeddingCalibration()).catch((error) => {
+            aiLog.error(
+              { error: error instanceof Error ? error.message : String(error) },
+              "Failed to invalidate embedding calibration after batch"
+            );
+          });
+        },
       }
     );
 

@@ -133,6 +133,9 @@ describe("admin embeddings route", () => {
     expect(data.batchStatus).toBe("completed");
     expect(data.lastBatchResult).toEqual({ processed: 5, succeeded: 5, failed: 0 });
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // Settlement must also drop the persisted calibration baseline: its
+    // sample may predate rows this batch added.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
   });
 
   it("POST reports a failed batch and still invalidates the feed cache", async () => {
@@ -146,6 +149,8 @@ describe("admin embeddings route", () => {
     expect(data.batchStatus).toBe("failed");
     expect(data.batchError).toBe("provider down");
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    // Even a failed batch commits partial rows before dying — re-sample.
+    expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
   });
 
   it.each([
