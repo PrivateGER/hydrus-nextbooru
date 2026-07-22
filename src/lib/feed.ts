@@ -700,6 +700,33 @@ export function dedupeRankedByGroup(
   return result;
 }
 
+/**
+ * Collapse perceptual near-duplicates in a ranked feed.
+ *
+ * Hydrus imports can hold the same image/clip re-encoded under a different
+ * file hash — and a different group — so group dedupe cannot collapse them,
+ * yet they render as identical thumbnails (observed in prod: two re-encodes
+ * of one clip served adjacently at the same score). The key is blurhash plus
+ * pixel dimensions: identical blurhash at identical dimensions means visually
+ * near-identical previews (dimensions guard against the rare blurhash
+ * collision on flat/low-detail images), and the highest-ranked one represents
+ * them all. Posts without a blurhash are always kept. Input order is
+ * preserved.
+ */
+export function dedupeRankedByBlurhash(posts: FeedPost[]): FeedPost[] {
+  const seenKeys = new Set<string>();
+  const result: FeedPost[] = [];
+  for (const post of posts) {
+    if (post.blurhash) {
+      const key = `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    result.push(post);
+  }
+  return result;
+}
+
 // ============================================
 // Feed build
 // ============================================
@@ -902,13 +929,23 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   const embeddingConfig = await resolveEmbeddingConfig();
 
+  // Group-sibling exclusion anchors on EVERY favorite, not just this build's
+  // sampled seeds: a page of a set the user already favorited must never be
+  // re-served, even when that favorite lost the seed lottery this build
+  // (observed in prod: 13 of the top-100 feed items were siblings of
+  // unsampled favorites). Seeds stay in the anchor set so view/dismissal
+  // seeds keep their existing sibling exclusion.
+  const exclusionAnchorIds = [
+    ...new Set([...allSeedIds, ...favorites.map((fav) => fav.postId)]),
+  ];
+
   // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
   // neighborhoods are fetched in bounded chunks so the ANN work can use several
   // backends without one round trip per seed.
-  const [seedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
+  const [excludedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
     prisma.postGroup.findMany({
       where: {
-        group: { posts: { some: { postId: { in: allSeedIds } } } },
+        group: { posts: { some: { postId: { in: exclusionAnchorIds } } } },
       },
       select: { postId: true },
     }),
@@ -929,7 +966,7 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
   const excluded = new Set<number>([
     ...favorites.map((fav) => fav.postId),
     ...dismissedIds.map((d) => d.postId),
-    ...seedGroupSiblings.map((g) => g.postId),
+    ...excludedGroupSiblings.map((g) => g.postId),
   ]);
 
   // Exact embedding availability for the merge's per-pair achievable-weight
@@ -1012,9 +1049,12 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
 
   // Collapse multi-post sets (a candidate whose group sibling is also a
   // candidate) to one representative each, so a large set near the user's
-  // taste cannot flood the feed. Slice only after collapse so group siblings
-  // cannot leave fillable holes.
-  return dedupeRankedByGroup(penalized, groupIdsByPostId).slice(0, config.maxFeedSize);
+  // taste cannot flood the feed, then collapse cross-group perceptual
+  // near-duplicates by blurhash. Slice only after both collapses so dropped
+  // entries cannot leave fillable holes.
+  return dedupeRankedByBlurhash(
+    dedupeRankedByGroup(penalized, groupIdsByPostId)
+  ).slice(0, config.maxFeedSize);
 }
 
 /**

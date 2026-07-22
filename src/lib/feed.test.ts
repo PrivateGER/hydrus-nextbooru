@@ -8,6 +8,7 @@ import {
   mulberry32,
   mergeSeedCandidates,
   dedupeRankedByGroup,
+  dedupeRankedByBlurhash,
   collapseSignalsByGroup,
   applyViewedPenalty,
   applyFreshnessBoost,
@@ -557,6 +558,51 @@ describe("dedupeRankedByGroup", () => {
     // 2 is ungrouped, 3's group 30 is fresh → all three survive.
     const result = dedupeRankedByGroup(posts, groups);
     expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("dedupeRankedByBlurhash", () => {
+  const post = (
+    id: number,
+    blurhash: string | null,
+    width: number | null = 1920,
+    height: number | null = 1080
+  ): FeedPost => ({
+    id,
+    hash: id.toString(16).padStart(64, "0"),
+    width,
+    height,
+    blurhash,
+    mimeType: "image/png",
+    score: 1 / id,
+  });
+
+  it("keeps only the highest-ranked of visually identical posts", () => {
+    // Mirrors the prod case: two re-encodes of one clip, same blurhash and
+    // dimensions, different file hashes, adjacent in the ranking.
+    const posts = [post(1, "AAAA"), post(2, "AAAA"), post(3, "BBBB")];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 3]);
+  });
+
+  it("does not collapse same-blurhash posts with different dimensions", () => {
+    // Flat/low-detail images can collide on blurhash alone; differing pixel
+    // dimensions mean they are not the same picture.
+    const posts = [post(1, "AAAA", 1920, 1080), post(2, "AAAA", 512, 512)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 2]);
+  });
+
+  it("never collapses posts without a blurhash", () => {
+    const posts = [post(1, null), post(2, null), post(3, null)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 2, 3]);
+  });
+
+  it("treats missing dimensions as their own key, not a wildcard", () => {
+    const posts = [post(1, "AAAA", null, null), post(2, "AAAA", null, null), post(3, "AAAA", 100, 100)];
+    const result = dedupeRankedByBlurhash(posts);
+    expect(result.map((p) => p.id)).toEqual([1, 3]);
   });
 });
 
