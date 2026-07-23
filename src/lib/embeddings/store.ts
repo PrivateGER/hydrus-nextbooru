@@ -77,7 +77,16 @@ const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
 // bound, while per-seed fan-out burns round trips and pool slots. Sixteen seeds
 // per LATERAL query keeps multi-core parallelism with about seven round trips.
 const RELATED_EMBEDDING_SEED_CHUNK_SIZE = 16;
-
+/**
+ * Clamp an optional similarity floor to [-1, 1]; null disables it.
+ *
+ * The floor is ALWAYS applied in JS to rows already fetched by a fixed-LIMIT
+ * ANN scan — never as a SQL distance predicate. The predicate and the scan's
+ * ORDER BY are the same expression, so floor-passing rows form a contiguous
+ * prefix of the scan order: filtering afterwards is result-identical, while
+ * a predicate the neighborhood cannot satisfy keeps the index scan from ever
+ * reaching its LIMIT and degrades it into a full walk of the vector index.
+ */
 function normalizeEmbeddingMinScore(minScore: number | undefined): number | null {
   if (minScore === undefined || !Number.isFinite(minScore)) {
     return null;
@@ -297,11 +306,13 @@ export async function searchPostsByEmbedding(options: {
   const vectorTypeSql = vectorType(config.dimensions);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
+  // Semantic search is top-N by design: one bounded ANN scan, then
+  // pagination, floor, and count over that window in JS. There is no exact
+  // uncapped count — with a user-controlled minScore it would require
+  // computing the distance of every stored embedding per request.
   const resultCap = options.resultCap === undefined || !Number.isFinite(options.resultCap)
-    ? null
+    ? 1000
     : Math.min(Math.max(1, Math.floor(options.resultCap)), 1000);
-  // Mirror the nullable-parameter pattern used for maxDistance below rather than
-  // splicing a Prisma.sql fragment into $queryRaw: a NULL id disables the filter.
   const excludePostId =
     options.excludePostId !== undefined && Number.isInteger(options.excludePostId)
       ? options.excludePostId
@@ -317,85 +328,43 @@ export async function searchPostsByEmbedding(options: {
     distance: number;
   };
 
-  if (resultCap !== null) {
-    const rows = await prisma.$queryRaw<ResultRow[]>`
-      SELECT
-        p.id,
-        p.hash,
-        p.width,
-        p.height,
-        p.blurhash,
-        p."mimeType",
-        (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 AS distance
-      FROM "PostEmbedding" pe
-      JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe."baseUrl" = ${config.baseUrl}
-        AND pe.model = ${config.model}
-        AND pe.dimensions = ${config.dimensions}
-        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
-        AND pe.embedding IS NOT NULL
-        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
-      ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
-      LIMIT ${resultCap}
-    `;
+  const rows = await prisma.$queryRaw<ResultRow[]>`
+    SELECT
+      p.id,
+      p.hash,
+      p.width,
+      p.height,
+      p.blurhash,
+      p."mimeType",
+      (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 AS distance
+    FROM "PostEmbedding" pe
+    JOIN "Post" p ON p.id = pe."postId"
+    WHERE pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+      AND pe.embedding IS NOT NULL
+      AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
+    ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
+    LIMIT ${resultCap}
+  `;
 
-    return {
-      posts: rows.slice(skip, skip + limit).map((row) => ({
-        ...row,
-        distance: Number(row.distance),
-        score: 1 - Number(row.distance),
-      })),
-      totalCount: rows.length,
-    };
-  }
-
-  const [rows, counts] = await Promise.all([
-    prisma.$queryRaw<ResultRow[]>`
-      SELECT
-        p.id,
-        p.hash,
-        p.width,
-        p.height,
-        p.blurhash,
-        p."mimeType",
-        (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 AS distance
-      FROM "PostEmbedding" pe
-      JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe."baseUrl" = ${config.baseUrl}
-        AND pe.model = ${config.model}
-        AND pe.dimensions = ${config.dimensions}
-        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
-        AND pe.embedding IS NOT NULL
-        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
-      ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
-      LIMIT ${limit} OFFSET ${skip}
-    `,
-    prisma.$queryRaw<{ count: bigint }[]>`
-      SELECT COUNT(*) AS count
-      FROM "PostEmbedding" pe
-      JOIN "Post" p ON p.id = pe."postId"
-      WHERE pe."baseUrl" = ${config.baseUrl}
-        AND pe.model = ${config.model}
-        AND pe.dimensions = ${config.dimensions}
-        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-        AND pe.status = 'COMPLETE'::"EmbeddingStatus"
-        AND pe.embedding IS NOT NULL
-        AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
-        AND (${maxDistance}::float8 IS NULL OR (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql})::float8 <= ${maxDistance})
-    `,
-  ]);
+  // Floor in JS (see normalizeEmbeddingMinScore): passing rows are a prefix
+  // of the distance order, so filtering the fetched window is identical to
+  // the old SQL prefilter for every page.
+  const passing =
+    maxDistance === null
+      ? rows
+      : rows.filter((row) => Number(row.distance) <= maxDistance);
 
   return {
-    posts: rows.map((row) => ({
+    posts: passing.slice(skip, skip + limit).map((row) => ({
       ...row,
       distance: Number(row.distance),
       score: 1 - Number(row.distance),
     })),
-    totalCount: Number(counts[0]?.count ?? 0n),
+    totalCount: passing.length,
   };
 }
 
@@ -464,9 +433,6 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
   const vectorTypeSql = vectorType(config.dimensions);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
-  const maxDistanceFilter = maxDistance === null
-    ? Prisma.empty
-    : Prisma.sql`AND (pe.embedding::${vectorTypeSql} <=> seed.embedding)::float8 <= ${maxDistance}`;
 
   type ResultRow = {
     sourceId: number;
@@ -521,7 +487,6 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
               AND pe.status = 'COMPLETE'::"EmbeddingStatus"
               AND pe.embedding IS NOT NULL
               AND pe."postId" <> seed.source_id
-              ${maxDistanceFilter}
               AND NOT EXISTS (
                 SELECT 1
                 FROM "PostGroup" source_group
@@ -545,6 +510,13 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
   for (const rows of chunkRows) {
     for (const row of rows) {
       if (row.id === null || row.hash === null || row.mimeType === null || row.distance === null) {
+        if (!bySeed.has(row.sourceId)) bySeed.set(row.sourceId, []);
+        continue;
+      }
+      // Floor in JS (see normalizeEmbeddingMinScore) — never a SQL distance
+      // predicate on the ANN scan. Keep the seed's (possibly empty) entry so
+      // callers still see it as embedded.
+      if (maxDistance !== null && Number(row.distance) > maxDistance) {
         if (!bySeed.has(row.sourceId)) bySeed.set(row.sourceId, []);
         continue;
       }
@@ -588,9 +560,6 @@ export async function findRelatedPostsByEmbedding(options: {
   const vectorTypeSql = vectorType(config.dimensions);
   const minScore = normalizeEmbeddingMinScore(options.minScore);
   const maxDistance = minScore === null ? null : 1 - minScore;
-  const maxDistanceFilter = maxDistance === null
-    ? Prisma.empty
-    : Prisma.sql`AND (pe.embedding::${vectorTypeSql} <=> source.embedding)::float8 <= ${maxDistance}`;
 
   type ResultRow = {
     id: number;
@@ -637,7 +606,6 @@ export async function findRelatedPostsByEmbedding(options: {
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
         AND pe."postId" <> source.post_id
-        ${maxDistanceFilter}
         AND NOT EXISTS (
           SELECT 1
           FROM "PostGroup" source_group
@@ -653,11 +621,15 @@ export async function findRelatedPostsByEmbedding(options: {
     LIMIT ${limit}
   `;
 
-  return rows.map((row) => ({
-    ...row,
-    distance: Number(row.distance),
-    score: 1 - Number(row.distance),
-  }));
+  // Floor in JS (see normalizeEmbeddingMinScore) — never a SQL distance
+  // predicate on the ANN scan.
+  return rows
+    .filter((row) => maxDistance === null || Number(row.distance) <= maxDistance)
+    .map((row) => ({
+      ...row,
+      distance: Number(row.distance),
+      score: 1 - Number(row.distance),
+    }));
 }
 
 async function countEmbeddingsByStatus(

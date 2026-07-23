@@ -88,17 +88,18 @@ const QUERY_BUDGETS = {
   // `postId IN (...)` lookups (postGroup for per-group feed dedup + postView
   // for the already-seen penalty + post importedAt for the freshness boost,
   // which is on by default — single indexed batches, not N+1s). Embedding
-  // calibration adds a constant TWO statements on this cold path: the
-  // Settings read for the cached baseline plus the (empty-store) estimation
-  // sample query — nothing is persisted because the sample is empty. The
-  // budget keeps headroom above the observed count.
-  feed: 25,
+  // calibration adds a constant THREE statements on this cold path: the
+  // invalidation-generation Settings read, the cached-baseline Settings
+  // read, and the (empty-store) estimation sample query — nothing is
+  // persisted because the sample is empty. Observed 24; the budget keeps
+  // headroom for one extra constant statement.
+  feed: 26,
   // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
   // embedding neighborhood phase should add a small constant number of
-  // statements (two k-NN chunks + one availability read + the calibration
-  // Settings read and estimation sample; a store with a full 48-embedding
-  // sample would also persist the baseline once — headroom covers it), not
-  // one query per seed.
+  // statements (two k-NN chunks + one availability read + the three
+  // calibration reads above; a store with a full 48-embedding sample would
+  // also persist the baseline once — headroom covers it), not one query per
+  // seed. Observed 26.
   feedWithEmbeddings: 28,
   // PUT = getPostIdByHash + the setFavorite/setDismissal transaction:
   // advisory-lock SELECT, delete-opposite, upsert-self. Prisma 7.8 plants

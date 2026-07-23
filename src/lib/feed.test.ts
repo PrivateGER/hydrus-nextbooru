@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock ONLY the ANN store call so fetchEmbeddingNeighborhoods' calibration
-// wiring (floor conversion + score rescale) is testable without a database.
+// wiring (score rescale + calibrated floor) is testable without a database.
 const { mockFindRelated } = vi.hoisted(() => ({ mockFindRelated: vi.fn() }));
 vi.mock("@/lib/embeddings/store", () => ({
   findRelatedPostsByEmbeddingForPosts: mockFindRelated,
