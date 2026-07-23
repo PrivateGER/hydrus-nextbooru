@@ -66,7 +66,7 @@ export async function PUT(request: NextRequest) {
       imageMaxResolution: typeof body.imageMaxResolution === "number" ? body.imageMaxResolution : undefined,
     });
     // Switching the active embedding config changes which PostEmbedding rows the
-    // feed's k-NN reads, reshaping neighborhoods — drop the cached feed.
+    // feed's k-NN reads, reshaping neighborhoods — invalidate the cached feed.
     invalidateFeedCache();
 
     return NextResponse.json({ message: "Embedding settings saved" });
