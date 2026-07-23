@@ -9,7 +9,7 @@ import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
 import * as viewRoute from '@/app/api/posts/[hash]/view/route';
-import { buildFeed, FEED_CONFIG, invalidateFeedCache } from '@/lib/feed';
+import { buildFeed, FEED_CONFIG, invalidateFeedCache, clearFeedCache, settleFeedRebuild, feedRebuildInFlight } from '@/lib/feed';
 import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
 
 const TASTE_TAGS = ['1girl', 'blue hair', 'school uniform'];
@@ -130,7 +130,7 @@ describe('GET /api/feed (Integration)', () => {
     expect(data.posts[0].score).toBeGreaterThan(0);
   });
 
-  it('feed reflects new favorites immediately', async () => {
+  it('reflects a new favorite after revalidation, serving the stale feed meanwhile', async () => {
     const prisma = getTestPrisma();
     const seed = await createPostWithTags(prisma, TASTE_TAGS);
     const similar = await createPostWithTags(prisma, TASTE_TAGS);
@@ -142,6 +142,13 @@ describe('GET /api/feed (Integration)', () => {
     expect(before.posts).toEqual([]);
 
     await favorite(seed.hash);
+
+    // Stale-while-revalidate: the first read after the mutation returns the
+    // previous (empty) ranking instantly and starts the rebuild.
+    const stale = await fetchFeed();
+    expect(stale.posts).toEqual([]);
+
+    await settleFeedRebuild();
     const after = await fetchFeed();
     expect(after.posts.map((p: { hash: string }) => p.hash)).toContain(similar.hash);
   });
@@ -303,7 +310,7 @@ describe('GET /api/feed (Integration)', () => {
       expect(third.result).toEqual(first.result);
     });
 
-    it('rebuilds the cached feed after a favorite mutation route', async () => {
+    it('serves the stale feed after a favorite and swaps in the rebuild', async () => {
       const prisma = getTestPrisma();
       const firstCluster = await createTasteCluster(['favorite cache taste a', 'favorite cache style a']);
       const secondCluster = await createTasteCluster(['favorite cache taste b', 'favorite cache style b']);
@@ -316,22 +323,43 @@ describe('GET /api/feed (Integration)', () => {
       expect(feedHashes(warm)).not.toContain(secondCluster.similar[0].hash);
 
       await favorite(secondCluster.seed.hash);
+
+      // Stale-while-revalidate: the read right after the mutation returns the
+      // previous ranking and starts exactly one background rebuild.
+      const { result: stale, count } = await captureCountedStatements(async () => {
+        const response = await fetchFeed('http://localhost/api/feed?limit=10');
+        // The non-blocking contract itself: the stale response resolved while
+        // the rebuild it triggered was still live. A regression to blocking
+        // reads would settle the build before the response resolves.
+        expect(feedRebuildInFlight()).toBe(true);
+        await settleFeedRebuild();
+        return response;
+      });
+      expect(feedHashes(stale)).toEqual(feedHashes(warm));
+      expect(count).toBeGreaterThan(0); // the rebuild ran within the capture
+
       const rebuilt = await captureFeedFetch('http://localhost/api/feed?limit=10');
-      expect(rebuilt.count).toBeGreaterThan(0);
+      expect(rebuilt.count).toBe(0); // swapped-in entry serves without queries
       expect(feedHashes(rebuilt.result)).toContain(secondCluster.similar[0].hash);
       expect(feedHashes(rebuilt.result)).not.toContain(secondCluster.seed.hash);
     });
 
-    it('rebuilds the cached feed after a dismissal mutation route', async () => {
+    it('drops a dismissed post once revalidation lands', async () => {
       const { similar } = await seedCacheableFeed(['dismissal cache taste', 'dismissal cache style'], 1);
 
       const warm = await fetchFeed('http://localhost/api/feed?limit=10');
       expect(feedHashes(warm)).toContain(similar[0].hash);
 
       await dismiss(similar[0].hash);
-      const rebuilt = await captureFeedFetch('http://localhost/api/feed?limit=10');
-      expect(rebuilt.count).toBeGreaterThan(0);
-      expect(feedHashes(rebuilt.result)).not.toContain(similar[0].hash);
+
+      // The accepted stale-while-revalidate trade-off: the dismissed post can
+      // appear once more while the rebuild runs.
+      const stale = await fetchFeed('http://localhost/api/feed?limit=10');
+      expect(feedHashes(stale)).toContain(similar[0].hash);
+
+      await settleFeedRebuild();
+      const rebuilt = await fetchFeed('http://localhost/api/feed?limit=10');
+      expect(feedHashes(rebuilt)).not.toContain(similar[0].hash);
     });
 
     it('keeps the cached feed warm after recording a view route', async () => {
@@ -344,28 +372,41 @@ describe('GET /api/feed (Integration)', () => {
       expect(afterView.result).toEqual(warm);
     });
 
-    it('coalesces concurrent feed requests in the same seed bucket onto one build', async () => {
+    it('coalesces concurrent revalidations in the same seed bucket onto one build', async () => {
       await seedCacheableFeed(['concurrent cache taste', 'concurrent cache style'], 2);
       const url = 'http://localhost/api/feed?limit=10';
 
       const firstColdBuild = await captureFeedFetch(url);
       expect(firstColdBuild.count).toBeGreaterThan(0);
 
+      // One read after invalidation triggers exactly one background rebuild.
       invalidateFeedCache();
-      const singleBuild = await captureFeedFetch(url);
+      const singleBuild = await captureCountedStatements(async () => {
+        await fetchFeed(url);
+        await settleFeedRebuild();
+      });
       expect(singleBuild.count).toBeGreaterThan(0);
 
+      // Five concurrent reads after invalidation still trigger exactly one
+      // rebuild (same statement count), all serving the identical stale feed.
       invalidateFeedCache();
-      const concurrent = await captureCountedStatements(() =>
-        Promise.all(Array.from({ length: 5 }, () => fetchFeed(url)))
-      );
+      const concurrent = await captureCountedStatements(async () => {
+        const responses = await Promise.all(
+          Array.from({ length: 5 }, () => fetchFeed(url))
+        );
+        await settleFeedRebuild();
+        return responses;
+      });
 
       expect(concurrent.count).toBe(singleBuild.count);
       const firstConcurrentResponse = concurrent.result[0];
-      expect(feedHashes(firstConcurrentResponse)).toEqual(feedHashes(singleBuild.result));
       for (const response of concurrent.result) {
         expect(response).toEqual(firstConcurrentResponse);
       }
+
+      // After the coalesced rebuild settles, the entry serves query-free.
+      const settled = await captureFeedFetch(url);
+      expect(settled.count).toBe(0);
     });
   });
 });
