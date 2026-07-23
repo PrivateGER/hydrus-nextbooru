@@ -1134,31 +1134,46 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
  * the /api/feed route are separate module instances), which is why an earlier
  * cache was abandoned. Stashing it on globalThis gives one instance per
  * process, shared across bundles — the same pattern @/lib/db uses for the
- * Prisma client. Favorite/dismissal writes call {@link invalidateFeedCache} to
- * drop it immediately (explicit taste the user expects reflected at once);
- * views deliberately do not (a weak signal that can wait for the bucket to
- * roll). That means the already-seen penalty ({@link applyViewedPenalty})
- * also lags a fresh view by up to one bucket: a post opened from the feed
- * keeps its pre-view rank until the bucket rolls. Accepted deliberately —
- * invalidating (or re-penalizing at read time) on every view would reshuffle
- * the ranking mid-scroll, breaking the stable pagination this cache exists to
- * provide, and would rebuild the feed on every post open. A monotonic
- * generation counter makes an invalidation that races an in-flight build
- * discard that build's result rather than cache stale data.
+ * Prisma client.
+ *
+ * Reads are STALE-WHILE-REVALIDATE. Favorite/dismissal writes call
+ * {@link invalidateFeedCache}, which marks the cached feed stale (generation
+ * bump) but keeps it servable: reads return the previous ranking instantly
+ * and the first such read kicks off ONE background rebuild that swaps the
+ * entry in when it completes. EVERY read during the rebuild window serves
+ * the stale ranking — a just-favorited or just-dismissed post keeps
+ * appearing until the rebuild lands — and a failed rebuild extends that
+ * window until a later read's retry succeeds (failures are logged). A read
+ * only waits on a build when NO entry is retained: true cold start, or the
+ * first read after {@link clearFeedCache}'s destructive drop. Views
+ * deliberately do not invalidate (a weak signal that can wait for the bucket
+ * to roll), so the already-seen penalty ({@link applyViewedPenalty}) lags a
+ * fresh view by up to one bucket — accepted, since re-penalizing at read
+ * time would reshuffle the ranking mid-scroll and break the stable
+ * pagination this cache exists to provide. A monotonic generation counter
+ * makes an invalidation that races an in-flight build discard that build's
+ * result rather than cache pre-write data.
  *
  * Invalidation is per-process: the cache and its generation counter live on
- * this process's globalThis, so a single Node instance is load-bearing for the
- * "reflected immediately" guarantee. This app already deploys as one instance
- * (see @/lib/embeddings and sync). Under horizontal scaling, a favorite handled
- * by worker A would not bust worker B's cache — B would serve a feed up to one
- * bucket (SEED_SAMPLE_BUCKET_MS) stale — so cross-worker invalidation would then
- * need a shared signal (pub/sub or a shared store).
+ * this process's globalThis, so a single Node instance is load-bearing for
+ * revalidation kicking in on the next read. This app already deploys as one
+ * instance (see @/lib/embeddings and sync). Under horizontal scaling, a
+ * favorite handled by worker A would not bust worker B's cache — B would
+ * serve a feed up to one bucket (SEED_SAMPLE_BUCKET_MS) stale — so
+ * cross-worker invalidation would then need a shared signal (pub/sub or a
+ * shared store).
  */
 interface FeedCacheState {
   entry: { bucket: number; generation: number; feed: FeedPost[] } | null;
   inFlight: Promise<FeedPost[]> | null;
   inFlightBucket: number | null;
   generation: number;
+  /**
+   * Every build not yet settled, INCLUDING builds detached from `inFlight`
+   * by an invalidation. {@link settleFeedRebuild} awaits this whole set so
+   * no rebuild can outlive a caller that needs quiescence (test cleanup).
+   */
+  liveBuilds: Set<Promise<FeedPost[]>>;
 }
 
 const globalForFeed = globalThis as unknown as { __feedCache?: FeedCacheState };
@@ -1170,6 +1185,7 @@ function feedCache(): FeedCacheState {
       inFlight: null,
       inFlightBucket: null,
       generation: 0,
+      liveBuilds: new Set(),
     };
   }
   return globalForFeed.__feedCache;
@@ -1180,24 +1196,46 @@ function currentSeedBucket(): number {
 }
 
 /**
- * Drop the cached feed so the next {@link getFeedPage} rebuilds from fresh
- * data. Called by favorite/dismissal mutations (see @/lib/favorites) — the
- * explicit taste signals a user expects reflected immediately. Bumping the
- * generation also invalidates any build already in flight, so a rebuild that
- * started before the write cannot repopulate the cache with pre-write data.
+ * Mark the cached feed stale so the next {@link getFeedPage} revalidates.
+ * Called by favorite/dismissal mutations (see @/lib/favorites). The entry is
+ * KEPT — stale-while-revalidate serves it while the background rebuild runs.
+ * Bumping the generation both marks the entry stale and makes any build
+ * already in flight discard its result instead of caching pre-write data;
+ * detaching that in-flight build lets the next read start a fresh one.
  */
 export function invalidateFeedCache(): void {
   const cache = feedCache();
   cache.generation++;
-  cache.entry = null;
   cache.inFlight = null;
   cache.inFlightBucket = null;
 }
 
 /**
- * The full ranked feed, cached per seed-sample bucket. Concurrent callers in
- * the same bucket share one in-flight build; on completion the result is cached
- * only if no invalidation raced it (generation unchanged).
+ * Hard-drop the cached feed, INCLUDING the stale entry that
+ * {@link invalidateFeedCache} would keep serving.
+ *
+ * For destructive resets only — a sync that deletes/reshapes posts makes the
+ * cached ranking reference rows that no longer exist, so serving it stale is
+ * wrong, not merely outdated. Taste mutations (favorites/dismissals) use
+ * {@link invalidateFeedCache} instead so reads stay non-blocking.
+ */
+export function clearFeedCache(): void {
+  invalidateFeedCache();
+  feedCache().entry = null;
+}
+
+/**
+ * The full ranked feed, stale-while-revalidate per seed-sample bucket.
+ *
+ * Fresh entry (same bucket, same generation): served directly. Otherwise a
+ * rebuild is started — or joined, so concurrent callers in the same bucket
+ * share one build — and any previous entry (stale generation OR rolled
+ * bucket) is returned immediately while the rebuild completes in the
+ * background. A read awaits the build only when no entry is retained (cold
+ * start, or first read after {@link clearFeedCache}).
+ * On completion the result is cached only if no invalidation or bucket roll
+ * raced it; a failed background rebuild is logged and retried by the next
+ * read (the stale entry keeps serving meanwhile).
  */
 async function getCachedFeed(): Promise<FeedPost[]> {
   const cache = feedCache();
@@ -1208,32 +1246,77 @@ async function getCachedFeed(): Promise<FeedPost[]> {
     return entry.feed;
   }
 
-  if (cache.inFlight && cache.inFlightBucket === bucket) {
-    return cache.inFlight;
+  let build = cache.inFlight && cache.inFlightBucket === bucket ? cache.inFlight : null;
+  if (!build) {
+    const generation = cache.generation;
+    const started = buildFeed()
+      .then((feed) => {
+        // Cache only if nothing invalidated or superseded this build
+        // (generation unchanged) AND the bucket has not rolled mid-build —
+        // otherwise a build that straddled a bucket boundary could clobber
+        // the newer bucket's entry with a stale-labeled one.
+        if (cache.generation === generation && currentSeedBucket() === bucket) {
+          cache.entry = { bucket, generation, feed };
+        }
+        return feed;
+      })
+      .finally(() => {
+        cache.liveBuilds.delete(started);
+        if (cache.inFlight === started) {
+          cache.inFlight = null;
+          cache.inFlightBucket = null;
+        }
+      });
+    cache.liveBuilds.add(started);
+    cache.inFlight = started;
+    cache.inFlightBucket = bucket;
+    build = started;
   }
 
-  const generation = cache.generation;
-  const build = buildFeed()
-    .then((feed) => {
-      // Cache only if nothing invalidated or superseded this build (generation
-      // unchanged) AND the bucket has not rolled mid-build — otherwise a build
-      // that straddled a bucket boundary could clobber the newer bucket's entry
-      // with a stale-labeled one (harmless to reads, but wastes a rebuild).
-      if (cache.generation === generation && currentSeedBucket() === bucket) {
-        cache.entry = { bucket, generation, feed };
-      }
-      return feed;
-    })
-    .finally(() => {
-      if (cache.inFlight === build) {
-        cache.inFlight = null;
-        cache.inFlightBucket = null;
-      }
+  // Stale-while-revalidate: any previous ranking serves instantly while the
+  // rebuild runs. The rebuild's rejection is consumed here — the stale entry
+  // keeps serving and the next read retries.
+  if (entry) {
+    build.catch((error: unknown) => {
+      feedLog.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Feed: background revalidation failed; continuing to serve stale feed"
+      );
     });
+    return entry.feed;
+  }
 
-  cache.inFlight = build;
-  cache.inFlightBucket = bucket;
   return build;
+}
+
+/**
+ * Wait until every feed rebuild — in-flight or detached by an invalidation —
+ * has settled (resolved or rejected).
+ *
+ * Test hook: stale-while-revalidate makes reads non-blocking, so tests that
+ * assert post-rebuild content call this between the read that triggered
+ * revalidation and the read that asserts the fresh ranking. Also prevents a
+ * background build from one test outliving it and racing the next test's
+ * database cleanup.
+ */
+export async function settleFeedRebuild(): Promise<void> {
+  const cache = feedCache();
+  // A settling build can trigger no successors on its own, but loop until
+  // quiescent in case reads raced in while awaiting.
+  while (cache.liveBuilds.size > 0) {
+    await Promise.allSettled([...cache.liveBuilds]);
+  }
+}
+
+/**
+ * Whether any feed rebuild is currently live (in-flight or detached).
+ *
+ * Test hook: lets a test assert the non-blocking stale-while-revalidate
+ * contract — a read that served the stale entry must resolve WHILE the
+ * rebuild it triggered is still live, not after it.
+ */
+export function feedRebuildInFlight(): boolean {
+  return feedCache().liveBuilds.size > 0;
 }
 
 /**

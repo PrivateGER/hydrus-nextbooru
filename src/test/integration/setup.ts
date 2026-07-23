@@ -4,7 +4,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { execSync } from 'child_process';
 import { instrumentPool } from '../guards/query-capture';
-import { invalidateFeedCache } from '@/lib/feed';
+import { clearFeedCache, settleFeedRebuild } from '@/lib/feed';
 
 type DockerApiError = Error & {
   statusCode?: number;
@@ -176,6 +176,11 @@ export function getTestPrisma(): PrismaClient {
 export async function cleanDatabase(): Promise<void> {
   const p = getTestPrisma();
 
+  // Let any stale-while-revalidate background rebuild finish BEFORE
+  // truncating the tables it reads, then hard-drop the cache so a prior
+  // test's ranking cannot serve into the next test.
+  await settleFeedRebuild();
+  clearFeedCache();
   // Delete in order of dependencies (children first)
   await p.postRecommendation.deleteMany();
   await p.favorite.deleteMany();
@@ -202,10 +207,6 @@ export async function cleanDatabase(): Promise<void> {
     },
   });
 
-  // The feed cache lives on globalThis and survives table truncation; drop it
-  // so a prior test's cached feed cannot leak into the next (tests run within
-  // one seed-sample bucket).
-  invalidateFeedCache();
 }
 
 /**

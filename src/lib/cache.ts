@@ -1,4 +1,4 @@
-import { invalidateFeedCache } from "@/lib/feed";
+import { clearFeedCache } from "@/lib/feed";
 
 /**
  * Simple LRU cache with max size limit
@@ -139,8 +139,9 @@ export function invalidateAllCaches(): void {
   tagsCategoryCountsCache.clear();
   tagsPageCache.clear();
   wildcardPatternCache.clear();
-  // The "For You" feed cache lives on globalThis (see @/lib/feed). Sync mutates
-  // posts/tags/groups that reshape the feed, so a global invalidation clears it
-  // too.
-  invalidateFeedCache();
+  // The "For You" feed cache lives on globalThis (see @/lib/feed). Sync
+  // mutates/deletes posts, tags, and groups, so the cached ranking may
+  // reference rows that no longer exist — hard-clear it rather than serving
+  // it stale-while-revalidating.
+  clearFeedCache();
 }
