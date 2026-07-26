@@ -18,10 +18,28 @@ const HYDRUS_REQUEST_MAX_RETRIES = 10;
 const HYDRUS_REQUEST_RETRY_BASE_DELAY_MS = 100;
 /** Cap any single retry sleep so exponential backoff can't grow without bound. */
 const HYDRUS_REQUEST_RETRY_MAX_DELAY_MS = 5000;
+/**
+ * Per-request deadline. Without one, a stalled socket hangs the caller
+ * forever (sync stays "running" and the lock never clears). Generous because
+ * a 512-file metadata batch is legitimately slow on a busy Hydrus.
+ */
+const HYDRUS_REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Timed-out requests retry on a much smaller budget than transient errors:
+ * each attempt already costs up to the full deadline, so the general cap of
+ * 10 would let one dead request monopolize a sync for 20+ minutes.
+ */
+const HYDRUS_TIMEOUT_MAX_RETRIES = 2;
+
+
 
 function isRetryableHydrusError(error: unknown): boolean {
   if (error instanceof HydrusApiError) {
     return error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500;
+  }
+
+  if (isHydrusTimeoutError(error)) {
+    return true;
   }
 
   if (error instanceof SyntaxError) {
@@ -41,6 +59,20 @@ function isRetryableHydrusError(error: unknown): boolean {
     message.includes("networkerror")
   );
 }
+
+/**
+ * Whether our per-request deadline fired. AbortSignal.timeout rejects with a
+ * DOMException named "TimeoutError" ("AbortError" in some runtimes); matched
+ * by name because `instanceof DOMException` is brittle across runtimes. The
+ * only abort source in this client is our own deadline.
+ */
+function isHydrusTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("name" in error)) {
+    return false;
+  }
+  return error.name === "TimeoutError" || error.name === "AbortError";
+}
+
 
 export function getRetryDelayMs(attempt: number): number {
   const delay = HYDRUS_REQUEST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
@@ -97,6 +129,7 @@ export class HydrusClient {
               headers: {
                 "Hydrus-Client-API-Access-Key": this.apiKey,
               },
+              signal: AbortSignal.timeout(HYDRUS_REQUEST_TIMEOUT_MS),
             });
 
             const durationMs = Date.now() - startTime;
@@ -117,8 +150,13 @@ export class HydrusClient {
             return await response.json() as T;
           } catch (error) {
             const retryable = isRetryableHydrusError(error);
+            // Timeouts burn up to the full deadline per attempt, so they get
+            // a much smaller retry budget than cheap transient failures.
+            const maxRetries = isHydrusTimeoutError(error)
+              ? HYDRUS_TIMEOUT_MAX_RETRIES
+              : HYDRUS_REQUEST_MAX_RETRIES;
 
-            if (retryable && attempt < HYDRUS_REQUEST_MAX_RETRIES) {
+            if (retryable && attempt < maxRetries) {
               const delayMs = getRetryDelayMs(attempt);
               span.addEvent("hydrus.retry", {
                 "hydrus.retry_attempt": attempt + 1,

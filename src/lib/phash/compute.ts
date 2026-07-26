@@ -12,6 +12,14 @@ const DCT_SIZE = 32;
 const HASH_SIZE = 8;
 
 /**
+ * Version of the phash algorithm/configuration (DCT size, hash size, resize
+ * strategy). Bump when any of these change: sync uses it to invalidate all
+ * stored PhashEntry rows so they are recomputed instead of being skipped as
+ * already-current.
+ */
+export const PHASH_ALGORITHM_VERSION = 1;
+
+/**
  * Pre-computed DCT-II coefficient matrix for a 32x32 input.
  * dctCoeffs[u][x] = cos((2x + 1) * u * PI / (2 * N))
  *

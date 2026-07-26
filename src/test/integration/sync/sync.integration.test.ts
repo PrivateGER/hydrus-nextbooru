@@ -6,8 +6,11 @@ import { createMockFileMetadata, createMockFileWithTags, createMockFileWithUrls 
 import { invalidateAllCaches } from '@/lib/cache';
 import type { SetupServer } from 'msw/node';
 
-let syncFromHydrus: typeof import('@/lib/hydrus/sync').syncFromHydrus;
-let getSyncState: typeof import('@/lib/hydrus/sync').getSyncState;
+import type * as SyncModule from '@/lib/hydrus/sync';
+
+let syncFromHydrus: typeof SyncModule.syncFromHydrus;
+let getSyncState: typeof SyncModule.getSyncState;
+let recalculateTagCounts: typeof SyncModule.recalculateTagCounts;
 
 describe('syncFromHydrus (Integration)', () => {
   let server: SetupServer;
@@ -17,10 +20,12 @@ describe('syncFromHydrus (Integration)', () => {
     const { prisma } = await setupTestDatabase();
     setTestPrisma(prisma);
 
-    // Import after setting up test prisma
+    // Dynamic import is deliberate: the module must not be evaluated until
+    // setTestPrisma has pointed @/lib/db at the Testcontainers database.
     const syncModule = await import('@/lib/hydrus/sync');
     syncFromHydrus = syncModule.syncFromHydrus;
     getSyncState = syncModule.getSyncState;
+    recalculateTagCounts = syncModule.recalculateTagCounts;
   });
 
   afterAll(async () => {
@@ -574,6 +579,138 @@ describe('syncFromHydrus (Integration)', () => {
       expect(cleanupProgress).not.toBeNull();
       expect(cleanupProgress!.deletedPosts).toBe(1);
       expect(cleanupProgress!.deletedTags).toBe(1); // unique_tag was orphaned
+    });
+  });
+
+  describe('re-sync write elimination', () => {
+    it('does not rewrite unchanged posts on re-sync', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+      const file = {
+        ...createMockFileWithTags(['tag1', 'artist:alice'], { file_id: 1, hash }),
+        known_urls: [
+          'https://www.pixiv.net/en/artworks/12345',
+          'https://example.com/original-source',
+        ],
+        notes: { note1: 'Test note content' },
+      };
+
+      addFilesToState(hydrusState, [file]);
+      await syncFromHydrus();
+
+      const before = await prisma.post.findUnique({ where: { hash } });
+      expect(before).not.toBeNull();
+
+      // Re-sync with identical data: the diff path must not open a write
+      // transaction, so Prisma's @updatedAt and syncedAt stay untouched.
+      await syncFromHydrus();
+
+      const after = await prisma.post.findUnique({ where: { hash } });
+      expect(after!.updatedAt.getTime()).toBe(before!.updatedAt.getTime());
+      expect(after!.syncedAt.getTime()).toBe(before!.syncedAt.getTime());
+
+      // Hydrus documents known_urls as a plain array with no ordering
+      // guarantee: a pure reorder is not a change and must not write either.
+      hydrusState.metadata.set(1, {
+        ...file,
+        known_urls: [...file.known_urls].reverse(),
+      });
+      await syncFromHydrus();
+
+      const afterReorder = await prisma.post.findUnique({ where: { hash } });
+      expect(afterReorder!.updatedAt.getTime()).toBe(before!.updatedAt.getTime());
+      expect(afterReorder!.syncedAt.getTime()).toBe(before!.syncedAt.getTime());
+    });
+
+    it('removes dropped tags and notes on re-sync', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      addFilesToState(hydrusState, [
+        {
+          ...createMockFileWithTags(['tag1', 'tag2'], { file_id: 1, hash }),
+          notes: { note1: 'to be removed' },
+        },
+      ]);
+      await syncFromHydrus();
+
+      const post = await prisma.post.findUnique({ where: { hash } });
+      expect(await prisma.postTag.count({ where: { postId: post!.id } })).toBe(2);
+      expect(await prisma.note.count({ where: { postId: post!.id } })).toBe(1);
+
+      // Hydrus now reports one tag and no notes for the same file.
+      hydrusState.metadata.set(1, createMockFileWithTags(['tag1'], { file_id: 1, hash }));
+      await syncFromHydrus();
+
+      expect(await prisma.postTag.count({ where: { postId: post!.id } })).toBe(1);
+      expect(await prisma.note.count({ where: { postId: post!.id } })).toBe(0);
+      // A relation change refreshes syncedAt even without metadata changes.
+      const afterPost = await prisma.post.findUnique({ where: { hash } });
+      expect(afterPost!.syncedAt.getTime()).toBeGreaterThan(post!.syncedAt.getTime());
+    });
+
+    it('recalculateTagCounts writes nothing when stats are already fresh', { timeout: 30000 }, async () => {
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['tag1', 'artist:alice'], { file_id: 1, hash: 'a'.repeat(64) }),
+        createMockFileWithTags(['tag1', 'tag2'], { file_id: 2, hash: 'b'.repeat(64) }),
+      ]);
+      // Sync already runs the recalculation at the end.
+      await syncFromHydrus();
+
+      // Recomputing over unchanged data must be bitwise-stable and touch
+      // zero rows - this is the guard that keeps re-syncs from rewriting
+      // the whole Tag and Post tables.
+      const counts = await recalculateTagCounts();
+      expect(counts).toEqual({
+        tagCountUpdates: 0,
+        idfWeightUpdates: 0,
+        tagIdfNormUpdates: 0,
+      });
+    });
+  });
+
+  describe('phash algorithm versioning', () => {
+    it('clears stored phashes when the algorithm version changes', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      addFilesToState(hydrusState, [createMockFileMetadata({ file_id: 1, hash })]);
+      await syncFromHydrus();
+
+      await prisma.phashEntry.create({ data: { hash, phash: 123n } });
+      await prisma.settings.update({
+        where: { key: 'phash.algorithmVersion' },
+        data: { value: 'outdated' },
+      });
+
+      await syncFromHydrus();
+
+      expect(await prisma.phashEntry.count()).toBe(0);
+      const setting = await prisma.settings.findUnique({
+        where: { key: 'phash.algorithmVersion' },
+      });
+      expect(setting?.value).not.toBe('outdated');
+    });
+
+    it('adopts the current version without clearing when none is stored', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+
+      addFilesToState(hydrusState, [createMockFileMetadata({ file_id: 1, hash })]);
+      await syncFromHydrus();
+
+      // Simulate a pre-versioning database: entries exist, no version key.
+      await prisma.phashEntry.create({ data: { hash, phash: 456n } });
+      await prisma.settings.delete({ where: { key: 'phash.algorithmVersion' } });
+
+      await syncFromHydrus();
+
+      // Warm cache preserved; version key adopted.
+      expect(await prisma.phashEntry.count()).toBe(1);
+      const setting = await prisma.settings.findUnique({
+        where: { key: 'phash.algorithmVersion' },
+      });
+      expect(setting).not.toBeNull();
     });
   });
 });
