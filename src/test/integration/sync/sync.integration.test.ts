@@ -667,6 +667,23 @@ describe('syncFromHydrus (Integration)', () => {
         tagIdfNormUpdates: 0,
       });
     });
+
+    it('resets stale idfWeight for postless tags even when the library is empty', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+
+      // Orphaned stats survivor: a tag with stale counts and no posts in an
+      // empty library (e.g. cleanup was interrupted between post deletion
+      // and orphan removal).
+      await prisma.tag.create({
+        data: { name: 'stale', category: 'GENERAL', postCount: 5, idfWeight: 2.5 },
+      });
+
+      await recalculateTagCounts();
+
+      const tag = await prisma.tag.findFirst({ where: { name: 'stale' } });
+      expect(tag!.postCount).toBe(0);
+      expect(tag!.idfWeight).toBe(0);
+    });
   });
 
   describe('phash algorithm versioning', () => {
@@ -711,6 +728,46 @@ describe('syncFromHydrus (Integration)', () => {
         where: { key: 'phash.algorithmVersion' },
       });
       expect(setting).not.toBeNull();
+    });
+
+    it('preserves out-of-scope phashes and the version marker on a filtered sync', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hashA = 'a'.repeat(64);
+      const hashB = 'b'.repeat(64);
+
+      // Seed two posts via a full sync.
+      addFilesToState(hydrusState, [
+        createMockFileWithTags(['tag1'], { file_id: 1, hash: hashA }),
+        createMockFileWithTags(['other'], { file_id: 2, hash: hashB }),
+      ]);
+      await syncFromHydrus();
+
+      await prisma.phashEntry.createMany({
+        data: [
+          { hash: hashA, phash: 111n },
+          { hash: hashB, phash: 222n },
+        ],
+      });
+      await prisma.settings.update({
+        where: { key: 'phash.algorithmVersion' },
+        data: { value: 'outdated' },
+      });
+
+      // The mock search handler ignores tag filters, so narrow the mock
+      // state itself to file 1 - the filtered sync's scope is exactly post A.
+      removeFilesFromState(hydrusState, [2]);
+      await syncFromHydrus({ tags: ['tag1'] });
+
+      // Out-of-scope entry byte-identical, in-scope entry not clobbered by a
+      // global clear, marker NOT advanced: the global clear is deferred to
+      // the next full sync.
+      const entryB = await prisma.phashEntry.findUnique({ where: { hash: hashB } });
+      expect(entryB?.phash).toBe(222n);
+      expect(await prisma.phashEntry.count()).toBe(2);
+      const setting = await prisma.settings.findUnique({
+        where: { key: 'phash.algorithmVersion' },
+      });
+      expect(setting?.value).toBe('outdated');
     });
   });
 });

@@ -308,7 +308,8 @@ async function processBatchWithPrepopulation(
   files: HydrusFileMetadata[],
   progress: SyncProgress,
   onProgress: (progress: SyncProgress) => void,
-  persistProgress: (progress: SyncProgress) => Promise<void>
+  persistProgress: (progress: SyncProgress) => Promise<void>,
+  phashSkipEnabled: boolean
 ): Promise<void> {
   return withSpan("sync.processBatch", async (batchSpan) => {
     batchSpan.setAttributes({
@@ -372,10 +373,12 @@ async function processBatchWithPrepopulation(
             select: { postId: true, name: true, content: true },
           })
         : [],
-      prisma.phashEntry.findMany({
-        where: { hash: { in: hashes } },
-        select: { hash: true },
-      }),
+      phashSkipEnabled
+        ? prisma.phashEntry.findMany({
+            where: { hash: { in: hashes } },
+            select: { hash: true },
+          })
+        : [],
     ]);
 
     const tagIdsByPost = new Map<number, number[]>();
@@ -410,7 +413,9 @@ async function processBatchWithPrepopulation(
     }
     // Files whose phash is already stored skip the sharp decode entirely:
     // hashes are content addresses, so a stored entry stays correct for the
-    // active algorithm version (enforced by ensurePhashVersion).
+    // active algorithm version (enforced by ensurePhashVersion). When skip
+    // is disabled (version mismatch on a filtered sync), the set is empty
+    // and every file recomputes.
     const phashedHashes = new Set(phashRows.map((r) => r.hash));
 
     // Validate that the bulk lookups resolved every entry. A complete lookup
@@ -1046,20 +1051,39 @@ const PHASH_VERSION_SETTINGS_KEY = "phash.algorithmVersion";
 /**
  * Reconcile the stored phash algorithm version with the compiled one.
  * Skip-by-hash during batch processing is only sound while every PhashEntry
- * row was produced by the current algorithm: on a version bump, all entries
- * are cleared so the following sync recomputes them. A missing key adopts
- * the current version WITHOUT clearing - existing entries were produced by
- * the code lineage that introduced versioning, and wiping a warm cache on
- * first deploy would force a full recompute for nothing.
+ * row was produced by the current algorithm. On a version bump, a FULL sync
+ * clears all entries so they are recomputed; a FILTERED sync must not touch
+ * out-of-scope entries, so it neither clears nor advances the marker and
+ * instead returns false to disable skip-by-hash for this run. A missing key
+ * adopts the current version WITHOUT clearing - existing entries were
+ * produced by the code lineage that introduced versioning, and wiping a
+ * warm cache on first deploy would force a full recompute for nothing.
+ *
+ * Returns whether batches may skip files that already have a stored entry.
  */
-async function ensurePhashVersion(): Promise<void> {
+async function ensurePhashVersion(isFullSync: boolean): Promise<boolean> {
   const current = String(PHASH_ALGORITHM_VERSION);
   const setting = await prisma.settings.findUnique({
     where: { key: PHASH_VERSION_SETTINGS_KEY },
   });
-  if (setting?.value === current) return;
+  if (setting?.value === current) return true;
 
   if (setting) {
+    // Only a full sync may clear globally and advance the marker: a filtered
+    // sync recomputes just its own files, so clearing here would strand
+    // every out-of-scope post without a phash while the advanced marker
+    // claims the table is current. Instead, keep the stale marker and
+    // disable skip-by-hash so in-scope files are recomputed (their upserts
+    // overwrite stale entries); the next full sync performs the global
+    // clear + recompute.
+    if (!isFullSync) {
+      syncLog.warn(
+        { from: setting.value, to: current },
+        'Phash algorithm version changed during a filtered sync; recomputing in-scope files only and deferring the global clear to the next full sync'
+      );
+      return false;
+    }
+
     const cleared = await prisma.phashEntry.deleteMany({});
     syncLog.info(
       { from: setting.value, to: current, clearedEntries: cleared.count },
@@ -1072,6 +1096,7 @@ async function ensurePhashVersion(): Promise<void> {
     update: { value: current },
     create: { key: PHASH_VERSION_SETTINGS_KEY, value: current },
   });
+  return true;
 }
 
 // =============================================================================
@@ -1096,6 +1121,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     const onProgress = options.onProgress || (() => {});
     const searchTags = options.tags || ["system:everything"];
+    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
     const batchSize = options.batchSize ?? BATCH_SIZE;
 
     rootSpan.setAttributes({
@@ -1119,8 +1145,9 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     }
 
     // Reconcile phash algorithm version before any batch can skip
-    // already-stored entries.
-    await ensurePhashVersion();
+    // already-stored entries. A filtered sync with a version mismatch
+    // disables skip-by-hash instead of clearing the global table.
+    const phashSkipEnabled = await ensurePhashVersion(isFullSync);
 
     // Search for files
     progress.phase = "searching";
@@ -1217,7 +1244,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
             metadataResult.metadata,
             progress,
             onProgress,
-            persistProgress
+            persistProgress,
+            phashSkipEnabled
           );
 
           progress.phase = "fetching";
@@ -1268,7 +1296,6 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     // Cleanup phase: only run for full syncs with no batch failures
     // If any batches failed to fetch, we can't safely determine what was deleted from Hydrus
-    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
     const hasFailedBatches = (progress.failedBatches ?? 0) > 0;
 
     // Guard against mass deletion: cleanup compares DB posts against the
@@ -1648,11 +1675,13 @@ export async function recalculateTagCounts(): Promise<{
       WHERE "postCount" > 0
         AND "idfWeight" IS DISTINCT FROM GREATEST(0, LN(${totalPosts}::FLOAT / GREATEST(1, "postCount")))
     `;
-    // Reset idfWeight to 0 for tags with no posts
-    idfWeightUpdates += await prisma.$executeRaw`
-      UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0 AND "idfWeight" <> 0
-    `;
   }
+  // Reset idfWeight for postless tags even when the library is empty:
+  // guarding this behind totalPosts > 0 would leave stale nonzero weights
+  // if a sync removed the last post.
+  idfWeightUpdates += await prisma.$executeRaw`
+    UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0 AND "idfWeight" <> 0
+  `;
 
   // Refresh each post's tag-IDF vector length. Must run after the idfWeight
   // updates above; a post with no tags gets norm 0 (it can never be a
