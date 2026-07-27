@@ -684,6 +684,42 @@ describe('syncFromHydrus (Integration)', () => {
       expect(tag!.postCount).toBe(0);
       expect(tag!.idfWeight).toBe(0);
     });
+
+    it('rewrites groups and notes when they change on re-sync', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const hash = 'a'.repeat(64);
+      const file = {
+        ...createMockFileWithTags(['tag1'], { file_id: 1, hash }),
+        known_urls: ['https://www.pixiv.net/en/artworks/111'],
+        notes: { note1: 'v1' },
+      };
+
+      addFilesToState(hydrusState, [file]);
+      await syncFromHydrus();
+
+      const post = await prisma.post.findUnique({ where: { hash } });
+      expect(post).not.toBeNull();
+
+      // Same file now belongs to a different pixiv work and the note text
+      // changed: both relation sets must be rewritten, not just diff-skipped.
+      hydrusState.metadata.set(1, {
+        ...file,
+        known_urls: ['https://www.pixiv.net/en/artworks/222'],
+        notes: { note1: 'v2' },
+      });
+      await syncFromHydrus();
+
+      const groups = await prisma.postGroup.findMany({
+        where: { postId: post!.id },
+        include: { group: true },
+      });
+      expect(groups).toHaveLength(1);
+      expect(groups[0].group.sourceId).toBe('222');
+
+      const notes = await prisma.note.findMany({ where: { postId: post!.id } });
+      expect(notes).toHaveLength(1);
+      expect(notes[0].content).toBe('v2');
+    });
   });
 
   describe('phash algorithm versioning', () => {

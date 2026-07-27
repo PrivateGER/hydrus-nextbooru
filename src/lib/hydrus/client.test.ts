@@ -267,6 +267,29 @@ describe('HydrusClient', () => {
       await expect(client.getFileMetadata({ fileIds: [1] })).resolves.toEqual({ metadata: [] });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
+
+    it('should retry a timed-out request and succeed', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new DOMException('The operation timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(mockOkResponse({ metadata: [] }));
+
+      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
+
+      await expect(client.getFileMetadata({ fileIds: [1] })).resolves.toEqual({ metadata: [] });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('should stop retrying timeouts after the reduced timeout budget', async () => {
+      mockFetch.mockRejectedValue(new DOMException('The operation timed out', 'TimeoutError'));
+
+      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
+
+      await expect(client.getFileMetadata({ fileIds: [1] })).rejects.toThrow();
+      // 1 initial attempt + 2 timeout retries: each attempt burns up to the
+      // full 120s deadline, so timeouts get a far smaller budget than the
+      // general transient-failure cap of 10.
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
   });
 
   // ===========================================================================
