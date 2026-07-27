@@ -10,7 +10,7 @@ import { updateHomeStatsCache } from "@/lib/stats";
 import { invalidateAllRecommendations, invalidateRecommendationsForPost } from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 import { withSpan, addSpanEvent } from "@/lib/tracing";
-import { computePhash, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
+import { computePhash, PHASH_SUPPORTED_MIMES, PHASH_ALGORITHM_VERSION } from "@/lib/phash";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { IncompleteLookupError, assertLookupComplete } from "./lookup-validation";
 
@@ -79,6 +79,26 @@ export interface SyncOptions {
 interface ParsedFileRefs {
   tagKeys: string[]; // deduped "CATEGORY:name" keys, in extraction order
   groupRefs: { key: string; position: number }[]; // "SOURCETYPE:sourceId" keys
+}
+
+/**
+ * Preloaded state of an existing post, fetched once per batch, used for
+ * JS-side diffing so a fully unchanged file performs no writes at all.
+ */
+interface ExistingPostState {
+  id: number;
+  mimeType: string;
+  extension: string;
+  fileSize: number;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  hasAudio: boolean;
+  blurhash: string | null;
+  sourceUrls: string[];
+  tagIds: number[];
+  groups: { groupId: number; position: number }[];
+  notes: { name: string; content: string }[];
 }
 
 interface BatchParseResult {
@@ -288,7 +308,8 @@ async function processBatchWithPrepopulation(
   files: HydrusFileMetadata[],
   progress: SyncProgress,
   onProgress: (progress: SyncProgress) => void,
-  persistProgress: (progress: SyncProgress) => Promise<void>
+  persistProgress: (progress: SyncProgress) => Promise<void>,
+  phashSkipEnabled: boolean
 ): Promise<void> {
   return withSpan("sync.processBatch", async (batchSpan) => {
     batchSpan.setAttributes({
@@ -309,13 +330,93 @@ async function processBatchWithPrepopulation(
 
     const lookups: BatchLookups = { tagIds, groupIds };
 
-    // One existence check for the whole batch: brand-new posts skip the
-    // per-file relation diffing entirely (they have nothing to diff against).
+    // One preload for the whole batch: post metadata, relations, and phash
+    // presence. Brand-new posts skip relation diffing entirely (they have
+    // nothing to diff against), and existing posts are diffed in JS against
+    // this snapshot - so an unchanged file costs zero per-file queries
+    // instead of an upsert plus three relation reads.
+    const hashes = files.map((f) => f.hash);
     const existingPosts = await prisma.post.findMany({
-      where: { hash: { in: files.map((f) => f.hash) } },
-      select: { hash: true },
+      where: { hash: { in: hashes } },
+      select: {
+        id: true,
+        hash: true,
+        mimeType: true,
+        extension: true,
+        fileSize: true,
+        width: true,
+        height: true,
+        duration: true,
+        hasAudio: true,
+        blurhash: true,
+        sourceUrls: true,
+      },
     });
-    const existingHashes = new Set(existingPosts.map((p) => p.hash));
+    const existingPostIds = existingPosts.map((p) => p.id);
+
+    const [tagRows, groupRows, noteRows, phashRows] = await Promise.all([
+      existingPostIds.length > 0
+        ? prisma.postTag.findMany({
+            where: { postId: { in: existingPostIds } },
+            select: { postId: true, tagId: true },
+          })
+        : [],
+      existingPostIds.length > 0
+        ? prisma.postGroup.findMany({
+            where: { postId: { in: existingPostIds } },
+            select: { postId: true, groupId: true, position: true },
+          })
+        : [],
+      existingPostIds.length > 0
+        ? prisma.note.findMany({
+            where: { postId: { in: existingPostIds } },
+            select: { postId: true, name: true, content: true },
+          })
+        : [],
+      phashSkipEnabled
+        ? prisma.phashEntry.findMany({
+            where: { hash: { in: hashes } },
+            select: { hash: true },
+          })
+        : [],
+    ]);
+
+    const tagIdsByPost = new Map<number, number[]>();
+    for (const row of tagRows) {
+      const list = tagIdsByPost.get(row.postId);
+      if (list) list.push(row.tagId);
+      else tagIdsByPost.set(row.postId, [row.tagId]);
+    }
+    const groupsByPost = new Map<number, { groupId: number; position: number }[]>();
+    for (const row of groupRows) {
+      const entry = { groupId: row.groupId, position: row.position };
+      const list = groupsByPost.get(row.postId);
+      if (list) list.push(entry);
+      else groupsByPost.set(row.postId, [entry]);
+    }
+    const notesByPost = new Map<number, { name: string; content: string }[]>();
+    for (const row of noteRows) {
+      const entry = { name: row.name, content: row.content };
+      const list = notesByPost.get(row.postId);
+      if (list) list.push(entry);
+      else notesByPost.set(row.postId, [entry]);
+    }
+
+    const existingByHash = new Map<string, ExistingPostState>();
+    for (const post of existingPosts) {
+      existingByHash.set(post.hash, {
+        ...post,
+        tagIds: tagIdsByPost.get(post.id) ?? [],
+        groups: groupsByPost.get(post.id) ?? [],
+        notes: notesByPost.get(post.id) ?? [],
+      });
+    }
+    // Files whose phash is already stored skip the sharp decode entirely:
+    // hashes are content addresses, so a stored entry stays correct for the
+    // active algorithm version (enforced by ensurePhashVersion). When skip
+    // is disabled (version mismatch on a filtered sync), the set is empty
+    // and every file recomputes.
+    const phashedHashes = new Set(phashRows.map((r) => r.hash));
 
     // Validate that the bulk lookups resolved every entry. A complete lookup
     // is the norm. If something is still missing,
@@ -352,7 +453,13 @@ async function processBatchWithPrepopulation(
       const chunk = files.slice(j, j + CONCURRENT_FILES);
       const results = await Promise.allSettled(
         chunk.map((file, k) =>
-          processFileWithLookups(file, fileRefs[j + k], lookups, !existingHashes.has(file.hash))
+          processFileWithLookups(
+            file,
+            fileRefs[j + k],
+            lookups,
+            existingByHash.get(file.hash),
+            phashedHashes.has(file.hash)
+          )
         )
       );
 
@@ -385,11 +492,12 @@ async function processFileWithLookups(
   metadata: HydrusFileMetadata,
   refs: ParsedFileRefs,
   lookups: BatchLookups,
-  isNew: boolean,
+  existing: ExistingPostState | undefined,
+  hasPhash: boolean,
   retryCount = 0
 ): Promise<void> {
   try {
-    await processFileSafe(metadata, refs, lookups, isNew);
+    await processFileSafe(metadata, refs, lookups, existing, hasPhash);
   } catch (error) {
     // Retry on transient failures (serialization failures, deadlocks)
     const isRetryable = error instanceof Error && (
@@ -404,8 +512,10 @@ async function processFileWithLookups(
       // Exponential backoff: 50ms, 100ms, 200ms
       const delay = 50 * Math.pow(2, retryCount);
       syncLog.debug({ hash: metadata.hash, retryCount: retryCount + 1, delayMs: delay }, 'Retrying file processing after transient failure');
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return processFileWithLookups(metadata, refs, lookups, isNew, retryCount + 1);
+      const { promise: delayDone, resolve: delayResolve } = Promise.withResolvers<void>();
+      setTimeout(delayResolve, delay);
+      await delayDone;
+      return processFileWithLookups(metadata, refs, lookups, existing, hasPhash, retryCount + 1);
     }
 
     throw error;
@@ -415,14 +525,18 @@ async function processFileWithLookups(
 /**
  * Process a single file (safe version using pre-populated lookups).
  * All tags and groups were parsed once at batch level (ParsedFileRefs) and
- * are guaranteed to exist in the lookups. `isNew` (from the batch existence
- * check) selects a create-only fast path with no relation diffing.
+ * are guaranteed to exist in the lookups. `existing` (from the batch
+ * preload) carries the post's current metadata and relations: undefined
+ * selects a create-only fast path with no diffing, a loaded state is diffed
+ * in JS so unchanged sections are never written. `hasPhash` skips the
+ * perceptual-hash recompute for content that already has a stored entry.
  */
 async function processFileSafe(
   metadata: HydrusFileMetadata,
   refs: ParsedFileRefs,
   lookups: BatchLookups,
-  isNew: boolean
+  existing: ExistingPostState | undefined,
+  hasPhash: boolean
 ): Promise<void> {
   // Get import time from file services
   let importedAt = new Date();
@@ -491,12 +605,12 @@ async function processFileSafe(
   };
   const noteEntries = Object.entries(metadata.notes || {});
 
-  // Fast path: the batch existence check says the post is new, so there are
-  // no relations to diff and no cached recommendations to invalidate.
+  // Fast path: the batch preload says the post is new, so there are no
+  // relations to diff and no cached recommendations to invalidate.
   // `create` (not upsert) makes the hint self-verifying: if an external
-  // writer created the post since the check, the unique violation aborts the
-  // transaction and we fall through to the diff path below.
-  if (isNew) {
+  // writer created the post since the preload, the unique violation aborts
+  // the transaction and we fall through to the fetch-and-diff path below.
+  if (!existing) {
     try {
       await prisma.$transaction(async (tx) => {
         const post = await tx.post.create({ data: postCreateData });
@@ -531,17 +645,157 @@ async function processFileSafe(
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
       });
 
-      await computePhashSafe(metadata);
+      if (!hasPhash) {
+        await computePhashSafe(metadata);
+      }
       return;
     } catch (error) {
       if (!isUniqueViolation(error)) {
         throw error;
       }
-      syncLog.debug({ hash: metadata.hash }, "New-post hint was stale; falling back to diff path");
+      syncLog.debug({ hash: metadata.hash }, "New-post hint was stale; falling back to fetch-and-diff path");
     }
+
+    // Stale hint: the post appeared after the batch preload, so no preloaded
+    // state exists. Rare - use the self-contained transaction that fetches
+    // and diffs relations on the spot.
+    await upsertPostWithFetchedDiff(metadata, postCreateData, tagIds, groupData, noteEntries);
+    if (!hasPhash) {
+      await computePhashSafe(metadata);
+    }
+    return;
   }
 
-  // Single transaction for post + relations (no tag/group creation races)
+  // Diff against the preloaded snapshot. Unchanged sections are never
+  // written; a fully unchanged file opens no transaction at all.
+  // sourceUrls compare as a sorted multiset: Hydrus documents known_urls
+  // only as a plain array, so enumeration order is not a change signal.
+  const sortedExistingUrls = [...existing.sourceUrls].sort();
+  const sortedNewUrls = [...sourceUrls].sort();
+  const metaChanged =
+    existing.mimeType !== metadata.mime ||
+    existing.extension !== metadata.ext ||
+    existing.fileSize !== metadata.size ||
+    existing.width !== (metadata.width ?? null) ||
+    existing.height !== (metadata.height ?? null) ||
+    existing.duration !== (metadata.duration ?? null) ||
+    existing.hasAudio !== (metadata.has_audio ?? false) ||
+    existing.blurhash !== (metadata.blurhash ?? null) ||
+    sortedExistingUrls.length !== sortedNewUrls.length ||
+    sortedExistingUrls.some((url, i) => url !== sortedNewUrls[i]);
+
+  const sortedExistingTagIds = [...existing.tagIds].sort((a, b) => a - b);
+  const sortedNewTagIds = [...tagIds].sort((a, b) => a - b);
+  const tagsChanged = sortedExistingTagIds.length !== sortedNewTagIds.length ||
+    sortedExistingTagIds.some((id, i) => id !== sortedNewTagIds[i]);
+
+  const groupKey = (g: { groupId: number; position: number }) => `${g.groupId}:${g.position}`;
+  const existingGroupKeys = new Set(existing.groups.map(groupKey));
+  const newGroupKeys = new Set(groupData.map(groupKey));
+  const groupsChanged = existingGroupKeys.size !== newGroupKeys.size ||
+    [...existingGroupKeys].some((k) => !newGroupKeys.has(k));
+
+  const noteKey = (n: { name: string; content: string }) => JSON.stringify([n.name, n.content]);
+  const existingNoteKeys = new Set(existing.notes.map(noteKey));
+  const newNoteKeys = new Set(noteEntries.map(([name, content]) => noteKey({ name, content })));
+  const notesChanged = existingNoteKeys.size !== newNoteKeys.size ||
+    [...existingNoteKeys].some((k) => !newNoteKeys.has(k));
+
+  if (metaChanged || tagsChanged || groupsChanged || notesChanged) {
+    await prisma.$transaction(async (tx) => {
+      // syncedAt means "last time sync changed this post": refreshed on any
+      // change (including relation-only ones), never on a no-op re-sync.
+      if (metaChanged) {
+        await tx.post.update({
+          where: { id: existing.id },
+          data: {
+            mimeType: metadata.mime,
+            extension: metadata.ext,
+            fileSize: metadata.size,
+            width: metadata.width,
+            height: metadata.height,
+            duration: metadata.duration,
+            hasAudio: metadata.has_audio ?? false,
+            blurhash: metadata.blurhash,
+            sourceUrls,
+            syncedAt: new Date(),
+          },
+        });
+      } else {
+        await tx.post.update({
+          where: { id: existing.id },
+          data: { syncedAt: new Date() },
+        });
+      }
+
+      if (tagsChanged) {
+        await tx.postTag.deleteMany({ where: { postId: existing.id } });
+        if (tagIds.length > 0) {
+          await tx.postTag.createMany({
+            data: tagIds.map((tagId) => ({ postId: existing.id, tagId })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      if (groupsChanged) {
+        await tx.postGroup.deleteMany({ where: { postId: existing.id } });
+        if (groupData.length > 0) {
+          await tx.postGroup.createMany({
+            data: groupData.map((g) => ({
+              postId: existing.id,
+              groupId: g.groupId,
+              position: g.position,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      if (notesChanged) {
+        await tx.note.deleteMany({ where: { postId: existing.id } });
+        if (noteEntries.length > 0) {
+          await tx.note.createMany({
+            data: noteEntries.map(([name, content]) => ({
+              postId: existing.id,
+              name,
+              content,
+            })),
+          });
+        }
+      }
+
+      // Tags feed similarity scoring and groups feed same-group exclusion;
+      // either changing invalidates the post's cached recommendations.
+      if (tagsChanged || groupsChanged) {
+        await invalidateRecommendationsForPost(existing.id, tx);
+      }
+    }, {
+      timeout: 60000, // 60s for files with many tags/groups
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+    });
+  }
+
+  if (!hasPhash) {
+    await computePhashSafe(metadata);
+  }
+}
+
+/**
+ * Self-contained upsert + fetch-and-diff transaction for the rare stale-hint
+ * case: the batch preload said "new" but the post appeared concurrently, so
+ * no preloaded state exists. Reads current relations inside the transaction
+ * and rewrites only changed sections (pre-preload behavior).
+ */
+async function upsertPostWithFetchedDiff(
+  metadata: HydrusFileMetadata,
+  postCreateData: Prisma.PostUncheckedCreateInput,
+  tagIds: number[],
+  groupData: { groupId: number; position: number }[],
+  noteEntries: [string, string][]
+): Promise<void> {
+  const sourceUrls = metadata.known_urls || [];
+
   await prisma.$transaction(async (tx) => {
     // Upsert post
     const post = await tx.post.upsert({
@@ -640,8 +894,6 @@ async function processFileSafe(
     timeout: 60000, // 60s for files with many tags/groups
     isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
   });
-
-  await computePhashSafe(metadata);
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -794,6 +1046,59 @@ function createProgressPersister(): (progress: SyncProgress) => Promise<void> {
   };
 }
 
+const PHASH_VERSION_SETTINGS_KEY = "phash.algorithmVersion";
+
+/**
+ * Reconcile the stored phash algorithm version with the compiled one.
+ * Skip-by-hash during batch processing is only sound while every PhashEntry
+ * row was produced by the current algorithm. On a version bump, a FULL sync
+ * clears all entries so they are recomputed; a FILTERED sync must not touch
+ * out-of-scope entries, so it neither clears nor advances the marker and
+ * instead returns false to disable skip-by-hash for this run. A missing key
+ * adopts the current version WITHOUT clearing - existing entries were
+ * produced by the code lineage that introduced versioning, and wiping a
+ * warm cache on first deploy would force a full recompute for nothing.
+ *
+ * Returns whether batches may skip files that already have a stored entry.
+ */
+async function ensurePhashVersion(isFullSync: boolean): Promise<boolean> {
+  const current = String(PHASH_ALGORITHM_VERSION);
+  const setting = await prisma.settings.findUnique({
+    where: { key: PHASH_VERSION_SETTINGS_KEY },
+  });
+  if (setting?.value === current) return true;
+
+  if (setting) {
+    // Only a full sync may clear globally and advance the marker: a filtered
+    // sync recomputes just its own files, so clearing here would strand
+    // every out-of-scope post without a phash while the advanced marker
+    // claims the table is current. Instead, keep the stale marker and
+    // disable skip-by-hash so in-scope files are recomputed (their upserts
+    // overwrite stale entries); the next full sync performs the global
+    // clear + recompute.
+    if (!isFullSync) {
+      syncLog.warn(
+        { from: setting.value, to: current },
+        'Phash algorithm version changed during a filtered sync; recomputing in-scope files only and deferring the global clear to the next full sync'
+      );
+      return false;
+    }
+
+    const cleared = await prisma.phashEntry.deleteMany({});
+    syncLog.info(
+      { from: setting.value, to: current, clearedEntries: cleared.count },
+      'Phash algorithm version changed; cleared stored phashes for recompute'
+    );
+  }
+
+  await prisma.settings.upsert({
+    where: { key: PHASH_VERSION_SETTINGS_KEY },
+    update: { value: current },
+    create: { key: PHASH_VERSION_SETTINGS_KEY, value: current },
+  });
+  return true;
+}
+
 // =============================================================================
 // MAIN SYNC FUNCTION
 // =============================================================================
@@ -816,6 +1121,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     const onProgress = options.onProgress || (() => {});
     const searchTags = options.tags || ["system:everything"];
+    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
     const batchSize = options.batchSize ?? BATCH_SIZE;
 
     rootSpan.setAttributes({
@@ -837,6 +1143,11 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
         throw new Error("A sync operation is already in progress. Please wait for it to complete or cancel it first.");
       }
     }
+
+    // Reconcile phash algorithm version before any batch can skip
+    // already-stored entries. A filtered sync with a version mismatch
+    // disables skip-by-hash instead of clearing the global table.
+    const phashSkipEnabled = await ensurePhashVersion(isFullSync);
 
     // Search for files
     progress.phase = "searching";
@@ -933,7 +1244,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
             metadataResult.metadata,
             progress,
             onProgress,
-            persistProgress
+            persistProgress,
+            phashSkipEnabled
           );
 
           progress.phase = "fetching";
@@ -984,7 +1296,6 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 
     // Cleanup phase: only run for full syncs with no batch failures
     // If any batches failed to fetch, we can't safely determine what was deleted from Hydrus
-    const isFullSync = searchTags.length === 1 && searchTags[0] === "system:everything";
     const hasFailedBatches = (progress.failedBatches ?? 0) > 0;
 
     // Guard against mass deletion: cleanup compares DB posts against the
@@ -1330,36 +1641,66 @@ async function isSyncCancelled(): Promise<boolean> {
  * tag-IDF vector length (tagIdfNorm, the cosine denominator).
  * Called after sync to ensure counts are accurate for efficient sorting
  * and IDF weights + norms are fresh for recommendation computation.
+ *
+ * Every UPDATE is guarded with IS DISTINCT FROM so unchanged rows are not
+ * rewritten: an unchanged library produces zero dead tuples / WAL instead of
+ * a full rewrite of Tag and Post. The float expressions are deterministic
+ * (LN over ints; SUM with an explicit ORDER BY so addition order is fixed),
+ * so recomputing yields bitwise-identical values and the guards actually
+ * skip. Returns affected-row counts so tests can assert the no-op case.
+ *
+ * Exported for tests.
  */
-async function recalculateTagCounts(): Promise<void> {
-  // First update postCount
-  await prisma.$executeRaw`
+export async function recalculateTagCounts(): Promise<{
+  tagCountUpdates: number;
+  idfWeightUpdates: number;
+  tagIdfNormUpdates: number;
+}> {
+  // First update postCount (only where it changed)
+  const tagCountUpdates = await prisma.$executeRaw`
     UPDATE "Tag" t SET "postCount" = (
+      SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
+    )
+    WHERE t."postCount" IS DISTINCT FROM (
       SELECT COUNT(*) FROM "PostTag" pt WHERE pt."tagId" = t.id
     )
   `;
 
   // Then compute IDF weights based on updated counts
+  let idfWeightUpdates = 0;
   const totalPosts = await prisma.post.count();
   if (totalPosts > 0) {
-    await prisma.$executeRaw`
+    idfWeightUpdates += await prisma.$executeRaw`
       UPDATE "Tag" SET "idfWeight" = GREATEST(0, LN(${totalPosts}::FLOAT / GREATEST(1, "postCount")))
       WHERE "postCount" > 0
-    `;
-    // Reset idfWeight to 0 for tags with no posts
-    await prisma.$executeRaw`
-      UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0
+        AND "idfWeight" IS DISTINCT FROM GREATEST(0, LN(${totalPosts}::FLOAT / GREATEST(1, "postCount")))
     `;
   }
+  // Reset idfWeight for postless tags even when the library is empty:
+  // guarding this behind totalPosts > 0 would leave stale nonzero weights
+  // if a sync removed the last post.
+  idfWeightUpdates += await prisma.$executeRaw`
+    UPDATE "Tag" SET "idfWeight" = 0 WHERE "postCount" = 0 AND "idfWeight" <> 0
+  `;
 
   // Refresh each post's tag-IDF vector length. Must run after the idfWeight
   // updates above; a post with no tags gets norm 0 (it can never be a
   // tag-similarity candidate, and the cosine treats norm 0 as "stale: score
-  // 0" rather than dividing by zero).
-  await prisma.$executeRaw`
+  // 0" rather than dividing by zero). SUM(... ORDER BY t.id) pins the float
+  // addition order so the recomputed value is bitwise-stable across syncs.
+  const tagIdfNormUpdates = await prisma.$executeRaw`
     UPDATE "Post" p SET "tagIdfNorm" = COALESCE(
       (
-        SELECT SQRT(SUM(t."idfWeight" * t."idfWeight"))
+        SELECT SQRT(SUM(t."idfWeight" * t."idfWeight" ORDER BY t.id))
+        FROM "PostTag" pt
+        JOIN "Tag" t ON t.id = pt."tagId"
+        WHERE pt."postId" = p.id
+      ),
+      0
+    )
+    WHERE p."tagIdfNorm" IS DISTINCT FROM COALESCE(
+      (
+        SELECT SQRT(SUM(t."idfWeight" * t."idfWeight" ORDER BY t.id))
         FROM "PostTag" pt
         JOIN "Tag" t ON t.id = pt."tagId"
         WHERE pt."postId" = p.id
@@ -1367,6 +1708,13 @@ async function recalculateTagCounts(): Promise<void> {
       0
     )
   `;
+
+  syncLog.debug(
+    { tagCountUpdates, idfWeightUpdates, tagIdfNormUpdates },
+    'Tag statistics recalculated'
+  );
+
+  return { tagCountUpdates, idfWeightUpdates, tagIdfNormUpdates };
 }
 
 /**

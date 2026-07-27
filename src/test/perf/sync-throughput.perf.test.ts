@@ -110,4 +110,54 @@ describe('Performance: Sync throughput', () => {
 
     recordBenchmark(`Sync ingest (${FILE_COUNT} files)`, s);
   });
+
+  /**
+   * Re-sync over an unchanged library: the production-dominant path. Guards
+   * the "unchanged file performs no per-file writes" invariant - a
+   * regression in the batch diff or phash skip shows up here as a large
+   * jump relative to the ingest benchmark.
+   */
+  it(`re-syncs ${FILE_COUNT} unchanged files`, { timeout: 600_000 }, async () => {
+    const files = buildSyncFiles(FILE_COUNT);
+
+    await cleanDatabase();
+    invalidateAllCaches();
+
+    const state = createMockHydrusState(0);
+    addFilesToState(state, files);
+    server = createMockHydrusServer(state);
+    server.listen({ onUnhandledRequest: 'error' });
+
+    // Seed once; every measured run then re-syncs identical data.
+    const seeded = await syncFromHydrus();
+    if (seeded.phase !== 'complete' || seeded.processedFiles !== FILE_COUNT) {
+      throw new Error(
+        `Seed sync did not complete cleanly: phase=${seeded.phase}, processed=${seeded.processedFiles}, errors=${seeded.errors.length}`
+      );
+    }
+
+    const times: number[] = [];
+    for (let run = 0; run < RUNS; run++) {
+      invalidateAllCaches();
+
+      const { result, ms } = await measure(() => syncFromHydrus());
+
+      if (result.phase !== 'complete' || result.processedFiles !== FILE_COUNT) {
+        throw new Error(
+          `Re-sync run ${run} did not complete cleanly: phase=${result.phase}, processed=${result.processedFiles}, errors=${result.errors.length}`
+        );
+      }
+
+      times.push(ms);
+      console.log(
+        `  run ${run + 1}: ${(ms / 1000).toFixed(1)}s (${Math.round(FILE_COUNT / (ms / 1000))} files/s)`
+      );
+    }
+
+    const s = stats(times);
+    console.log(`\nSync re-sync unchanged (${FILE_COUNT} files):`);
+    console.table(formatStats(s));
+
+    recordBenchmark(`Sync re-sync unchanged (${FILE_COUNT} files)`, s);
+  });
 });
