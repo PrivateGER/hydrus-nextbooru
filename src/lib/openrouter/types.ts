@@ -198,19 +198,16 @@ export interface ModelDefinition {
   dimensions?: number[];
 }
 
-export const DEFAULT_CHAT_MODEL = "google/gemini-3-flash-preview";
+export const DEFAULT_CHAT_MODEL = "google/gemini-3.5-flash-lite";
 
 // Popular models available for selection
 export const POPULAR_MODELS: ModelDefinition[] = [
   // Vision models (can translate text in images)
-  { id: DEFAULT_CHAT_MODEL, name: "Gemini 3 Flash Preview", vision: true },
-  { id: "~google/gemini-pro-latest", name: "Gemini Pro Latest", vision: true, expensive: true },
-  { id: "~openai/gpt-mini-latest", name: "GPT Mini Latest", vision: true },
-  { id: "~openai/gpt-latest", name: "GPT Latest", vision: true, expensive: true },
-  { id: "~anthropic/claude-haiku-latest", name: "Claude Haiku Latest", vision: true },
-  { id: "~anthropic/claude-sonnet-latest", name: "Claude Sonnet Latest", vision: true, expensive: true },
-  { id: "qwen/qwen3.6-flash", name: "Qwen3.6 Flash", vision: true },
-  { id: "mistralai/mistral-medium-3-5", name: "Mistral Medium 3.5", vision: true, expensive: true },
+  { id: DEFAULT_CHAT_MODEL, name: "Gemini 3.5 Flash Lite", vision: true },
+  { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview", vision: true, expensive: true },
+  { id: "openai/gpt-5.6-terra", name: "GPT-5.6 Terra", vision: true, expensive: true },
+  { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", vision: true, expensive: true },
+  { id: "qwen/qwen3.7-flash", name: "Qwen3.7 Flash", vision: true },
   // Text-only models (notes only)
   { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
   { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
