@@ -165,6 +165,8 @@ export const SETTINGS_KEYS = {
   EMBEDDING_IMAGE_MAX_RESOLUTION: "openrouter.embedding.imageMaxResolution",
   EMBEDDING_CALIBRATION: "openrouter.embedding.calibration",
   EMBEDDING_CALIBRATION_GENERATION: "openrouter.embedding.calibrationGeneration",
+  EMBEDDING_TAG_CALIBRATION: "openrouter.embedding.tagCalibration",
+  EMBEDDING_TAG_CALIBRATION_GENERATION: "openrouter.embedding.tagCalibrationGeneration",
 } as const;
 
 export interface OpenRouterSettings {

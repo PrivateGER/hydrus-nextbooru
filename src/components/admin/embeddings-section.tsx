@@ -51,11 +51,15 @@ export function EmbeddingsSection({
     saveSettings,
     computeMissing,
     retryFailed,
+    computeTags,
+    retryFailedTags,
     clearCurrent,
     clearFailed,
+    clearTags,
   } = embeddings;
 
   const stats = status?.stats;
+  const tagStats = status?.tagStats;
   const settings = status?.settings;
   const extensionsReady = Boolean(stats?.extensions.vector && stats?.extensions.vchord);
   const allEmbedded = stats && stats.pending === 0 && stats.failed === 0;
@@ -220,7 +224,46 @@ export function EmbeddingsSection({
         )}
       </Card>
 
-      {((stats?.embedded ?? 0) > 0 || (stats?.failed ?? 0) > 0) && (
+      <Card>
+        <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Tag Rerank Embeddings</h3>
+        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+          Embed the tag vocabulary as text to rerank semantic text search by how well
+          each result&apos;s tags match the query. Optional — without tag embeddings,
+          search ranks by image similarity alone.
+        </p>
+
+        {tagStats && (
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Tags" value={tagStats.totalTags} />
+            <Stat label="Embedded" value={tagStats.embedded} tone="emerald" />
+            <Stat label="Pending" value={tagStats.pending} tone="amber" />
+            <Stat label="Failed" value={tagStats.failed} tone="red" />
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={computeTags}
+            disabled={isComputing || status?.batchRunning || !extensionsReady || missingRequiredApiKey || (tagStats?.pending ?? 0) === 0}
+            loading={isComputing || status?.batchRunning}
+            className="bg-purple-600 hover:bg-purple-500"
+          >
+            <SparklesIcon className="h-4 w-4" />
+            Embed {tagStats?.pending.toLocaleString() ?? 0} Tags
+          </Button>
+
+          <Button
+            onClick={retryFailedTags}
+            disabled={isComputing || status?.batchRunning || !extensionsReady || missingRequiredApiKey || (tagStats?.failed ?? 0) === 0}
+            variant="secondary"
+          >
+            <CircleStackIcon className="h-4 w-4" />
+            Retry {tagStats?.failed.toLocaleString() ?? 0}
+          </Button>
+        </div>
+      </Card>
+
+      {((stats?.embedded ?? 0) > 0 || (stats?.failed ?? 0) > 0 || (tagStats?.embedded ?? 0) > 0) && (
         <Card className="border-red-500/20">
           <h3 className="mb-2 font-medium text-red-500 dark:text-red-400">Danger Zone</h3>
           <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
@@ -261,6 +304,24 @@ export function EmbeddingsSection({
               >
                 <TrashIcon className="h-4 w-4" />
                 Clear Current
+              </Button>
+            )}
+            {(tagStats?.embedded ?? 0) > 0 && (
+              <Button
+                onClick={() =>
+                  openConfirmModal({
+                    title: "Delete tag embeddings?",
+                    message: `This will remove ${tagStats?.embedded.toLocaleString()} tag embeddings for the active configuration. Semantic search falls back to image similarity alone.`,
+                    confirmText: "Delete",
+                    confirmVariant: "danger",
+                    onConfirm: clearTags,
+                  })
+                }
+                disabled={isComputing || status?.batchRunning}
+                variant="danger"
+              >
+                <TrashIcon className="h-4 w-4" />
+                Clear Tag Embeddings
               </Button>
             )}
           </div>

@@ -1,24 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   batchComputeImageEmbeddings,
+  batchComputeTagEmbeddings,
   clearEmbeddingsForConfig,
+  clearTagEmbeddingsForConfig,
   DEFAULT_EMBEDDING_BATCH_SIZE,
+  DEFAULT_TAG_EMBEDDING_BATCH_SIZE,
   deleteFailedEmbeddingsForConfig,
+  deleteFailedTagEmbeddingsForConfig,
   getEmbeddingSettings,
   getEmbeddingStats,
+  getTagEmbeddingStats,
   MAX_EMBEDDING_BATCH_SIZE,
+  MAX_TAG_EMBEDDING_BATCH_SIZE,
   toEmbeddingConfig,
+  toTagEmbeddingConfig,
   updateEmbeddingSettings,
 } from "@/lib/embeddings";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
 import { invalidateFeedCache } from "@/lib/feed";
-import { invalidateEmbeddingCalibration } from "@/lib/embeddings/calibration";
+import {
+  invalidateEmbeddingCalibration,
+  invalidateTagEmbeddingCalibration,
+} from "@/lib/embeddings/calibration";
 import { createBatchRunner } from "@/lib/batch-runner";
 
 type EmbeddingBatchResult = { processed: number; succeeded: number; failed: number };
 
 // The app is deployed as a single instance, matching the other admin batch tasks.
+// One runner guards BOTH image and tag batches: they share the embedding
+// provider, so overlapping runs would double request load for no benefit.
 const batch = createBatchRunner<EmbeddingBatchResult>();
 
 export async function GET() {
@@ -27,7 +39,11 @@ export async function GET() {
 
   try {
     const settings = await getEmbeddingSettings();
-    const stats = await getEmbeddingStats(toEmbeddingConfig(settings));
+    const config = toEmbeddingConfig(settings);
+    const [stats, tagStats] = await Promise.all([
+      getEmbeddingStats(config),
+      getTagEmbeddingStats(toTagEmbeddingConfig(config)),
+    ]);
 
     return NextResponse.json({
       settings: {
@@ -40,6 +56,7 @@ export async function GET() {
         imageMaxResolution: settings.imageMaxResolution,
       },
       stats,
+      tagStats,
       ...batch.snapshot(),
     });
   } catch (error) {
@@ -85,12 +102,14 @@ export async function POST(request: NextRequest) {
     const limit = body.limit as number | undefined;
     const batchSize = body.batchSize as number | undefined;
     const retryFailed = Boolean(body.retryFailed);
+    const target = body.target === "tags" ? "tags" : "images";
+    const maxBatchSize = target === "tags" ? MAX_TAG_EMBEDDING_BATCH_SIZE : MAX_EMBEDDING_BATCH_SIZE;
 
     if (batchSize !== undefined && (!Number.isFinite(batchSize) || !Number.isInteger(batchSize) || batchSize < 1)) {
       return NextResponse.json({ error: "batchSize must be a positive integer" }, { status: 400 });
     }
-    if (batchSize !== undefined && batchSize > MAX_EMBEDDING_BATCH_SIZE) {
-      return NextResponse.json({ error: `batchSize must be ${MAX_EMBEDDING_BATCH_SIZE} or less` }, { status: 400 });
+    if (batchSize !== undefined && batchSize > maxBatchSize) {
+      return NextResponse.json({ error: `batchSize must be ${maxBatchSize} or less` }, { status: 400 });
     }
     if (limit !== undefined && (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0)) {
       return NextResponse.json({ error: "limit must be a non-negative integer" }, { status: 400 });
@@ -98,6 +117,41 @@ export async function POST(request: NextRequest) {
 
     if (batch.running) {
       return NextResponse.json({ error: "Embedding batch is already running" }, { status: 409 });
+    }
+
+    if (target === "tags") {
+      aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? DEFAULT_TAG_EMBEDDING_BATCH_SIZE, retryFailed }, "Starting tag embedding batch");
+
+      batch.start(
+        (onProgress) => batchComputeTagEmbeddings({ limit, batchSize, retryFailed, onProgress }),
+        {
+          onCompleted: (result) => {
+            aiLog.info(result, "Tag embedding batch completed");
+          },
+          onFailed: (message) => {
+            aiLog.error({ error: message }, "Tag embedding batch failed");
+          },
+          // New tag rows can displace the tag channel's deterministic
+          // calibration sample, so the baseline re-estimates once per settled
+          // batch — same rationale as the image channel below. The feed cache
+          // is untouched: the feed never reads tag embeddings.
+          onSettled: () => {
+            Promise.resolve(invalidateTagEmbeddingCalibration()).catch((error) => {
+              aiLog.error(
+                { error: error instanceof Error ? error.message : String(error) },
+                "Failed to invalidate tag embedding calibration after batch"
+              );
+            });
+          },
+        }
+      );
+
+      return NextResponse.json({
+        message: "Tag embedding batch started",
+        limit: limit ?? "unlimited",
+        batchSize: batchSize ?? DEFAULT_TAG_EMBEDDING_BATCH_SIZE,
+        retryFailed,
+      });
     }
 
     aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE, retryFailed }, "Starting image embedding batch");
@@ -175,6 +229,19 @@ export async function DELETE(request: NextRequest) {
     if (body.clearFailed === true) {
       const count = await deleteFailedEmbeddingsForConfig(config);
       return NextResponse.json({ message: `Deleted ${count} failed embeddings`, count });
+    }
+
+    if (body.clearTags === true) {
+      const count = await clearTagEmbeddingsForConfig(toTagEmbeddingConfig(config));
+      // The tag-channel baseline was estimated from the store that was just
+      // wiped; a rebuild under the same config must re-estimate.
+      await invalidateTagEmbeddingCalibration();
+      return NextResponse.json({ message: `Deleted ${count} tag embeddings`, count });
+    }
+
+    if (body.clearTagsFailed === true) {
+      const count = await deleteFailedTagEmbeddingsForConfig(toTagEmbeddingConfig(config));
+      return NextResponse.json({ message: `Deleted ${count} failed tag embeddings`, count });
     }
 
     return NextResponse.json({ error: "No action specified" }, { status: 400 });

@@ -4,34 +4,51 @@ import { NextRequest } from "next/server";
 const {
   mockVerifyAdminSession,
   mockBatchComputeImageEmbeddings,
+  mockBatchComputeTagEmbeddings,
   mockClearEmbeddingsForConfig,
+  mockClearTagEmbeddingsForConfig,
   mockDeleteFailedEmbeddingsForConfig,
+  mockDeleteFailedTagEmbeddingsForConfig,
   mockGetEmbeddingSettings,
   mockGetEmbeddingStats,
+  mockGetTagEmbeddingStats,
   mockUpdateEmbeddingSettings,
   mockInvalidateFeedCache,
   mockInvalidateEmbeddingCalibration,
+  mockInvalidateTagEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
   mockBatchComputeImageEmbeddings: vi.fn(),
+  mockBatchComputeTagEmbeddings: vi.fn(),
   mockClearEmbeddingsForConfig: vi.fn(),
+  mockClearTagEmbeddingsForConfig: vi.fn(),
   mockDeleteFailedEmbeddingsForConfig: vi.fn(),
+  mockDeleteFailedTagEmbeddingsForConfig: vi.fn(),
   mockGetEmbeddingSettings: vi.fn(),
   mockGetEmbeddingStats: vi.fn(),
+  mockGetTagEmbeddingStats: vi.fn(),
   mockUpdateEmbeddingSettings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
   mockInvalidateEmbeddingCalibration: vi.fn(),
+  mockInvalidateTagEmbeddingCalibration: vi.fn(),
 }));
 
 vi.mock("@/lib/embeddings", () => ({
   batchComputeImageEmbeddings: mockBatchComputeImageEmbeddings,
+  batchComputeTagEmbeddings: mockBatchComputeTagEmbeddings,
   clearEmbeddingsForConfig: mockClearEmbeddingsForConfig,
+  clearTagEmbeddingsForConfig: mockClearTagEmbeddingsForConfig,
   DEFAULT_EMBEDDING_BATCH_SIZE: 8,
+  DEFAULT_TAG_EMBEDDING_BATCH_SIZE: 64,
   deleteFailedEmbeddingsForConfig: mockDeleteFailedEmbeddingsForConfig,
+  deleteFailedTagEmbeddingsForConfig: mockDeleteFailedTagEmbeddingsForConfig,
   getEmbeddingSettings: mockGetEmbeddingSettings,
   getEmbeddingStats: mockGetEmbeddingStats,
+  getTagEmbeddingStats: mockGetTagEmbeddingStats,
   MAX_EMBEDDING_BATCH_SIZE: 64,
+  MAX_TAG_EMBEDDING_BATCH_SIZE: 256,
   toEmbeddingConfig: (settings: unknown) => settings,
+  toTagEmbeddingConfig: (config: unknown) => config,
   updateEmbeddingSettings: mockUpdateEmbeddingSettings,
 }));
 
@@ -50,6 +67,7 @@ vi.mock("@/lib/feed", () => ({
 
 vi.mock("@/lib/embeddings/calibration", () => ({
   invalidateEmbeddingCalibration: mockInvalidateEmbeddingCalibration,
+  invalidateTagEmbeddingCalibration: mockInvalidateTagEmbeddingCalibration,
 }));
 
 const SETTINGS = {
@@ -78,6 +96,7 @@ describe("admin embeddings route", () => {
     mockVerifyAdminSession.mockResolvedValue({ authorized: true });
     mockGetEmbeddingSettings.mockResolvedValue(SETTINGS);
     mockGetEmbeddingStats.mockResolvedValue({ total: 10, embedded: 4, failed: 1, pending: 5, unsupported: 0 });
+    mockGetTagEmbeddingStats.mockResolvedValue({ totalTags: 6, embedded: 2, failed: 1, pending: 3 });
   });
 
   it("GET merges settings, stats, and the batch snapshot", async () => {
@@ -86,6 +105,7 @@ describe("admin embeddings route", () => {
 
     expect(data.settings).toMatchObject({ model: "test-model", dimensions: 768 });
     expect(data.stats).toMatchObject({ embedded: 4 });
+    expect(data.tagStats).toEqual({ totalTags: 6, embedded: 2, failed: 1, pending: 3 });
     expect(data).toMatchObject({
       batchRunning: false,
       batchProgress: null,
@@ -220,5 +240,72 @@ describe("admin embeddings route", () => {
   it("DELETE without an action returns 400", async () => {
     const { DELETE } = await import("./route");
     expect((await DELETE(request("DELETE", {}))).status).toBe(400);
+  });
+
+  it("POST target=tags starts the tag batch and invalidates only tag calibration on settle", async () => {
+    mockBatchComputeTagEmbeddings.mockResolvedValueOnce({ processed: 3, succeeded: 3, failed: 0 });
+    const { GET, POST } = await import("./route");
+
+    const response = await POST(request("POST", { target: "tags", retryFailed: true }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.retryFailed).toBe(true);
+    expect(mockBatchComputeTagEmbeddings).toHaveBeenCalledWith(
+      expect.objectContaining({ retryFailed: true })
+    );
+    expect(mockBatchComputeImageEmbeddings).not.toHaveBeenCalled();
+
+    await flush();
+    const data = await (await GET()).json();
+    expect(data.batchStatus).toBe("completed");
+    expect(data.lastBatchResult).toEqual({ processed: 3, succeeded: 3, failed: 0 });
+    // New tag rows can displace the tag channel's calibration sample...
+    expect(mockInvalidateTagEmbeddingCalibration).toHaveBeenCalledTimes(1);
+    // ...but the feed and the image channel never read tag embeddings.
+    expect(mockInvalidateFeedCache).not.toHaveBeenCalled();
+    expect(mockInvalidateEmbeddingCalibration).not.toHaveBeenCalled();
+  });
+
+  it("POST target=tags accepts batch sizes above the image maximum", async () => {
+    mockBatchComputeTagEmbeddings.mockResolvedValueOnce({ processed: 0, succeeded: 0, failed: 0 });
+    const { POST } = await import("./route");
+
+    const response = await POST(request("POST", { target: "tags", batchSize: 256 }));
+    expect(response.status).toBe(200);
+
+    await flush();
+  });
+
+  it("POST target=tags rejects batch sizes above the tag maximum", async () => {
+    const { POST } = await import("./route");
+    const response = await POST(request("POST", { target: "tags", batchSize: 257 }));
+
+    expect(response.status).toBe(400);
+    expect(mockBatchComputeTagEmbeddings).not.toHaveBeenCalled();
+  });
+
+  it("DELETE clears tag embeddings and drops the tag calibration baseline", async () => {
+    mockClearTagEmbeddingsForConfig.mockResolvedValueOnce(7);
+    const { DELETE } = await import("./route");
+
+    const response = await DELETE(request("DELETE", { clearTags: true }));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.count).toBe(7);
+    expect(mockInvalidateTagEmbeddingCalibration).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it("DELETE clears failed tag embeddings without touching calibration", async () => {
+    mockDeleteFailedTagEmbeddingsForConfig.mockResolvedValueOnce(2);
+    const { DELETE } = await import("./route");
+
+    const response = await DELETE(request("DELETE", { clearTagsFailed: true }));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.count).toBe(2);
+    expect(mockInvalidateTagEmbeddingCalibration).not.toHaveBeenCalled();
   });
 });

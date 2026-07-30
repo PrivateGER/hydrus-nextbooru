@@ -29,6 +29,7 @@ import {
   toEmbeddingConfig,
 } from "@/lib/embeddings/settings";
 import { getPostEmbeddingVector, searchPostsByEmbedding } from "@/lib/embeddings/store";
+import { rerankSemanticPostsByTags } from "@/lib/embeddings/tag-rerank";
 import { preprocessImageBufferForEmbedding } from "@/lib/embeddings/image";
 import {
   getCachedSemanticQueryEmbedding,
@@ -859,6 +860,11 @@ export async function searchSemanticPosts(
       })).embedding;
     }
 
+    // Text queries only: rerank the retrieved window by how well each
+    // candidate's tags match the query text. Image/post-seeded searches skip
+    // this — "visually similar" is already the right signal there, and there
+    // is no query text for tags to match against.
+    const rerankEmbedding = queryEmbedding;
     const result = await searchPostsByEmbedding({
       config: embeddingConfig,
       embedding: queryEmbedding,
@@ -866,6 +872,11 @@ export async function searchSemanticPosts(
       limit,
       minScore,
       resultCap: SEMANTIC_RESULT_CAP,
+      rerank: (posts) =>
+        rerankSemanticPostsByTags(posts, {
+          config: embeddingConfig,
+          queryEmbedding: rerankEmbedding,
+        }),
     });
 
     return {

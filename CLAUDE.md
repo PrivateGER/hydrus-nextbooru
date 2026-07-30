@@ -100,6 +100,7 @@ Query logging outputs formatted SQL with execution duration via pino. Useful for
 - **File serving**: Hash-based paths (`f{hash[0:2]}/{hash}.{ext}`) with 1-year cache headers
 - **Sync concurrency**: Uses Promise.all with chunked batches to avoid overwhelming Hydrus
 - **Tag search**: Progressive filtering - only shows tags that co-occur with already-selected tags
+- **Semantic rerank**: Text semantic search reorders its retrieved window by blending the calibrated image cosine with a tag-embedding match score (`src/lib/embeddings/tag-rerank.ts`), when the tag vocabulary has been embedded (Admin → Embeddings → Tag Rerank). Without tag embeddings, and for image/post-seeded searches, ranking is image cosine alone.
 
 ## Deployment / Concurrency
 

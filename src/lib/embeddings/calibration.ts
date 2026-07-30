@@ -25,6 +25,7 @@
 import { prisma } from "@/lib/db";
 import { vectorType } from "@/lib/embeddings/store";
 import type { EmbeddingConfig } from "@/lib/embeddings/settings";
+import type { TagEmbeddingConfig } from "@/lib/embeddings/tag-store";
 import { updateSettings } from "@/lib/openrouter/settings";
 import { SETTINGS_KEYS } from "@/lib/openrouter/types";
 import { aiLog } from "@/lib/logger";
@@ -125,16 +126,21 @@ function isCalibrationForConfig(
 }
 
 /**
- * The current durable invalidation generation (0 when never invalidated).
- * Tolerates a hand-corrupted value by treating it as 0.
+ * The current durable invalidation generation for a channel's generation key
+ * (0 when never invalidated). Tolerates a hand-corrupted value by treating
+ * it as 0.
  */
-async function readCalibrationGeneration(): Promise<number> {
+async function readGeneration(key: string): Promise<number> {
   const row = await prisma.settings.findUnique({
-    where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION },
+    where: { key },
     select: { value: true },
   });
   const parsed = row ? Number(row.value) : 0;
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function readCalibrationGeneration(): Promise<number> {
+  return readGeneration(SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION);
 }
 
 /**
@@ -209,10 +215,20 @@ export async function estimateEmbeddingBaseline(
  * value heals to 1.
  */
 export async function invalidateEmbeddingCalibration(): Promise<void> {
+  await bumpGenerationAndDropCalibration(
+    SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION,
+    SETTINGS_KEYS.EMBEDDING_CALIBRATION
+  );
+}
+
+async function bumpGenerationAndDropCalibration(
+  generationKey: string,
+  calibrationKey: string
+): Promise<void> {
   await prisma.$transaction([
     prisma.$executeRaw`
       INSERT INTO "Settings" ("key", "value", "updatedAt")
-      VALUES (${SETTINGS_KEYS.EMBEDDING_CALIBRATION_GENERATION}, '1', NOW())
+      VALUES (${generationKey}, '1', NOW())
       ON CONFLICT ("key") DO UPDATE SET
         "value" =
           (CASE WHEN "Settings"."value" ~ '^[0-9]+$'
@@ -221,7 +237,7 @@ export async function invalidateEmbeddingCalibration(): Promise<void> {
         "updatedAt" = NOW()
     `,
     prisma.settings.deleteMany({
-      where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+      where: { key: calibrationKey },
     }),
   ]);
 }
@@ -295,6 +311,169 @@ export async function getEmbeddingBaseline(config: EmbeddingConfig): Promise<num
     aiLog.error(
       { error: error instanceof Error ? error.message : String(error) },
       "Embedding calibration unavailable; using identity rescale"
+    );
+    return 0;
+  }
+}
+
+// ============================================================
+// Tag (text) channel
+//
+// The tag-embedding channel used for semantic-search reranking has the same
+// anisotropy problem as the image channel but its own distribution: random
+// TAG pairs crowd differently than random IMAGE pairs, so it carries its own
+// baseline, cache key, and invalidation generation. Identity (baseUrl, model,
+// dimensions) — tag embeddings have no image resolution axis.
+// ============================================================
+
+export interface TagEmbeddingCalibration {
+  baseline: number;
+  sampleSize: number;
+  computedAt: string;
+  generation: number;
+  baseUrl: string;
+  model: string;
+  dimensions: number;
+}
+
+function isTagCalibrationForConfig(
+  value: unknown,
+  config: TagEmbeddingConfig,
+  generation: number
+): value is TagEmbeddingCalibration {
+  if (typeof value !== "object" || value === null) return false;
+  const cal = value as Partial<TagEmbeddingCalibration>;
+  return (
+    typeof cal.baseline === "number" &&
+    Number.isFinite(cal.baseline) &&
+    cal.baseline >= 0 &&
+    cal.baseline <= MAX_BASELINE &&
+    typeof cal.sampleSize === "number" &&
+    cal.sampleSize >= CALIBRATION_SAMPLE_SIZE &&
+    cal.generation === generation &&
+    cal.baseUrl === config.baseUrl &&
+    cal.model === config.model &&
+    cal.dimensions === config.dimensions
+  );
+}
+
+/**
+ * Estimate the random-pair similarity baseline of the TAG embedding store.
+ * Same estimator as {@link estimateEmbeddingBaseline}, sampled from
+ * TagEmbedding instead of PostEmbedding.
+ */
+export async function estimateTagEmbeddingBaseline(
+  config: TagEmbeddingConfig
+): Promise<{ baseline: number; sampleSize: number } | null> {
+  const vectorTypeSql = vectorType(config.dimensions);
+
+  const rows = await prisma.$queryRaw<
+    { baseline: number | null; sample_size: bigint | number }[]
+  >`
+    WITH sample AS (
+      SELECT s.embedding::${vectorTypeSql} AS emb,
+             row_number() OVER () AS rn
+      FROM (
+        SELECT te.embedding
+        FROM "TagEmbedding" te
+        WHERE te."baseUrl" = ${config.baseUrl}
+          AND te.model = ${config.model}
+          AND te.dimensions = ${config.dimensions}
+          AND te.status = 'COMPLETE'::"EmbeddingStatus"
+          AND te.embedding IS NOT NULL
+        ORDER BY md5(te.id::text)
+        LIMIT ${CALIBRATION_SAMPLE_SIZE}
+      ) s
+    )
+    SELECT
+      percentile_cont(${CALIBRATION_PERCENTILE}) WITHIN GROUP (
+        ORDER BY 1 - (a.emb <=> b.emb)
+      )::float8 AS baseline,
+      (SELECT count(*) FROM sample)::int AS sample_size
+    FROM sample a
+    JOIN sample b ON a.rn < b.rn
+  `;
+
+  const row = rows[0];
+  const sampleSize = Number(row?.sample_size ?? 0);
+  if (!row || row.baseline === null || sampleSize < MIN_CALIBRATION_SAMPLE) {
+    return null;
+  }
+
+  return {
+    baseline: Math.max(0, Math.min(MAX_BASELINE, row.baseline)),
+    sampleSize,
+  };
+}
+
+/**
+ * Drop the persisted tag-channel baseline and advance its durable
+ * invalidation generation. Call when the tag embedding store for the active
+ * config is cleared or a tag batch settles — same rationale and racing-write
+ * fence as {@link invalidateEmbeddingCalibration}.
+ */
+export async function invalidateTagEmbeddingCalibration(): Promise<void> {
+  await bumpGenerationAndDropCalibration(
+    SETTINGS_KEYS.EMBEDDING_TAG_CALIBRATION_GENERATION,
+    SETTINGS_KEYS.EMBEDDING_TAG_CALIBRATION
+  );
+}
+
+/**
+ * The tag-channel calibration baseline: cached in Settings, estimated (and
+ * persisted, full samples only) on miss, 0 when the tag store is too small —
+ * mirroring {@link getEmbeddingBaseline}'s generation-fenced protocol.
+ */
+export async function getTagEmbeddingBaseline(config: TagEmbeddingConfig): Promise<number> {
+  try {
+    const generationAtStart = await readGeneration(SETTINGS_KEYS.EMBEDDING_TAG_CALIBRATION_GENERATION);
+    const row = await prisma.settings.findUnique({
+      where: { key: SETTINGS_KEYS.EMBEDDING_TAG_CALIBRATION },
+      select: { value: true },
+    });
+    if (row) {
+      try {
+        const parsed: unknown = JSON.parse(row.value);
+        if (isTagCalibrationForConfig(parsed, config, generationAtStart)) {
+          return parsed.baseline;
+        }
+      } catch {
+        // Corrupt JSON: fall through to re-estimation, which overwrites it.
+      }
+    }
+
+    const estimate = await estimateTagEmbeddingBaseline(config);
+    if (!estimate) return 0;
+
+    const calibration: TagEmbeddingCalibration = {
+      ...estimate,
+      computedAt: new Date().toISOString(),
+      generation: generationAtStart,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      dimensions: config.dimensions,
+    };
+    if (estimate.sampleSize >= CALIBRATION_SAMPLE_SIZE) {
+      try {
+        await updateSettings({
+          [SETTINGS_KEYS.EMBEDDING_TAG_CALIBRATION]: JSON.stringify(calibration),
+        });
+      } catch (error) {
+        aiLog.error(
+          { error: error instanceof Error ? error.message : String(error) },
+          "Failed to persist tag embedding calibration; continuing with estimate"
+        );
+      }
+    }
+    aiLog.info(
+      { baseline: calibration.baseline, sampleSize: calibration.sampleSize, model: config.model },
+      "Estimated tag embedding calibration baseline"
+    );
+    return calibration.baseline;
+  } catch (error) {
+    aiLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Tag embedding calibration unavailable; using identity rescale"
     );
     return 0;
   }

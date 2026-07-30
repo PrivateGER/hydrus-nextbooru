@@ -30,8 +30,11 @@ export interface UseEmbeddingsReturn {
   saveSettings: () => Promise<void>;
   computeMissing: () => Promise<void>;
   retryFailed: () => Promise<void>;
+  computeTags: () => Promise<void>;
+  retryFailedTags: () => Promise<void>;
   clearCurrent: () => Promise<void>;
   clearFailed: () => Promise<void>;
+  clearTags: () => Promise<void>;
 }
 
 export function useEmbeddings(
@@ -163,7 +166,7 @@ export function useEmbeddings(
     fetchStatus,
   ]);
 
-  const startBatch = useCallback(async (retryFailed: boolean) => {
+  const startBatch = useCallback(async (retryFailed: boolean, target: "images" | "tags" = "images") => {
     setIsComputing(true);
     setMessage(null);
 
@@ -171,7 +174,7 @@ export function useEmbeddings(
       const response = await fetch("/api/admin/embeddings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ retryFailed }),
+        body: JSON.stringify({ retryFailed, target }),
       });
 
       const data = await response.json();
@@ -179,7 +182,11 @@ export function useEmbeddings(
         throw new Error(data.error || "Failed to start embedding batch");
       }
 
-      setMessage({ type: "success", text: retryFailed ? "Retrying failed embeddings..." : "Computing image embeddings..." });
+      const subject = target === "tags" ? "tag" : "image";
+      setMessage({
+        type: "success",
+        text: retryFailed ? `Retrying failed ${subject} embeddings...` : `Computing ${subject} embeddings...`,
+      });
       startPolling();
     } catch (error) {
       setIsComputing(false);
@@ -221,6 +228,10 @@ export function useEmbeddings(
     await deleteEmbeddings({ clearFailed: true }, "Failed embeddings cleared.");
   }, [deleteEmbeddings]);
 
+  const clearTags = useCallback(async () => {
+    await deleteEmbeddings({ clearTags: true }, "Tag embeddings cleared.");
+  }, [deleteEmbeddings]);
+
   return {
     status,
     isSaving,
@@ -241,7 +252,10 @@ export function useEmbeddings(
     saveSettings,
     computeMissing: () => startBatch(false),
     retryFailed: () => startBatch(true),
+    computeTags: () => startBatch(false, "tags"),
+    retryFailedTags: () => startBatch(true, "tags"),
     clearCurrent,
     clearFailed,
+    clearTags,
   };
 }

@@ -5,3 +5,6 @@ export * from "./store";
 export * from "./query-cache";
 export * from "./image-query-cache";
 export * from "./vector";
+export * from "./tag-store";
+export * from "./tag-batch";
+export * from "./tag-rerank";

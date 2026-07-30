@@ -148,7 +148,8 @@ model Tag {
   postCount Int         @default(0)
   idfWeight Float       @default(0) // Pre-computed IDF weight: LN(total_posts / postCount)
 
-  posts PostTag[]
+  posts      PostTag[]
+  embeddings TagEmbedding[]
 
   @@unique([name, category])
   @@index([name])
@@ -355,6 +356,29 @@ model PostEmbedding {
   @@unique([postId, baseUrl, model, dimensions, imageMaxResolution], map: "PostEmbedding_config_key")
   @@index([postId])
   @@index([baseUrl, model, dimensions, imageMaxResolution, status], map: "PostEmbedding_config_status_idx")
+}
+
+// Text embeddings of the tag vocabulary, used to rerank semantic text search
+// results by how well a candidate's tags match the query. Keyed by tag +
+// text-embedding config (no imageMaxResolution — tags are text, so the same
+// row serves any image preprocessing setting). Distances are always computed
+// exactly over a bounded candidate set, so there is no ANN index.
+model TagEmbedding {
+  id           Int                    @id @default(autoincrement())
+  tagId        Int
+  tag          Tag                    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  baseUrl      String
+  model        String
+  dimensions   Int
+  embedding    Unsupported("vector")?
+  status       EmbeddingStatus        @default(COMPLETE)
+  errorMessage String?
+  computedAt   DateTime?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  @@unique([tagId, baseUrl, model, dimensions], map: "TagEmbedding_config_key")
+  @@index([baseUrl, model, dimensions, status], map: "TagEmbedding_config_status_idx")
 }
 
 // Caches query embeddings for semantic image search. Rows are keyed by a

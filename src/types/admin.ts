@@ -119,9 +119,17 @@ export interface EmbeddingBatchResult {
   failed: number;
 }
 
+export interface TagEmbeddingStats {
+  totalTags: number;
+  embedded: number;
+  failed: number;
+  pending: number;
+}
+
 export interface EmbeddingAdminStatus {
   settings: EmbeddingSettings;
   stats: EmbeddingStats;
+  tagStats: TagEmbeddingStats;
   batchRunning: boolean;
   batchProgress: { processed: number; total: number } | null;
   batchStatus: "idle" | "running" | "completed" | "failed";

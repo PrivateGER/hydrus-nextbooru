@@ -295,6 +295,13 @@ export async function searchPostsByEmbedding(options: {
   resultCap?: number;
   /** Exclude this post from the results (e.g. the source image when searching from an existing post). */
   excludePostId?: number;
+  /**
+   * Optional reorder of the ENTIRE floor-passing window before pagination
+   * (e.g. tag-embedding rerank). Must permute, not filter: totalCount and the
+   * page partition are computed from the window it receives, and every page
+   * of the same query must see the same order.
+   */
+  rerank?: (posts: SemanticPostResult[]) => Promise<SemanticPostResult[]>;
 }): Promise<{ posts: SemanticPostResult[]; totalCount: number }> {
   const { config, skip, limit } = options;
   if (!isSupportedEmbeddingDimensions(config.dimensions)) {
@@ -353,17 +360,21 @@ export async function searchPostsByEmbedding(options: {
   // Floor in JS (see normalizeEmbeddingMinScore): passing rows are a prefix
   // of the distance order, so filtering the fetched window is identical to
   // the old SQL prefilter for every page.
-  const passing =
+  const passing = (
     maxDistance === null
       ? rows
-      : rows.filter((row) => Number(row.distance) <= maxDistance);
+      : rows.filter((row) => Number(row.distance) <= maxDistance)
+  ).map((row) => ({
+    ...row,
+    distance: Number(row.distance),
+    score: 1 - Number(row.distance),
+  }));
+
+  const ordered =
+    options.rerank && passing.length > 1 ? await options.rerank(passing) : passing;
 
   return {
-    posts: passing.slice(skip, skip + limit).map((row) => ({
-      ...row,
-      distance: Number(row.distance),
-      score: 1 - Number(row.distance),
-    })),
+    posts: ordered.slice(skip, skip + limit),
     totalCount: passing.length,
   };
 }
