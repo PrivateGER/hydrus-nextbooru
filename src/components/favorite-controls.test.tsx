@@ -70,10 +70,22 @@ describe("favorite controls", () => {
     expect(mounted.querySelectorAll('button[aria-label="Add to favorites"]')).toHaveLength(2);
   });
 
-  it("keeps the compact overlay visible without hover for touch layouts", async () => {
+  it("keeps a low-emphasis 44px overlay visible for touch layouts", async () => {
     const mounted = await render(<FavoriteOverlayButton hash="post" initialFavorited={false} />);
     const button = mounted.querySelector("button");
 
     expect(button?.className).not.toContain("opacity-0");
+    expect(button?.className).toContain("h-11");
+    expect(button?.className).toContain("w-11");
+    expect(button?.className).toContain("opacity-60");
+    expect(button?.className).toContain("pointer-fine:h-7");
+  });
+
+  it("keeps the favorited touch state at full emphasis", async () => {
+    const mounted = await render(<FavoriteOverlayButton hash="post" initialFavorited />);
+    const button = mounted.querySelector("button");
+
+    expect(button?.className).toContain("opacity-100");
+    expect(button?.getAttribute("aria-pressed")).toBe("true");
   });
 });

@@ -76,7 +76,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
                   src={`/api/thumbnails/${post.hash}.webp?size=grid`}
                   alt=""
                   loading="lazy"
-                  className="h-10 w-10 object-cover"
+                  className="h-11 w-11 object-cover"
                 />
                 {post.mimeType.startsWith("video/") && (
                   <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-center text-white">
@@ -91,7 +91,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
               </Link>
             ))}
             {additionalPosts.length > 3 && (
-              <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-400 dark:bg-zinc-600 text-xs text-zinc-600 dark:text-zinc-400">
+              <div className="flex h-11 w-11 items-center justify-center rounded bg-zinc-400 dark:bg-zinc-600 text-xs text-zinc-600 dark:text-zinc-400">
                 +{additionalPosts.length - 3}
               </div>
             )}
