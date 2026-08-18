@@ -31,9 +31,9 @@ describe("favorite controls", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
     const mounted = await render(
       <>
-        <FavoriteButton hash="same" initialFavorited={false} />
-        <FavoriteOverlayButton hash="same" initialFavorited={false} />
-        <FavoriteOverlayButton hash="other" initialFavorited={false} />
+        <FavoriteButton hash="duplicate-sync" initialFavorited={false} />
+        <FavoriteOverlayButton hash="duplicate-sync" initialFavorited={false} />
+        <FavoriteOverlayButton hash="unrelated-sync" initialFavorited={false} />
       </>
     );
 
@@ -52,12 +52,60 @@ describe("favorite controls", () => {
     expect(buttons[2].getAttribute("aria-pressed")).toBe("false");
   });
 
+  it("blocks a second duplicate toggle while the first request is pending", async () => {
+    let resolveRequest: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const mounted = await render(
+      <>
+        <FavoriteButton hash="pending-sync" initialFavorited={false} />
+        <FavoriteOverlayButton hash="pending-sync" initialFavorited={false} />
+      </>
+    );
+    const buttons = mounted.querySelectorAll("button");
+
+    await act(async () => {
+      buttons[0].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      buttons[1].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(buttons[0].hasAttribute("disabled")).toBe(true);
+    expect(buttons[1].hasAttribute("disabled")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveRequest?.(new Response(null, { status: 200 })));
+  });
+
+  it("restores the latest state when a duplicate control mounts later", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    const mounted = await render(
+      <FavoriteOverlayButton key="first" hash="later-mount" initialFavorited={false} />
+    );
+
+    await act(async () => {
+      mounted
+        .querySelector("button")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      root?.render(
+        <FavoriteOverlayButton key="replacement" hash="later-mount" initialFavorited={false} />
+      );
+    });
+
+    expect(mounted.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("synchronizes the rollback when the request fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
     const mounted = await render(
       <>
-        <FavoriteOverlayButton hash="same" initialFavorited={false} />
-        <FavoriteOverlayButton hash="same" initialFavorited={false} />
+        <FavoriteOverlayButton hash="rollback-sync" initialFavorited={false} />
+        <FavoriteOverlayButton hash="rollback-sync" initialFavorited={false} />
       </>
     );
 
@@ -78,7 +126,7 @@ describe("favorite controls", () => {
     expect(button?.className).toContain("h-11");
     expect(button?.className).toContain("w-11");
     expect(button?.className).toContain("opacity-60");
-    expect(button?.className).toContain("pointer-fine:h-7");
+    expect(button?.className).toContain("not-any-pointer-coarse:pointer-fine:h-7");
   });
 
   it("keeps the favorited touch state at full emphasis", async () => {

@@ -1,15 +1,28 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const FAVORITE_STATE_CHANGED_EVENT = "nextbooru:favoriteStateChanged";
 
 interface FavoriteStateChangedDetail {
   hash: string;
   favorited: boolean;
+  pending: boolean;
+}
+
+const latestFavoriteStates = new Map<string, boolean>();
+const pendingFavoriteHashes = new Set<string>();
+
+function getLatestFavoriteState(hash: string, fallback: boolean) {
+  if (typeof window === "undefined") return fallback;
+  return latestFavoriteStates.get(hash) ?? fallback;
 }
 
 function broadcastFavoriteState(detail: FavoriteStateChangedDetail) {
+  latestFavoriteStates.set(detail.hash, detail.favorited);
+  if (detail.pending) pendingFavoriteHashes.add(detail.hash);
+  else pendingFavoriteHashes.delete(detail.hash);
+
   window.dispatchEvent(
     new CustomEvent<FavoriteStateChangedDetail>(FAVORITE_STATE_CHANGED_EVENT, { detail })
   );
@@ -21,35 +34,30 @@ function broadcastFavoriteState(detail: FavoriteStateChangedDetail) {
  *
  * - Optimistically flips state, then PUT/DELETEs `/api/posts/{hash}/favorite`.
  * - Rolls back on a non-ok response or a thrown error.
- * - Ignores clicks while a request is in flight (`pending`).
+ * - Serializes requests per hash so duplicate controls cannot race.
  * - Stops event propagation/default so it is safe inside a <Link>/<summary>.
  * - Resyncs to `initialFavorited` when the prop changes without a remount
  *   (e.g. client-side pagination reuses the component) by adjusting state
  *   during render (https://react.dev/learn/you-might-not-need-an-effect).
- * - Broadcasts optimistic updates and rollbacks so duplicate thumbnails for
- *   the same post stay visually synchronized on the current page.
- * - Guards every post-await setState behind a mounted ref so a fetch that
- *   resolves after unmount cannot update state.
+ * - Caches and broadcasts optimistic updates, pending state, and rollbacks so
+ *   duplicate thumbnails stay synchronized even when they mount later.
  *
  * @param hash - post hash the toggle acts on
  * @param initialFavorited - server-rendered favorite state
  */
 export function useFavoriteToggle(hash: string, initialFavorited: boolean) {
-  const [favorited, setFavorited] = useState(initialFavorited);
-  const [pending, setPending] = useState(false);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const [favorited, setFavorited] = useState(() =>
+    getLatestFavoriteState(hash, initialFavorited)
+  );
+  const [pending, setPending] = useState(() => pendingFavoriteHashes.has(hash));
 
   useEffect(() => {
     const syncFavoriteState = (event: Event) => {
       const { detail } = event as CustomEvent<FavoriteStateChangedDetail>;
-      if (detail.hash === hash) setFavorited(detail.favorited);
+      if (detail.hash === hash) {
+        setFavorited(detail.favorited);
+        setPending(detail.pending);
+      }
     };
 
     window.addEventListener(FAVORITE_STATE_CHANGED_EVENT, syncFavoriteState);
@@ -57,34 +65,31 @@ export function useFavoriteToggle(hash: string, initialFavorited: boolean) {
   }, [hash]);
 
   // Prop can change without remount (e.g. client-side pagination) — resync.
-  const [prevInitialFavorited, setPrevInitialFavorited] = useState(initialFavorited);
-  if (prevInitialFavorited !== initialFavorited) {
-    setPrevInitialFavorited(initialFavorited);
-    setFavorited(initialFavorited);
+  const [prevSource, setPrevSource] = useState({ hash, initialFavorited });
+  if (prevSource.hash !== hash || prevSource.initialFavorited !== initialFavorited) {
+    setPrevSource({ hash, initialFavorited });
+    setFavorited(getLatestFavoriteState(hash, initialFavorited));
+    setPending(pendingFavoriteHashes.has(hash));
   }
 
   const toggle = async (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (pending) return;
+    if (pendingFavoriteHashes.has(hash)) return;
 
     const next = !favorited;
-    setFavorited(next);
-    broadcastFavoriteState({ hash, favorited: next });
-    setPending(true);
+    broadcastFavoriteState({ hash, favorited: next, pending: true });
     try {
       const response = await fetch(`/api/posts/${hash}/favorite`, {
         method: next ? "PUT" : "DELETE",
       });
       if (!response.ok) {
-        if (mountedRef.current) setFavorited(!next);
-        broadcastFavoriteState({ hash, favorited: !next });
+        broadcastFavoriteState({ hash, favorited: !next, pending: false });
+      } else {
+        broadcastFavoriteState({ hash, favorited: next, pending: false });
       }
     } catch {
-      if (mountedRef.current) setFavorited(!next);
-      broadcastFavoriteState({ hash, favorited: !next });
-    } finally {
-      if (mountedRef.current) setPending(false);
+      broadcastFavoriteState({ hash, favorited: !next, pending: false });
     }
   };
 
