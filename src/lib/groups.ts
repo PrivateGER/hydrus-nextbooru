@@ -42,6 +42,9 @@ export interface MergedGroup {
       hash: string;
       width: number | null;
       height: number | null;
+      blurhash: string | null;
+      mimeType: string;
+      favorited: boolean;
     };
   }>;
 }
@@ -497,6 +500,9 @@ export async function searchGroups(
     hash: string;
     width: number | null;
     height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+    favorited: boolean;
   }>> = representativeGroupIds.length > 0 ? prisma.$queryRaw<{
     postId: number;
     groupId: number;
@@ -505,6 +511,9 @@ export async function searchGroups(
     hash: string;
     width: number | null;
     height: number | null;
+    blurhash: string | null;
+    mimeType: string;
+    favorited: boolean;
   }[]>`
     WITH ranked_group_posts AS (
       SELECT
@@ -515,6 +524,9 @@ export async function searchGroups(
         p.hash,
         p.width,
         p.height,
+        p.blurhash,
+        p."mimeType",
+        EXISTS (SELECT 1 FROM "Favorite" f WHERE f."postId" = p.id) AS favorited,
         ROW_NUMBER() OVER (PARTITION BY pg."groupId" ORDER BY pg.position ASC, pg."postId" ASC) AS row_number
       FROM "PostGroup" pg
       JOIN "Post" p ON p.id = pg."postId"
@@ -527,7 +539,10 @@ export async function searchGroups(
       id,
       hash,
       width,
-      height
+      height,
+      blurhash,
+      "mimeType",
+      favorited
     FROM ranked_group_posts
     WHERE row_number <= ${GROUP_PREVIEW_POST_LIMIT}
     ORDER BY "groupId" ASC, position ASC, "postId" ASC
@@ -566,6 +581,9 @@ export async function searchGroups(
       hash: row.hash,
       width: row.width,
       height: row.height,
+      blurhash: row.blurhash,
+      mimeType: row.mimeType,
+      favorited: row.favorited,
     },
   }));
 

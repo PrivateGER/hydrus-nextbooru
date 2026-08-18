@@ -3,9 +3,11 @@
 import Link from "next/link";
 import DOMPurify from "isomorphic-dompurify";
 import type { PostSummary } from "@/types/post";
+import { FavoriteOverlayButton } from "@/components/favorite-overlay-button";
 
 interface Post extends PostSummary {
   id: number;
+  favorited: boolean;
 }
 
 interface NoteSearchResultProps {
@@ -58,6 +60,7 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
               {isVideo ? "VIDEO" : "GIF"}
             </span>
           )}
+          <FavoriteOverlayButton hash={primaryPost.hash} initialFavorited={primaryPost.favorited} />
         </Link>
 
         {/* Additional thumbnails strip */}
@@ -80,6 +83,11 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
                     VID
                   </span>
                 )}
+                <FavoriteOverlayButton
+                  hash={post.hash}
+                  initialFavorited={post.favorited}
+                  size="compact"
+                />
               </Link>
             ))}
             {additionalPosts.length > 3 && (

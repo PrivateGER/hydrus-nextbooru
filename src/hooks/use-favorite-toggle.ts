@@ -2,6 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 
+const FAVORITE_STATE_CHANGED_EVENT = "nextbooru:favoriteStateChanged";
+
+interface FavoriteStateChangedDetail {
+  hash: string;
+  favorited: boolean;
+}
+
+function broadcastFavoriteState(detail: FavoriteStateChangedDetail) {
+  window.dispatchEvent(
+    new CustomEvent<FavoriteStateChangedDetail>(FAVORITE_STATE_CHANGED_EVENT, { detail })
+  );
+}
+
 /**
  * Optimistic favorite toggle shared by the standalone FavoriteButton and the
  * PostCard heart overlay.
@@ -13,6 +26,8 @@ import { useEffect, useRef, useState } from "react";
  * - Resyncs to `initialFavorited` when the prop changes without a remount
  *   (e.g. client-side pagination reuses the component) by adjusting state
  *   during render (https://react.dev/learn/you-might-not-need-an-effect).
+ * - Broadcasts optimistic updates and rollbacks so duplicate thumbnails for
+ *   the same post stay visually synchronized on the current page.
  * - Guards every post-await setState behind a mounted ref so a fetch that
  *   resolves after unmount cannot update state.
  *
@@ -31,6 +46,16 @@ export function useFavoriteToggle(hash: string, initialFavorited: boolean) {
     };
   }, []);
 
+  useEffect(() => {
+    const syncFavoriteState = (event: Event) => {
+      const { detail } = event as CustomEvent<FavoriteStateChangedDetail>;
+      if (detail.hash === hash) setFavorited(detail.favorited);
+    };
+
+    window.addEventListener(FAVORITE_STATE_CHANGED_EVENT, syncFavoriteState);
+    return () => window.removeEventListener(FAVORITE_STATE_CHANGED_EVENT, syncFavoriteState);
+  }, [hash]);
+
   // Prop can change without remount (e.g. client-side pagination) — resync.
   const [prevInitialFavorited, setPrevInitialFavorited] = useState(initialFavorited);
   if (prevInitialFavorited !== initialFavorited) {
@@ -45,14 +70,19 @@ export function useFavoriteToggle(hash: string, initialFavorited: boolean) {
 
     const next = !favorited;
     setFavorited(next);
+    broadcastFavoriteState({ hash, favorited: next });
     setPending(true);
     try {
       const response = await fetch(`/api/posts/${hash}/favorite`, {
         method: next ? "PUT" : "DELETE",
       });
-      if (!response.ok && mountedRef.current) setFavorited(!next);
+      if (!response.ok) {
+        if (mountedRef.current) setFavorited(!next);
+        broadcastFavoriteState({ hash, favorited: !next });
+      }
     } catch {
       if (mountedRef.current) setFavorited(!next);
+      broadcastFavoriteState({ hash, favorited: !next });
     } finally {
       if (mountedRef.current) setPending(false);
     }

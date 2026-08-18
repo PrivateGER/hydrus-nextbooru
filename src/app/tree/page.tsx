@@ -13,6 +13,7 @@ interface Post {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  favorited: boolean;
 }
 
 interface PostsResponse {

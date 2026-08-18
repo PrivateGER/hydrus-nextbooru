@@ -57,9 +57,7 @@ vi.mock("@/lib/search", () => ({
 }));
 
 vi.mock("@/lib/favorites", () => ({
-  mergeFavoritedState: vi.fn(async (posts: { id: number }[]) =>
-    posts.map((post) => ({ ...post, favorited: false })),
-  ),
+  getFavoritedPostIdSet: vi.fn(async () => new Set<number>()),
 }));
 
 import SearchPage from "./page";

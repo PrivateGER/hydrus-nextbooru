@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   prepareImageQueryEmbedding: vi.fn(),
   searchSemanticPostsByImageHash: vi.fn(),
   checkApiRateLimit: vi.fn(),
+  mergeFavoritedState: vi.fn(),
 }));
 
 vi.mock("@/lib/search", () => ({
@@ -16,6 +17,10 @@ vi.mock("@/lib/search", () => ({
 
 vi.mock("@/lib/rate-limit", () => ({
   checkApiRateLimit: mocks.checkApiRateLimit,
+}));
+
+vi.mock("@/lib/favorites", () => ({
+  mergeFavoritedState: mocks.mergeFavoritedState,
 }));
 
 vi.mock("@/lib/embeddings/image", () => ({
@@ -42,6 +47,9 @@ function formWithFile(bytes: Uint8Array, type: string, name = "q.png"): FormData
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.checkApiRateLimit.mockReturnValue(null);
+  mocks.mergeFavoritedState.mockImplementation(async (posts: Array<Record<string, unknown>>) =>
+    posts.map((post: object) => ({ ...post, favorited: false }))
+  );
   mocks.prepareImageQueryEmbedding.mockResolvedValue({ imageHash: VALID_HASH });
   mocks.searchSemanticPostsByImageHash.mockResolvedValue({
     posts: [],
@@ -138,6 +146,8 @@ describe("GET /api/posts/semantic-search/image", () => {
     const data = await res.json();
     expect(data.totalCount).toBe(1);
     expect(data.posts).toHaveLength(1);
+    expect(data.posts[0].favorited).toBe(false);
+    expect(mocks.mergeFavoritedState).toHaveBeenCalledTimes(1);
   });
 
   it("passes over-limit pages through so the search helper can reject them", async () => {
