@@ -328,6 +328,23 @@ describe("fitTasteModel", () => {
 });
 
 describe("allocateAcrossClusters", () => {
+  it("skips items sharing a taken dedupe key and fills the slot with the next candidate", () => {
+    // Cluster A's second item is a perceptual duplicate of its first; cluster
+    // B's first item duplicates A's first. Both are skipped in place, so the
+    // page still fills to 4 from ranked successors.
+    const allocated = allocateAcrossClusters(
+      new Map([
+        [0, items(1, 4)],
+        [1, items(10, 4)],
+      ]),
+      new Map([[0, 1], [1, 1]]),
+      new Map(),
+      { pageSize: 4, pageCount: 1, floorShare: 0 },
+      new Map([[1, "same"], [2, "same"], [10, "same"]])
+    );
+    expect(allocated.map(({ item }) => item.id)).toEqual([1, 11, 3, 12]);
+  });
+
   it("uses proportional quotas that sum to the page size on every page", () => {
     const allocated = allocateAcrossClusters(
       new Map([

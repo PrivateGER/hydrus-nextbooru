@@ -308,13 +308,39 @@ export function dedupeRankedByGroup(
   return result;
 }
 
+/**
+ * Perceptual identity: identical blurhash at identical pixel dimensions
+ * renders as the same thumbnail even across re-encodes with different hashes
+ * and groups. Null when the post has no blurhash.
+ */
+export function perceptualKey(post: {
+  blurhash: string | null;
+  width: number | null;
+  height: number | null;
+}): string | null {
+  return post.blurhash
+    ? `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`
+    : null;
+}
+
+export function perceptualKeyByPostId(
+  posts: readonly { id: number; blurhash: string | null; width: number | null; height: number | null }[]
+): Map<number, string> {
+  const keys = new Map<number, string>();
+  for (const post of posts) {
+    const key = perceptualKey(post);
+    if (key) keys.set(post.id, key);
+  }
+  return keys;
+}
+
 /** Collapse perceptual near-duplicates in ranked order. */
 export function dedupeRankedByBlurhash(posts: FeedPost[]): FeedPost[] {
   const seenKeys = new Set<string>();
   const result: FeedPost[] = [];
   for (const post of posts) {
-    if (post.blurhash) {
-      const key = `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`;
+    const key = perceptualKey(post);
+    if (key) {
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
     }
@@ -571,9 +597,8 @@ async function buildFeedUnsafe(
     },
     select: { postId: true },
   });
-  const { config: embeddingConfig, failed: embeddingConfigFailed } =
-    await resolveEmbeddingConfig();
-  const excludedGroupSiblings = await excludedGroupSiblingsPromise;
+  const [{ config: embeddingConfig, failed: embeddingConfigFailed }, excludedGroupSiblings] =
+    await Promise.all([resolveEmbeddingConfig(), excludedGroupSiblingsPromise]);
   const excluded = new Set<number>([
     ...favorites.map((favorite) => favorite.postId),
     ...dismissedIds,
@@ -815,12 +840,11 @@ async function buildFeedUnsafe(
         pageSize: config.pageSize,
         pageCount: config.pageCount,
         floorShare: config.floorShare,
-      }
+      },
+      perceptualKeyByPostId(postRows)
     );
     return {
-      feed: dedupeRankedByBlurhash(
-        allocated.map(({ item }) => item)
-      ).slice(0, config.maxFeedSize),
+      feed: allocated.map(({ item }) => item).slice(0, config.maxFeedSize),
       degraded: false,
     };
 }
@@ -930,6 +954,15 @@ export function invalidateFeedCache(): void {
 export function clearFeedCache(): void {
   invalidateFeedCache();
   feedCache().entry = null;
+  clearTasteCaches();
+}
+
+/**
+ * Drop the cached member vectors and centroids. Required whenever stored
+ * embeddings under the active config are deleted or replaced; the vector
+ * cache otherwise treats a post as embedded for as long as its id is present.
+ */
+export function clearTasteCaches(): void {
   globalForTaste.__feedVectors = undefined;
   globalForTaste.__feedCentroids = undefined;
 }

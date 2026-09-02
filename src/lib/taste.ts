@@ -308,11 +308,18 @@ export interface AllocationConfig {
   floorShare: number;
 }
 
+/**
+ * `dedupeKeyByPostId` (optional) marks items that must not co-occur, e.g. a
+ * perceptual key; the first taken item claims the key, later holders are
+ * skipped like group siblings. Deduping here rather than after allocation
+ * keeps every page full: a skipped item's slot goes to the next candidate.
+ */
 export function allocateAcrossClusters<T extends { id: number }>(
   rankedByCluster: ReadonlyMap<number, readonly T[]>,
   massByCluster: ReadonlyMap<number, number>,
   groupIdsByPostId: ReadonlyMap<number, number[]>,
   config: AllocationConfig,
+  dedupeKeyByPostId: ReadonlyMap<number, string> = new Map(),
 ): { item: T; cluster: number }[] {
   const pageSize = Math.max(0, Math.floor(config.pageSize));
   const pageCount = Math.max(0, Math.floor(config.pageCount));
@@ -386,6 +393,7 @@ export function allocateAcrossClusters<T extends { id: number }>(
   const cursors = new Map<number, number>();
   const takenIds = new Set<number>();
   const takenGroups = new Set<number>();
+  const takenKeys = new Set<string>();
   const result: { item: T; cluster: number }[] = [];
   const takeNext = (cluster: number): T | undefined => {
     const ranked = rankedByCluster.get(cluster) ?? [];
@@ -407,8 +415,15 @@ export function allocateAcrossClusters<T extends { id: number }>(
       if (overlapsTakenGroup) {
         continue;
       }
+      const dedupeKey = dedupeKeyByPostId.get(item.id);
+      if (dedupeKey !== undefined && takenKeys.has(dedupeKey)) {
+        continue;
+      }
       cursors.set(cluster, cursor);
       takenIds.add(item.id);
+      if (dedupeKey !== undefined) {
+        takenKeys.add(dedupeKey);
+      }
       for (let index = 0; index < groupIds.length; index += 1) {
         takenGroups.add(groupIds[index]);
       }

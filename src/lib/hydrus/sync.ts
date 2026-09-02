@@ -1345,11 +1345,11 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     progress.phase = "complete";
 
     const totalPosts = await updateTotalPostCount();
-    // Recalculate tag post counts for efficient sorting.
-    const tagStatsUpdate = await recalculateTagCounts();
-    if (tagStatsUpdate.idfWeightUpdates > 0 || tagStatsUpdate.tagIdfNormUpdates > 0) {
-      await bumpTagStatsGeneration();
-    }
+    await recalculateTagCounts();
+    // Every sync advances the generation: relation-only changes (group
+    // membership) also reshape neighborhoods, and per-post invalidation
+    // cannot see them.
+    await bumpTagStatsGeneration();
     // Keep the material-drift full wipe as a space-reclamation policy.
     await invalidateRecommendationsIfNeeded(totalPosts);
     try {

@@ -260,9 +260,7 @@ describe("recommendations", () => {
     expect(postRecommendation.deleteMany).toHaveBeenCalledWith({
       where: { postId: { in: [5, 8, 12] } },
     });
-    expect(postRecommendation.deleteMany).not.toHaveBeenCalledWith({
-      where: { postId: { in: expect.arrayContaining([99]) } },
-    });
+    expect(postRecommendation.deleteMany).toHaveBeenCalledTimes(1);
 
     await invalidateAllRecommendations(client);
     expect(postRecommendation.deleteMany).toHaveBeenLastCalledWith();

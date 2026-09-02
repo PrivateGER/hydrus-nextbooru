@@ -12,7 +12,7 @@ import {
 } from "@/lib/embeddings";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
-import { invalidateFeedCache } from "@/lib/feed";
+import { clearTasteCaches, invalidateFeedCache } from "@/lib/feed";
 import { invalidateEmbeddingCalibration } from "@/lib/embeddings/calibration";
 import { createBatchRunner } from "@/lib/batch-runner";
 
@@ -168,6 +168,7 @@ export async function DELETE(request: NextRequest) {
       // was just wiped; a rebuild under the same config must re-estimate
       // rather than inherit it.
       await invalidateEmbeddingCalibration();
+      clearTasteCaches();
       invalidateFeedCache();
       return NextResponse.json({ message: `Deleted ${count} embeddings`, count });
     }

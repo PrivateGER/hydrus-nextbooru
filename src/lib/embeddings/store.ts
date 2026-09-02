@@ -542,8 +542,8 @@ export async function getMaxSimilarityToReferences(options: {
     referenceChunks.push(options.referenceIds.slice(index, index + 200));
   }
 
-  const chunkRows = await Promise.all(
-    candidateChunks.flatMap((candidateIds) =>
+  for (const candidateIds of candidateChunks) {
+    const chunkRows = await Promise.all(
       referenceChunks.map((referenceIds) =>
         prisma.$queryRaw<{ postId: number; similarity: number }[]>`
           SELECT
@@ -575,16 +575,15 @@ export async function getMaxSimilarityToReferences(options: {
           GROUP BY candidate.id
         `
       )
-    )
-  );
-
-  for (const rows of chunkRows) {
-    for (const row of rows) {
-      const postId = Number(row.postId);
-      const similarity = Number(row.similarity);
-      const current = similarities.get(postId);
-      if (current === undefined || similarity > current) {
-        similarities.set(postId, similarity);
+    );
+    for (const rows of chunkRows) {
+      for (const row of rows) {
+        const postId = Number(row.postId);
+        const similarity = Number(row.similarity);
+        const current = similarities.get(postId);
+        if (current === undefined || similarity > current) {
+          similarities.set(postId, similarity);
+        }
       }
     }
   }
