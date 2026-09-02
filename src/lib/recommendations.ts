@@ -3,9 +3,8 @@ import { prisma } from "@/lib/db";
 import { postCardSelect } from "@/lib/post-select";
 import type { PostSummary } from "@/types/post";
 
-// Cache TTL: 24 hours in milliseconds
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_RECOMMENDATION_LIMIT = 20;
+export const TAG_STATS_GENERATION_SETTINGS_KEY = "recommendations.tagStatsGeneration";
 
 /**
  * Cap on how many of a source post's retained tags feed the final cosine
@@ -68,30 +67,88 @@ export interface RecommendedPost extends PostSummary {
 }
 
 type RecommendationClient = Pick<typeof prisma, "postRecommendation">;
+type RecommendationGenerationClient = Pick<typeof prisma, "settings" | "$executeRaw">;
 
 /**
  * In-flight computation coalescing map (single-process only).
  *
- * On a stale-cache miss, multiple concurrent requests for the SAME postId would
- * otherwise each run their own deleteMany+createMany. Even though each write is
- * wrapped in a transaction, running several of them back-to-back means a later
- * request can DELETE rows a concurrent reader is about to read, producing a
- * transient EMPTY-result window.
+ * A stale-generation cache miss can otherwise make multiple concurrent requests
+ * for the same postId each run deleteMany+createMany. A later writer could erase
+ * rows a concurrent reader is about to read, producing a transient empty result.
  *
- * Keying an in-flight promise by postId guarantees exactly one computation runs
- * at a time per postId; concurrent callers await the same promise. The entry is
- * always removed in a finally so a failed (rejected) computation never poisons
- * the key.
+ * Keying an in-flight promise by postId guarantees one computation at a time per
+ * postId; concurrent callers await it. The entry is always removed in finally
+ * so a rejected computation never poisons the key.
  *
- * This is a per-process Map: under a multi-worker / multi-replica deployment the
- * coalescing does NOT span processes (see the Deployment / Concurrency note in
- * CLAUDE.md). The DB writes remain transactional and safe regardless.
+ * This is a per-process Map: under multi-worker / multi-replica deployment the
+ * coalescing does NOT span processes. The durable tag-statistics generation
+ * fence still prevents an older computation from persisting stale scores.
+ *
+ * Keys are `${generation}:${postId}`: a caller that already read generation
+ * G+1 must not join a computation started under G — its result is stale for
+ * that caller even though the fence stops it from being persisted.
  */
-const inFlightComputations = new Map<number, Promise<RecommendedPost[]>>();
+const inFlightComputations = new Map<string, Promise<RecommendedPost[]>>();
+
+function inFlightKey(generation: number, postId: number): string {
+  return `${generation}:${postId}`;
+}
 
 function clampRecommendationLimit(limit: number): number {
   if (!Number.isFinite(limit)) return 10;
   return Math.min(MAX_RECOMMENDATION_LIMIT, Math.max(1, Math.floor(limit)));
+}
+
+/**
+ * Read the durable tag-statistics generation. Missing or corrupted settings
+ * fall back to the initial generation.
+ */
+export async function readTagStatsGeneration(
+  client: RecommendationGenerationClient = prisma
+): Promise<number> {
+  const row = await client.settings.findUnique({
+    where: { key: TAG_STATS_GENERATION_SETTINGS_KEY },
+    select: { value: true },
+  });
+  const generation = row ? Number(row.value) : 0;
+  return Number.isSafeInteger(generation) && generation >= 0 ? generation : 0;
+}
+
+/**
+ * Read and share-lock the generation row until the surrounding transaction
+ * commits, preventing a bump from interleaving with this cache write. A missing
+ * row behaves as generation zero; a concurrent first bump leaves any newer rows
+ * protected by the generation-qualified delete.
+ */
+async function readTagStatsGenerationForShare(
+  client: Pick<typeof prisma, "$queryRaw">
+): Promise<number> {
+  const rows = await client.$queryRaw<{ value: string }[]>`
+    SELECT "value" FROM "Settings"
+    WHERE "key" = ${TAG_STATS_GENERATION_SETTINGS_KEY}
+    FOR SHARE
+  `;
+  const generation = rows[0] ? Number(rows[0].value) : 0;
+  return Number.isSafeInteger(generation) && generation >= 0 ? generation : 0;
+}
+
+/**
+ * Advance the durable tag-statistics generation with one atomic upsert.
+ * A corrupted stored value heals to the first invalidated generation.
+ */
+export async function bumpTagStatsGeneration(
+  client: RecommendationGenerationClient = prisma
+): Promise<void> {
+  await client.$executeRaw`
+    INSERT INTO "Settings" ("key", "value", "updatedAt")
+    VALUES (${TAG_STATS_GENERATION_SETTINGS_KEY}, '1', NOW())
+    ON CONFLICT ("key") DO UPDATE SET
+      "value" =
+        (CASE WHEN "Settings"."value" ~ '^[0-9]+$'
+              THEN "Settings"."value"::bigint + 1
+              ELSE 1 END)::text,
+      "updatedAt" = NOW()
+  `;
 }
 
 function mapRecommendation(rec: {
@@ -112,8 +169,8 @@ function mapRecommendation(rec: {
 /**
  * Get or compute recommendations for a post (JIT with caching).
  *
- * - If cached recommendations exist and are fresh (< 24h), returns cached
- * - Otherwise, computes recommendations on-demand and caches them
+ * - If cached recommendations match the current tag-statistics generation, returns cached
+ * - Otherwise, computes recommendations on-demand and caches them when the generation holds
  *
  * @param postId - The post ID to get recommendations for
  * @param limit - Max number of recommendations to return (default: 10)
@@ -124,6 +181,7 @@ export async function getOrComputeRecommendations(
   limit = 10
 ): Promise<RecommendedPost[]> {
   const clampedLimit = clampRecommendationLimit(limit);
+  const generation = await readTagStatsGeneration();
 
   // Check for cached recommendations
   const cached = await prisma.postRecommendation.findMany({
@@ -137,30 +195,26 @@ export async function getOrComputeRecommendations(
     take: MAX_RECOMMENDATION_LIMIT,
   });
 
-  // If cache exists and is fresh, return it
-  if (cached.length > 0) {
-    const computedAt = cached[0].computedAt;
-    // Treat missing computedAt as stale (pre-migration data)
-    if (computedAt) {
-      const cacheAge = Date.now() - computedAt.getTime();
-      if (cacheAge < CACHE_TTL_MS) {
-        return cached.map(mapRecommendation).slice(0, clampedLimit);
-      }
-    }
+  if (cached.length > 0 && cached.every((row) => row.generation === generation)) {
+    return cached.map(mapRecommendation).slice(0, clampedLimit);
   }
 
-  // Compute fresh recommendations.
   // Coalesce concurrent computations for the same postId onto a single
   // in-flight promise so only one delete+insert runs, eliminating the
   // transient empty-result window during recomputation.
-  let inFlight = inFlightComputations.get(postId);
+  const key = inFlightKey(generation, postId);
+  let inFlight = inFlightComputations.get(key);
   if (!inFlight) {
-    inFlight = computeAndCacheRecommendations(postId, MAX_RECOMMENDATION_LIMIT).finally(() => {
+    inFlight = computeAndCacheRecommendations(
+      postId,
+      MAX_RECOMMENDATION_LIMIT,
+      generation
+    ).finally(() => {
       // Always clean up, on success AND on error, so a failed computation
       // does not poison this key forever.
-      inFlightComputations.delete(postId);
+      inFlightComputations.delete(key);
     });
-    inFlightComputations.set(postId, inFlight);
+    inFlightComputations.set(key, inFlight);
   }
 
   const fresh = await inFlight;
@@ -191,53 +245,52 @@ export async function getOrComputeRecommendationsByHash(
 }
 
 /**
- * Compute recommendations for a post and cache them.
+ * Compute recommendations for a post and cache them if tag statistics did not
+ * change while the SQL function was running.
  */
 async function computeAndCacheRecommendations(
   postId: number,
-  limit: number
+  limit: number,
+  generation: number
 ): Promise<RecommendedPost[]> {
-  // Call the SQL function to compute recommendations
   const rawResults = await prisma.$queryRaw<
     { recommended_id: number; score: number }[]
   >`SELECT * FROM compute_post_recommendations(${postId}, ${limit})`;
 
-  if (rawResults.length === 0) {
-    // Delete any stale cache entries
-    await prisma.postRecommendation.deleteMany({ where: { postId } });
-    return [];
-  }
-
   const recommendedIds = rawResults.map((r) => r.recommended_id);
-
-  // Fetch post details for the recommended IDs
-  const posts = await prisma.post.findMany({
-    where: { id: { in: recommendedIds } },
-    select: postCardSelect,
-  });
-
+  const posts =
+    recommendedIds.length > 0
+      ? await prisma.post.findMany({
+          where: { id: { in: recommendedIds } },
+          select: postCardSelect,
+        })
+      : [];
   const postMap = new Map(posts.map((p) => [p.id, p]));
-  const now = new Date();
 
-  // Upsert recommendations in a transaction
+  // The transaction holds a shared lock on the generation row while it writes,
+  // so a bump cannot interleave after this check. A newer generation's rows are
+  // never deleted; if one exists, skipDuplicates lets it win per unique pair.
   await prisma.$transaction(async (tx) => {
-    // Delete old recommendations for this post
-    await tx.postRecommendation.deleteMany({ where: { postId } });
+    if ((await readTagStatsGenerationForShare(tx)) !== generation) return;
 
-    // Insert new recommendations
-    await tx.postRecommendation.createMany({
-      data: rawResults.map((r) => ({
-        postId,
-        recommendedId: r.recommended_id,
-        score: r.score,
-        computedAt: now,
-      })),
-      // Concurrent requests may compute the same rows; ignore duplicates.
-      skipDuplicates: true,
+    const now = new Date();
+    await tx.postRecommendation.deleteMany({
+      where: { postId, generation: { lte: generation } },
     });
+    if (rawResults.length > 0) {
+      await tx.postRecommendation.createMany({
+        data: rawResults.map((r) => ({
+          postId,
+          recommendedId: r.recommended_id,
+          score: r.score,
+          computedAt: now,
+          generation,
+        })),
+        skipDuplicates: true,
+      });
+    }
   });
 
-  // Return results in score order
   return rawResults
     .map((r) => {
       const post = postMap.get(r.recommended_id);
@@ -263,10 +316,10 @@ async function computeAndCacheRecommendations(
  * out into N cold `compute_post_recommendations` calls, each spinning up
  * parallel workers — the batch that pegged the DB at 100% CPU on a cold cache.
  *
- * This reuses the same 24h {@link PostRecommendation} cache, but computes every
- * cold seed in ONE `compute_recommendations_for_posts` call. The SQL function
- * uses a LATERAL-per-seed shape: each seed prunes to its retained top tags
- * before scanning candidate posting lists, avoiding the old cross-seed
+ * This reuses the generation-fenced {@link PostRecommendation} cache, but
+ * computes every cold seed in ONE `compute_recommendations_for_posts` call. The
+ * SQL function uses a LATERAL-per-seed shape: each seed prunes to its retained
+ * top tags before scanning candidate posting lists, avoiding the old cross-seed
  * GroupAggregate blow-up. Fresh cache hits are served from the read; only the
  * misses hit the compute. Newly computed rows are persisted so a later
  * single-post lookup (detail page) is warm too.
@@ -286,11 +339,10 @@ export async function getTagNeighborhoodsForSeeds(
 ): Promise<Map<number, RecommendedPost[]>> {
   const clampedLimit = clampRecommendationLimit(limit);
   const result = new Map<number, RecommendedPost[]>();
-
   const uniqueIds = [...new Set(seedIds.filter((id) => Number.isInteger(id)))];
   if (uniqueIds.length === 0) return result;
 
-  // 1. Read whatever is cached for these seeds in one indexed query.
+  const generation = await readTagStatsGeneration();
   const cachedRows = await prisma.postRecommendation.findMany({
     where: { postId: { in: uniqueIds } },
     include: {
@@ -308,15 +360,12 @@ export async function getTagNeighborhoodsForSeeds(
     else cachedBySeed.set(row.postId, [row]);
   }
 
-  const now = Date.now();
   const coldIds: number[] = [];
   for (const id of uniqueIds) {
     const rows = cachedBySeed.get(id);
-    // Fresh iff we have rows and the newest is within the TTL. Absence of rows
-    // is ambiguous (never computed vs. genuinely empty), so — like the single-
-    // post path — we recompute rather than negative-cache.
-    const computedAt = rows?.[0]?.computedAt;
-    if (rows && computedAt && now - computedAt.getTime() < CACHE_TTL_MS) {
+    // Absence is ambiguous (never computed vs. genuinely empty), so — like the
+    // single-post path — it recomputes rather than negative-caching.
+    if (rows && rows.every((row) => row.generation === generation)) {
       result.set(id, rows.map(mapRecommendation).slice(0, clampedLimit));
     } else {
       coldIds.push(id);
@@ -325,68 +374,107 @@ export async function getTagNeighborhoodsForSeeds(
 
   if (coldIds.length === 0) return result;
 
-  // 2. Compute every cold seed in a single LATERAL-backed batch query.
-  const idsLiteral = Prisma.raw(
-    `ARRAY[${coldIds.map((id) => Math.trunc(id)).join(",")}]::integer[]`
-  );
-  const rawResults = await prisma.$queryRaw<
-    { source_id: number; recommended_id: number; score: number }[]
-  >`SELECT * FROM compute_recommendations_for_posts(${idsLiteral}, ${MAX_RECOMMENDATION_LIMIT}::int, ${MAX_SOURCE_TAGS}::int)`;
-
-  // 3. Fetch post details for every recommended id in one query.
-  const recommendedIds = [...new Set(rawResults.map((r) => r.recommended_id))];
-  const posts =
-    recommendedIds.length > 0
-      ? await prisma.post.findMany({
-          where: { id: { in: recommendedIds } },
-          select: postCardSelect,
-        })
-      : [];
-  const postMap = new Map(posts.map((p) => [p.id, p]));
-
-  // 4. Persist the freshly computed rows so single-post lookups stay warm.
-  //    Interactive transaction (checked-out client) keeps the delete+insert
-  //    atomic per the existing single-post pattern.
-  const computedAt = new Date();
-  await prisma.$transaction(async (tx) => {
-    await tx.postRecommendation.deleteMany({ where: { postId: { in: coldIds } } });
-    if (rawResults.length > 0) {
-      await tx.postRecommendation.createMany({
-        data: rawResults.map((r) => ({
-          postId: r.source_id,
-          recommendedId: r.recommended_id,
-          score: r.score,
-          computedAt,
-        })),
-        skipDuplicates: true,
-      });
-    }
-  });
-
-  // 5. Assemble per-seed results (score desc). Every cold seed gets an entry,
-  //    empty when it had no neighbors.
-  const freshBySeed = new Map<number, RecommendedPost[]>();
-  for (const r of rawResults) {
-    const post = postMap.get(r.recommended_id);
-    if (!post) continue;
-    const bucket = freshBySeed.get(r.source_id);
-    const entry: RecommendedPost = {
-      id: post.id,
-      hash: post.hash,
-      width: post.width,
-      height: post.height,
-      blurhash: post.blurhash,
-      mimeType: post.mimeType,
-      score: r.score,
-    };
-    if (bucket) bucket.push(entry);
-    else freshBySeed.set(r.source_id, [entry]);
-  }
+  // A single-post request may have started after this request read its cache.
+  // Join its work instead of racing its delete+insert; batch-only cold seeds
+  // remain together in one SQL call.
+  const inFlightById = new Map<number, Promise<RecommendedPost[]>>();
+  const idsToCompute: number[] = [];
   for (const id of coldIds) {
-    const neighbors = (freshBySeed.get(id) ?? [])
-      .sort((a, b) => b.score - a.score)
-      .slice(0, clampedLimit);
-    result.set(id, neighbors);
+    const inFlight = inFlightComputations.get(inFlightKey(generation, id));
+    if (inFlight) inFlightById.set(id, inFlight);
+    else idsToCompute.push(id);
+  }
+
+  if (idsToCompute.length > 0) {
+    const batchPromise = (async (): Promise<Map<number, RecommendedPost[]>> => {
+      const idsLiteral = Prisma.raw(
+        `ARRAY[${idsToCompute.map((id) => Math.trunc(id)).join(",")}]::integer[]`
+      );
+      const rawResults = await prisma.$queryRaw<
+        { source_id: number; recommended_id: number; score: number }[]
+      >`SELECT * FROM compute_recommendations_for_posts(${idsLiteral}, ${MAX_RECOMMENDATION_LIMIT}::int, ${MAX_SOURCE_TAGS}::int)`;
+
+      const recommendedIds = [...new Set(rawResults.map((row) => row.recommended_id))];
+      const posts =
+        recommendedIds.length > 0
+          ? await prisma.post.findMany({
+              where: { id: { in: recommendedIds } },
+              select: postCardSelect,
+            })
+          : [];
+      const postMap = new Map(posts.map((post) => [post.id, post]));
+      const freshBySeed = new Map<number, RecommendedPost[]>();
+
+      for (const row of rawResults) {
+        const post = postMap.get(row.recommended_id);
+        if (!post) continue;
+        const entry: RecommendedPost = {
+          id: post.id,
+          hash: post.hash,
+          width: post.width,
+          height: post.height,
+          blurhash: post.blurhash,
+          mimeType: post.mimeType,
+          score: row.score,
+        };
+        const neighbors = freshBySeed.get(row.source_id);
+        if (neighbors) neighbors.push(entry);
+        else freshBySeed.set(row.source_id, [entry]);
+      }
+
+      for (const id of idsToCompute) {
+        const neighbors = freshBySeed.get(id) ?? [];
+        neighbors.sort((left, right) => right.score - left.score);
+        freshBySeed.set(id, neighbors.slice(0, MAX_RECOMMENDATION_LIMIT));
+      }
+
+      // A shared lock holds the observed generation through the write. Rows
+      // from an even newer generation are preserved by the qualified delete.
+      await prisma.$transaction(async (tx) => {
+        if ((await readTagStatsGenerationForShare(tx)) !== generation) return;
+
+        const computedAt = new Date();
+        await tx.postRecommendation.deleteMany({
+          where: {
+            postId: { in: idsToCompute },
+            generation: { lte: generation },
+          },
+        });
+        if (rawResults.length > 0) {
+          await tx.postRecommendation.createMany({
+            data: rawResults.map((row) => ({
+              postId: row.source_id,
+              recommendedId: row.recommended_id,
+              score: row.score,
+              computedAt,
+              generation,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      });
+
+      return freshBySeed;
+    })();
+
+    for (const id of idsToCompute) {
+      const key = inFlightKey(generation, id);
+      const inFlight: Promise<RecommendedPost[]> = batchPromise
+        .then((freshBySeed) => freshBySeed.get(id) ?? [])
+        .finally(() => {
+          if (inFlightComputations.get(key) === inFlight) {
+            inFlightComputations.delete(key);
+          }
+        });
+      inFlightComputations.set(key, inFlight);
+      inFlightById.set(id, inFlight);
+    }
+  }
+
+  const inFlightIds = [...inFlightById.keys()];
+  const inFlightResults = await Promise.all(inFlightById.values());
+  for (const [index, id] of inFlightIds.entries()) {
+    result.set(id, inFlightResults[index].slice(0, clampedLimit));
   }
 
   return result;
@@ -417,18 +505,23 @@ export async function computeRecommendationsForPost(
 /**
  * Invalidate cached recommendations for a specific post.
  * Call this when a post's tags change significantly.
+ *
+ * Every source that recommended the changed post is invalidated as a whole:
+ * its remaining rows were scored against the same old source statistics.
  */
 export async function invalidateRecommendationsForPost(
   postId: number,
   client: RecommendationClient = prisma
 ): Promise<void> {
+  const affectedSources = await client.postRecommendation.findMany({
+    where: { recommendedId: postId },
+    distinct: ["postId"],
+    select: { postId: true },
+  });
+  const sourceIds = [postId, ...affectedSources.map((source) => source.postId)];
+
   await client.postRecommendation.deleteMany({
-    where: {
-      OR: [
-        { postId },
-        { recommendedId: postId },
-      ],
-    },
+    where: { postId: { in: sourceIds } },
   });
 }
 

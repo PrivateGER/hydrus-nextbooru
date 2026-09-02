@@ -1,27 +1,27 @@
 /**
  * "For You" feed engine.
  *
- * Multi-seed k-NN aggregation: each favorited post seeds two candidate
- * neighborhoods — image-embedding nearest neighbors (pgvector) and the
- * IDF-weighted tag COSINE similarity (the PostRecommendation engine, both
- * scores in [0,1]). Candidates are merged with recency-decayed seed weights;
- * convergent evidence (a candidate reached from several seeds) accumulates
- * score, each contribution renormalized by the engine weight its
- * seed/candidate pair could actually earn (an embedding-less post on either
- * end makes the pair tag-only). Taste signals collapse to one seed per group,
- * and already-viewed candidates are downweighted with a decaying penalty.
- *
- * The pure functions (seed selection, group collapse, score merging, viewed
- * penalty) live at the top and are unit-tested; DB/build plumbing follows.
+ * Explicit favorites and weak view signals are collapsed by post group, then
+ * embedded and clustered into stable taste regions. Each cluster centroid
+ * retrieves its own ANN neighborhood; candidates must clear the calibrated
+ * centroid floor and, for favorite-backed clusters, be close to a real
+ * favorite. A dismissal-radius filter removes visual near-neighbors of posts
+ * marked not interested. Per-cluster rankings receive freshness and viewed
+ * penalties before page quotas proportional to cluster mass are interleaved.
+ * Group and perceptual duplicate removal happen before the final feed cap.
+ * When embeddings are disabled or no signal is embedded, a small tag-only
+ * fallback uses the newest collapsed favorites.
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
 import {
-  type EmbeddedRelatedPost,
-  findRelatedPostsByEmbeddingForPosts,
+  findNearestByVector,
+  getEmbeddingVectorsForPosts,
+  getMaxSimilarityToReferences,
 } from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
 import { feedLog } from "@/lib/logger";
+import { postCardSelect } from "@/lib/post-select";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
 import {
   calibrateEmbeddingScore,
@@ -29,137 +29,91 @@ import {
 } from "@/lib/embeddings/calibration";
 import {
   getEmbeddingOpenRouterSettings,
+  isEmbeddingProviderConfigured,
   toEmbeddingConfig,
   type EmbeddingConfig,
 } from "@/lib/embeddings/settings";
+import {
+  allocateAcrossClusters,
+  fitTasteModel,
+  normalizeRows,
+  type TasteMember,
+} from "@/lib/taste";
 
 export interface FeedConfig {
-  /** Most recent favorites always used as seeds (current taste). */
-  recentSeedCount: number;
-  /** Older favorites sampled with recency-decayed probability (long-term taste). */
-  sampledSeedCount: number;
-  /**
-   * The older stratum is split into this many equal-count age bands, each
-   * guaranteed a share of the sampled seeds, so old taste eras cannot be
-   * starved by recency decay.
-   */
-  seedAgeBands: number;
-  /** Neighbors fetched per seed per engine (engines cap at 20). */
-  neighborsPerSeed: number;
-  /** Blend weight for embedding similarity. */
-  embeddingWeight: number;
-  /** Blend weight for IDF tag similarity. */
-  idfWeight: number;
-  /** Seed weight halves every this many days since the favorite. */
-  recencyHalfLifeDays: number;
-  /**
-   * Minimum CALIBRATED embedding similarity for candidates (see
-   * @/lib/embeddings/calibration): 0 = random-pair baseline, 1 = identical.
-   * Applied to the fetched top-K in JS after the fixed-LIMIT ANN fetch,
-   * never as a SQL distance predicate (see fetchEmbeddingNeighborhoods).
-   * When no baseline is available calibration is the identity, so this
-   * floors the raw cosine directly.
-   */
+  /** Number of spherical taste clusters fitted to embedded signals. */
+  clusterCount: number;
+  /** Clusters smaller than this are merged into their nearest survivor. */
+  minClusterSize: number;
+  /** Maximum spherical k-means assignment/update passes. */
+  clusterIterations: number;
+  /** Fixed-LIMIT ANN neighbors fetched per cluster centroid. */
+  neighborsPerCluster: number;
+  /** Minimum share reserved for each non-empty cluster on every page. */
+  floorShare: number;
+  /** Slots allocated together before moving to the next page. */
+  pageSize: number;
+  /** Number of pages assembled into the cached feed. */
+  pageCount: number;
+  /** Minimum calibrated centroid similarity retained after ANN retrieval. */
   minEmbeddingScore: number;
-  /**
-   * Contribution-weight floor for sampled (older-stratum) seeds: sampled seeds
-   * already paid the recency penalty at selection; the floor gives long-term
-   * taste a real voice in ranking.
-   */
-  sampledSeedWeightFloor: number;
-  /**
-   * Most-recent dismissals ("not interested") used as NEGATIVE seeds. Their
-   * tag/embedding neighborhoods subtract from candidate scores, so disliking a
-   * post pushes down posts similar to it — not just that one post.
-   */
-  negativeSeedCount: number;
-  /** Negative-seed weight halves every this many days since the dismissal. */
-  negativeRecencyHalfLifeDays: number;
-  /**
-   * How hard a dislike pushes similar posts down, relative to how hard a like
-   * pulls them up. 1 = symmetric; < 1 keeps the negative signal from steam-
-   * rolling positive taste.
-   */
-  negativeStrength: number;
-  /**
-   * Most-recently-viewed posts used as weak POSITIVE seeds (implicit
-   * engagement). Excludes favorited/dismissed posts — those already carry a
-   * stronger explicit signal.
-   */
+  /** Minimum calibrated similarity (0 = random-pair baseline, 1 = identical) to a real favorite. */
+  memberGate: number;
+  /** Calibrated similarity (0 = random-pair baseline, 1 = identical) at which dismissals remove candidates. */
+  dismissalRadius: number;
+  /** Favorite weight halves every this many days. */
+  recencyHalfLifeDays: number;
+  /** Maximum number of recent views admitted as weak taste members. */
   viewSeedCount: number;
-  /** View-seed weight halves every this many days since the last view. */
+  /**
+   * Maximum newest group-collapsed favorites and views modeled. Successful
+   * builds prune the vector cache to these members, bounding it to
+   * maxTasteMembers × dimensions × 4 bytes (~25 MB at 2000 × 3072).
+   */
+  maxTasteMembers: number;
+  /** View-member weight halves every this many days. */
   viewRecencyHalfLifeDays: number;
-  /**
-   * Ceiling on a single view seed's weight, reached by a freshly, repeatedly
-   * viewed post. Kept well below 1 (a fresh favorite) so a passive view never
-   * outweighs a deliberate favorite.
-   */
+  /** Maximum weight of a fresh, repeatedly viewed member. */
   viewWeightCap: number;
-  /**
-   * viewCount at which the count factor saturates to ~1. The factor grows with
-   * log(viewCount), so the 2nd open of a post lifts its weight far more than
-   * the 20th.
-   */
+  /** View count at which the logarithmic count factor saturates. */
   viewCountSaturation: number;
-  /**
-   * Residual score multiplier for a candidate the user JUST viewed. A viewed
-   * candidate's merged score is scaled by a factor that starts at this floor
-   * for a fresh view and decays back to 1 as the view ages (at
-   * viewRecencyHalfLifeDays), so the feed stops re-serving what the user
-   * already opened without permanently burying it. 1 disables the penalty.
-   */
+  /** Residual multiplier for a candidate viewed just now. */
   viewedCandidatePenaltyFloor: number;
-  /**
-   * Geometric discount for additional positive seeds reaching the same
-   * candidate: 1 preserves linear accumulation; lower values reward focused
-   * agreement without letting generic hubs compound across many weak seeds.
-   */
-  convergenceDiscount: number;
-  /**
-   * Maximum fractional score lift for a just-imported candidate. Kept small so
-   * freshness creates a first-look window without overriding relevance.
-   */
+  /** Maximum fractional score lift for a just-imported candidate. */
   freshnessBoost: number;
-  /** Freshness boost halves every this many days since import. */
+  /** Freshness boost halves every this many days. */
   freshnessHalfLifeDays: number;
   /** Ranked feed length cap. */
   maxFeedSize: number;
 }
 
 export const FEED_CONFIG: FeedConfig = {
-  recentSeedCount: 30,
-  sampledSeedCount: 60,
-  seedAgeBands: 5,
-  neighborsPerSeed: 20,
-  embeddingWeight: 0.7,
-  idfWeight: 0.3,
-  recencyHalfLifeDays: 90,
+  clusterCount: 16,
+  minClusterSize: 3,
+  clusterIterations: 30,
+  neighborsPerCluster: 200,
+  floorShare: 0.02,
+  pageSize: 48,
+  pageCount: 11,
   minEmbeddingScore: 0.25,
-  sampledSeedWeightFloor: 0.25,
-  negativeSeedCount: 30,
-  negativeRecencyHalfLifeDays: 60,
-  negativeStrength: 0.8,
+  memberGate: 0.25,
+  dismissalRadius: 0.6,
+  recencyHalfLifeDays: 90,
   viewSeedCount: 25,
+  maxTasteMembers: 2000,
   viewRecencyHalfLifeDays: 30,
   viewWeightCap: 0.35,
   viewCountSaturation: 8,
   viewedCandidatePenaltyFloor: 0.3,
-  convergenceDiscount: 0.8,
   freshnessBoost: 0.15,
   freshnessHalfLifeDays: 7,
-  maxFeedSize: 500,
+  maxFeedSize: 528,
 };
 
 export interface FavoriteSeedInput {
   postId: number;
   hash: string;
   favoritedAt: Date;
-}
-
-export interface DismissalSeedInput {
-  postId: number;
-  hash: string;
-  dismissedAt: Date;
 }
 
 export interface ViewSeedInput {
@@ -187,45 +141,16 @@ export interface FeedPost {
 
 export interface SeedContribution {
   seed: FeedSeed;
-  embedding: EmbeddedRelatedPost[];
   idf: RecommendedPost[];
-  /**
-   * +1 for a positive seed (favorite / view) whose neighbors are boosted, -1
-   * for a negative seed (dismissal) whose neighbors are suppressed. Defaults to
-   * +1 when omitted.
-   */
-  polarity?: 1 | -1;
 }
 
 const DAY_MS = 86_400_000;
+const SIGNAL_COLLAPSE_OVERFETCH = 4;
+const FALLBACK_FAVORITE_COUNT = 90;
+const FALLBACK_NEIGHBOR_COUNT = 20;
+const SEED_SAMPLE_BUCKET_MS = 3_600_000;
 
-/**
- * Over-fetch factor for the bounded seed-signal reads (recent views and
- * dismissals). Group collapse runs AFTER the fetch, so fetching exactly
- * seed-count rows would let one freshly-viewed/dismissed multi-page set
- * collapse the whole window into a single seed while older unrelated signals
- * were never fetched. Fetching a few multiples keeps the window meaningful
- * even when sets dominate the newest rows; the seed selectors still cap the
- * final seed counts (selectViewSeeds / selectNegativeSeeds slice to their
- * configured counts), so this only widens the candidate window — reads stay
- * bounded and index-served. Favorites are unaffected (loaded in full).
- */
-const SEED_COLLAPSE_OVERFETCH = 4;
-
-/**
- * Time-bucket width for the seed sampler's PRNG seed. Builds within the same
- * bucket reseed mulberry32 identically, so the 60 sampled older seeds — and
- * thus feed order — stay stable across a session's page requests; the seed
- * changes each bucket so the sampled tail drifts over time (taste
- * exploration). 5 minutes trades a little cross-bucket churn for pagination
- * that holds still while a user scrolls.
- */
-const SEED_SAMPLE_BUCKET_MS = 300_000;
-
-/**
- * Deterministic 32-bit PRNG (mulberry32). Seeded, so a given seed reproduces
- * the same stream — used to make seed sampling stable within a time bucket.
- */
+/** Deterministic 32-bit PRNG retained for taste-model reproducibility helpers. */
 export function mulberry32(seed: number): () => number {
   let a = seed;
   return () => {
@@ -238,67 +163,14 @@ export function mulberry32(seed: number): () => number {
 }
 
 /** Exponential recency decay: 1 at age 0, 0.5 after one half-life. */
-export function seedWeight(favoritedAt: Date, now: Date, halfLifeDays: number): number {
-  const ageDays = Math.max(0, (now.getTime() - favoritedAt.getTime()) / DAY_MS);
+export function seedWeight(signalAt: Date, now: Date, halfLifeDays: number): number {
+  const ageDays = Math.max(0, (now.getTime() - signalAt.getTime()) / DAY_MS);
   return Math.exp((-Math.LN2 * ageDays) / halfLifeDays);
 }
 
-interface WeightedFavorite {
-  fav: FavoriteSeedInput;
-  weight: number;
-}
-
 /**
- * Weighted sampling WITHOUT replacement: draws up to `count` favorites from
- * `pool` with probability proportional to each entry's recency weight,
- * splicing out every pick so it cannot be drawn twice. Deterministic for a
- * given `rng`; yields fewer than `count` only when the pool runs dry. Mutates
- * `pool` — the leftovers are reused for the cross-band shortfall pass.
- */
-function sampleWeighted(
-  pool: WeightedFavorite[],
-  count: number,
-  rng: () => number
-): FavoriteSeedInput[] {
-  const picks: FavoriteSeedInput[] = [];
-  const target = Math.min(count, pool.length);
-  while (picks.length < target) {
-    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
-    let roll = rng() * totalWeight;
-    let picked = pool.length - 1;
-    for (let i = 0; i < pool.length; i++) {
-      roll -= pool[i].weight;
-      if (roll <= 0) {
-        picked = i;
-        break;
-      }
-    }
-    picks.push(pool[picked].fav);
-    pool.splice(picked, 1);
-  }
-  return picks;
-}
-
-/**
- * Collapse a taste-signal list (favorites / views / dismissals) to one
- * representative per group BEFORE seed selection.
- *
- * Without this, favoriting a 30-page Pixiv set puts up to 30 near-identical
- * posts into the recent-seed slots — each with full weight and an essentially
- * identical neighborhood — so a single set contributes ~30x convergent
- * evidence and monopolizes the feed. Candidate-side group dedup cannot fix
- * that: the ballot box is stuffed at the seed level.
- *
- * Walking in the given order (callers pass newest-first, so the newest member
- * represents the group), a signal is dropped when ANY of its groups was
- * already claimed by an earlier kept signal. Ungrouped signals always pass.
- *
- * `seenGroups` is mutated so callers can thread one set through several
- * signal lists of the SAME polarity (favorites first, then views: a viewed
- * sibling page of a favorited set is redundant with the favorite seed).
- * Negative signals must use their own set — a dismissal of one page of an
- * otherwise-liked set is an explicit correction and must not be silenced by
- * the favorite having claimed the group.
+ * Keep the first signal for each group. Callers pass newest-first lists and
+ * may share `seenGroups` so favorites claim groups before weaker views.
  */
 export function collapseSignalsByGroup<T extends { postId: number }>(
   signals: readonly T[],
@@ -319,133 +191,7 @@ export function collapseSignalsByGroup<T extends { postId: number }>(
   return kept;
 }
 
-/**
- * Stratified seed selection.
- *
- * The `recentSeedCount` newest favorites are always seeds (current taste).
- *
- * The older remainder is sampled for long-term taste. Plain uniform weighted
- * sampling starves niche/old interests: with the previous 20 draws a cluster
- * holding 5% of the older stratum's decay-weight was absent from ~36% of
- * builds and a 1% cluster from ~82%. So we (a) widen the sample
- * (`sampledSeedCount`) and (b) guarantee coverage across taste eras. The older
- * favorites (already newest-first) are split into `seedAgeBands` contiguous
- * equal-count age bands, and each band is granted a quota of the sample so
- * recency decay cannot silence an entire era. Within a band, favorites are
- * drawn WITHOUT replacement with probability proportional to their recency
- * weight; a band with fewer members than its quota contributes all of them,
- * and any resulting global shortfall is filled from the union of the remaining
- * unsampled older favorites. The result holds `min(sampledSeedCount,
- * older.length)` sampled seeds, has no duplicates, and is deterministic for a
- * given `rng`.
- *
- * @param favorites - MUST be sorted favoritedAt DESC (newest first)
- * @param rng - injectable for deterministic tests
- */
-export function selectSeeds(
-  favorites: FavoriteSeedInput[],
-  now: Date,
-  config: FeedConfig = FEED_CONFIG,
-  rng: () => number = Math.random
-): FeedSeed[] {
-  const recent = favorites.slice(0, config.recentSeedCount);
-  const older = favorites.slice(config.recentSeedCount);
-
-  // Age-stratified weighted sampling of the older stratum. Split `older`
-  // (newest-first) into `seedAgeBands` contiguous equal-count bands — the last
-  // band absorbs the remainder; bands are empty when older.length < bands.
-  // Each band gets a quota (floor(sampledSeedCount / bands), the remainder
-  // handed one-each to the newest bands) sampled without replacement, so no age
-  // era can be starved by recency decay. Undersized bands contribute all their
-  // members; the leftover global shortfall is then drawn from the union of
-  // everything still unsampled.
-  const sampled: FavoriteSeedInput[] = [];
-  if (older.length > 0 && config.sampledSeedCount > 0 && config.seedAgeBands > 0) {
-    const bandCount = config.seedAgeBands;
-    const target = Math.min(config.sampledSeedCount, older.length);
-    const bandSize = Math.floor(older.length / bandCount);
-    const baseQuota = Math.floor(config.sampledSeedCount / bandCount);
-    const quotaRemainder = config.sampledSeedCount - baseQuota * bandCount;
-
-    const bands: WeightedFavorite[][] = [];
-    for (let b = 0; b < bandCount; b++) {
-      const start = b * bandSize;
-      const end = b === bandCount - 1 ? older.length : start + bandSize;
-      bands.push(
-        older.slice(start, end).map((fav) => ({
-          fav,
-          weight: seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays),
-        }))
-      );
-    }
-
-    // Per-band pass: the extra `quotaRemainder` seeds go to the newest bands.
-    for (let b = 0; b < bandCount; b++) {
-      const quota = baseQuota + (b < quotaRemainder ? 1 : 0);
-      sampled.push(...sampleWeighted(bands[b], quota, rng));
-    }
-
-    // Fill any global shortfall from the pooled leftovers of every band.
-    const shortfall = target - sampled.length;
-    if (shortfall > 0) {
-      sampled.push(...sampleWeighted(bands.flat(), shortfall, rng));
-    }
-  }
-
-  // Recent-stratum seeds keep their raw recency-decayed weight. Sampled seeds
-  // already paid the recency penalty as selection probability, so charging it
-  // again as contribution weight would double-decay them; the floor restores a
-  // meaningful long-term-taste voice in ranking.
-  const toSeed = (fav: FavoriteSeedInput, floored: boolean): FeedSeed => {
-    const raw = seedWeight(fav.favoritedAt, now, config.recencyHalfLifeDays);
-    return {
-      postId: fav.postId,
-      hash: fav.hash,
-      weight: floored ? Math.max(raw, config.sampledSeedWeightFloor) : raw,
-    };
-  };
-
-  return [
-    ...recent.map((fav) => toSeed(fav, false)),
-    ...sampled.map((fav) => toSeed(fav, true)),
-  ];
-}
-
-/**
- * Negative-seed selection from dismissals ("not interested").
- *
- * Unlike favorites, dismissals are NOT stratified across taste eras: "not
- * interested" is a short-horizon correction, so we take the `negativeSeedCount`
- * most-recent dismissals with plain recency-decayed weights and let older
- * dislikes fade. A dismissal made now weighs 1; one a half-life old weighs 0.5.
- *
- * @param dismissals - MUST be sorted dismissedAt DESC (newest first)
- */
-export function selectNegativeSeeds(
-  dismissals: DismissalSeedInput[],
-  now: Date,
-  config: FeedConfig = FEED_CONFIG
-): FeedSeed[] {
-  if (config.negativeSeedCount <= 0) return [];
-  return dismissals.slice(0, config.negativeSeedCount).map((d) => ({
-    postId: d.postId,
-    hash: d.hash,
-    weight: seedWeight(d.dismissedAt, now, config.negativeRecencyHalfLifeDays),
-  }));
-}
-
-/**
- * Positive seeds from implicit views (opening a post's detail page).
- *
- * A view is a much softer signal than a deliberate favorite, so its weight is
- * capped well below 1: weight = viewWeightCap * recency(lastViewedAt) *
- * countFactor. countFactor grows with log(viewCount) and saturates at
- * viewCountSaturation, so re-opening a post lifts it (real interest) but a
- * single accidental open stays a gentle nudge. Callers must exclude favorited
- * and dismissed posts upstream — those carry a stronger explicit signal.
- *
- * @param views - MUST be sorted lastViewedAt DESC (newest first)
- */
+/** Convert recent views to bounded weak taste members. */
 export function selectViewSeeds(
   views: ViewSeedInput[],
   now: Date,
@@ -453,178 +199,55 @@ export function selectViewSeeds(
 ): FeedSeed[] {
   if (config.viewSeedCount <= 0 || config.viewWeightCap <= 0) return [];
   const saturationLog = Math.log(1 + Math.max(0, config.viewCountSaturation));
-  return views.slice(0, config.viewSeedCount).map((v) => {
-    const recency = seedWeight(v.lastViewedAt, now, config.viewRecencyHalfLifeDays);
+  return views.slice(0, config.viewSeedCount).map((view) => {
+    const recency = seedWeight(view.lastViewedAt, now, config.viewRecencyHalfLifeDays);
     const countFactor =
       saturationLog > 0
-        ? Math.min(1, Math.log(1 + Math.max(0, v.viewCount)) / saturationLog)
+        ? Math.min(1, Math.log(1 + Math.max(0, view.viewCount)) / saturationLog)
         : 1;
     return {
-      postId: v.postId,
-      hash: v.hash,
+      postId: view.postId,
+      hash: view.hash,
       weight: config.viewWeightCap * recency * countFactor,
     };
   });
 }
 
 /**
- * Merge per-seed candidate neighborhoods into one ranked list.
- *
- * Both engines now emit cosine similarities in [0,1] (clamped defensively):
- * embedding cosine, and the IDF-weighted tag cosine (migration
- * 20260707120000). Tag scores are therefore blended DIRECTLY — the old
- * per-seed max normalization (which inflated every seed's best tag match to
- * 1.0, making a barely-related best match look like a near-duplicate) is
- * gone. For one seed/candidate pair, embedding + tag channels are
- * complementary evidence and remain additive after per-pair achievable-weight
- * normalization.
- *
- * Positive seeds do NOT then add linearly across every seed. For each
- * candidate, positive per-seed contributions are sorted descending and summed
- * with `convergenceDiscount^i`: 1 preserves the old linear sum exactly, while
- * lower values damp generic hubs that are weakly similar to many seeds.
- *
- * Negative seeds (polarity -1, from dismissals) subtract their contribution
- * scaled by `negativeStrength` and stay linear — repeated dislike evidence
- * must not be convergence-discounted. A candidate whose final score lands at
- * or below zero — dominated by dislikes — is dropped from the feed.
- *
- * Each per-seed/channel contribution is renormalized by the engine weight its
- * (seed, candidate) PAIR could possibly have earned: the embedding channel is
- * live only when both the seed and the candidate have a stored embedding
- * (`embeddedPostIds`), so a tag-only contribution over a pair with no
- * possible embedding evidence — video or unembedded post on EITHER end —
- * divides by idfWeight alone instead of idfWeight + embeddingWeight.
- * Without this, such posts compete for feed slots with a hard ~(idfWeight)
- * ceiling against fully-embedded pairs' 1.0 — a systematic media-type /
- * embedding-coverage bias unrelated to relevance. Normalizing per pair (not
- * per candidate from a global flag) matters in mixed feeds: an image reached
- * only through an embedding-less seed's tag similarity must not be penalized
- * for embedding evidence that seed could never produce. When
- * `embeddedPostIds` is null/empty (embeddings unconfigured or store empty)
- * every pair is tag-only and the renormalization is a uniform rescale
- * (ranking unchanged).
- *
- * This returns the full ranked candidate pool. The final `maxFeedSize` slice
- * belongs after freshness, viewed-candidate penalty, and group dedupe.
+ * Merge tag candidates for the no-embeddings fallback only. Evidence adds
+ * linearly as `seed.weight * cosine`; there is no embedding channel or
+ * convergence discount in this deliberately small emergency path.
  */
 export function mergeSeedCandidates(
-  contributions: SeedContribution[],
-  excludedPostIds: ReadonlySet<number>,
-  config: FeedConfig = FEED_CONFIG,
-  embeddedPostIds: ReadonlySet<number> | null = null
+  contributions: readonly SeedContribution[],
+  excludedPostIds: ReadonlySet<number>
 ): FeedPost[] {
-  type CandidateAccumulator = FeedPost & {
-    positiveContributions: number[];
-    negativeScore: number;
-  };
-
-  const byId = new Map<number, CandidateAccumulator>();
-
-  const ensureCandidate = (
-    post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string }
-  ): CandidateAccumulator => {
-    const existing = byId.get(post.id);
-    if (existing) return existing;
-
-    const next: CandidateAccumulator = {
-      id: post.id,
-      hash: post.hash,
-      width: post.width,
-      height: post.height,
-      blurhash: post.blurhash,
-      mimeType: post.mimeType,
-      score: 0,
-      positiveContributions: [],
-      negativeScore: 0,
-    };
-    byId.set(post.id, next);
-    return next;
-  };
-
-  for (const { seed, embedding, idf, polarity = 1 } of contributions) {
-    const perSeed = new Map<
-      number,
-      {
-        post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string };
-        score: number;
+  const byId = new Map<number, FeedPost>();
+  for (const { seed, idf } of contributions) {
+    for (const recommendation of idf) {
+      if (excludedPostIds.has(recommendation.id)) continue;
+      const contribution = seed.weight * Math.max(0, Math.min(1, recommendation.score));
+      if (contribution <= 0) continue;
+      const existing = byId.get(recommendation.id);
+      if (existing) {
+        existing.score += contribution;
+      } else {
+        byId.set(recommendation.id, {
+          id: recommendation.id,
+          hash: recommendation.hash,
+          width: recommendation.width,
+          height: recommendation.height,
+          blurhash: recommendation.blurhash,
+          mimeType: recommendation.mimeType,
+          score: contribution,
+        });
       }
-    >();
-
-    const addPerSeed = (
-      post: { id: number; hash: string; width: number | null; height: number | null; blurhash: string | null; mimeType: string },
-      contribution: number
-    ) => {
-      if (contribution === 0 || excludedPostIds.has(post.id)) return;
-      const existing = perSeed.get(post.id);
-      if (existing) existing.score += contribution;
-      else perSeed.set(post.id, { post, score: contribution });
-    };
-
-    // The embedding channel is live for a (seed, candidate) PAIR only when
-    // BOTH ends have a stored embedding — findRelatedPostsByEmbedding returns
-    // nothing for an embedding-less seed no matter the candidate, and an
-    // embedding-less candidate can appear in no seed's k-NN results. Each
-    // channel contribution divides by ITS pair's achievable weight before the
-    // seed's channels are combined.
-    const seedEmbedded = embeddedPostIds?.has(seed.postId) ?? false;
-    const achievableFor = (candidateId: number): number => {
-      const pairEmbedded =
-        seedEmbedded && (embeddedPostIds?.has(candidateId) ?? false);
-      const achievable =
-        config.idfWeight + (pairEmbedded ? config.embeddingWeight : 0);
-      // Degenerate configs (idfWeight 0 without embeddings) fall back to the
-      // raw contribution rather than dividing by zero.
-      return achievable > 0 ? achievable : 1;
-    };
-
-    for (const neighbor of embedding) {
-      const similarity = Math.max(0, Math.min(1, neighbor.score));
-      addPerSeed(
-        neighbor,
-        (seed.weight * config.embeddingWeight * similarity) /
-          achievableFor(neighbor.id)
-      );
-    }
-
-    for (const rec of idf) {
-      const similarity = Math.max(0, Math.min(1, rec.score));
-      addPerSeed(
-        rec,
-        (seed.weight * config.idfWeight * similarity) /
-          achievableFor(rec.id)
-      );
-    }
-
-    const negativeMultiplier = -config.negativeStrength;
-    for (const { post, score } of perSeed.values()) {
-      const candidate = ensureCandidate(post);
-      if (polarity < 0) candidate.negativeScore += negativeMultiplier * score;
-      else candidate.positiveContributions.push(score);
     }
   }
-
-  const discount = config.convergenceDiscount;
-  return [...byId.values()]
-    .map(({ positiveContributions, negativeScore, ...post }) => {
-      const positiveScore = positiveContributions
-        .sort((a, b) => b - a)
-        .reduce((sum, contribution, index) => sum + contribution * discount ** index, 0);
-      return { ...post, score: positiveScore + negativeScore };
-    })
-    .filter((post) => post.score > 0)
-    .sort((a, b) => b.score - a.score || a.id - b.id);
+  return [...byId.values()].sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
-/**
- * Give newly-imported candidates a small, time-decayed first-look window.
- *
- * Candidates only enter this feed through similarity to established taste, so
- * freshness is a multiplier on relevance rather than an independent ranking
- * source: a just-imported post gets at most `freshnessBoost`, and the boost
- * halves every `freshnessHalfLifeDays`. Missing import timestamps leave posts
- * unchanged.
- */
+/** Give newly-imported candidates a small, time-decayed first-look window. */
 export function applyFreshnessBoost(
   posts: FeedPost[],
   importedAtByPostId: ReadonlyMap<number, Date>,
@@ -632,7 +255,6 @@ export function applyFreshnessBoost(
   config: FeedConfig = FEED_CONFIG
 ): FeedPost[] {
   if (config.freshnessBoost <= 0 || importedAtByPostId.size === 0) return posts;
-
   return posts
     .map((post) => {
       const importedAt = importedAtByPostId.get(post.id);
@@ -646,22 +268,7 @@ export function applyFreshnessBoost(
     .sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
-/**
- * Downweight candidates the user has ALREADY opened.
- *
- * Without this the feed keeps re-serving exactly what the user just looked at
- * — viewed posts stay eligible candidates, and (as view seeds) even pull in
- * more of the same — so the top of the feed accumulates consumed content. A
- * view is interest, not rejection, so this is a decaying penalty rather than
- * an exclusion: a candidate viewed just now keeps only
- * `viewedCandidatePenaltyFloor` of its score, and the factor relaxes back to
- * 1 as the view ages (same half-life as view seeding), letting old favorites
- * of the eye resurface later.
- *
- * Runs before group dedupe and the final `maxFeedSize` slice: penalized posts
- * can now fall out of the returned feed, letting unviewed candidates from the
- * unsliced tail rise in after re-sorting.
- */
+/** Downweight candidates the user has already opened, then restore rank order. */
 export function applyViewedPenalty(
   posts: FeedPost[],
   lastViewedByPostId: ReadonlyMap<number, Date>,
@@ -670,7 +277,6 @@ export function applyViewedPenalty(
 ): FeedPost[] {
   const floor = config.viewedCandidatePenaltyFloor;
   if (floor >= 1 || lastViewedByPostId.size === 0) return posts;
-
   return posts
     .map((post) => {
       const lastViewedAt = lastViewedByPostId.get(post.id);
@@ -682,16 +288,7 @@ export function applyViewedPenalty(
     .sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
-/**
- * Collapse group siblings in a ranked feed to one representative each.
- *
- * Without this, a multi-page set near the user's taste occupies one feed slot
- * per page. Walking in ranked (descending-score) order, a post is kept unless
- * ANY of its group ids was already claimed by an earlier (higher-ranked) kept
- * post — so the highest-scoring member of a group becomes its representative
- * and the rest drop. Posts absent from the map (ungrouped) are always kept.
- * Input order is preserved.
- */
+/** Collapse group siblings in ranked order, keeping the highest-ranked member. */
 export function dedupeRankedByGroup(
   posts: FeedPost[],
   groupIdsByPostId: ReadonlyMap<number, number[]>
@@ -712,24 +309,38 @@ export function dedupeRankedByGroup(
 }
 
 /**
- * Collapse perceptual near-duplicates in a ranked feed.
- *
- * Hydrus imports can hold the same image/clip re-encoded under a different
- * file hash — and a different group — so group dedupe cannot collapse them,
- * yet they render as identical thumbnails (observed in prod: two re-encodes
- * of one clip served adjacently at the same score). The key is blurhash plus
- * pixel dimensions: identical blurhash at identical dimensions means visually
- * near-identical previews (dimensions guard against the rare blurhash
- * collision on flat/low-detail images), and the highest-ranked one represents
- * them all. Posts without a blurhash are always kept. Input order is
- * preserved.
+ * Perceptual identity: identical blurhash at identical pixel dimensions
+ * renders as the same thumbnail even across re-encodes with different hashes
+ * and groups. Null when the post has no blurhash.
  */
+export function perceptualKey(post: {
+  blurhash: string | null;
+  width: number | null;
+  height: number | null;
+}): string | null {
+  return post.blurhash
+    ? `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`
+    : null;
+}
+
+export function perceptualKeyByPostId(
+  posts: readonly { id: number; blurhash: string | null; width: number | null; height: number | null }[]
+): Map<number, string> {
+  const keys = new Map<number, string>();
+  for (const post of posts) {
+    const key = perceptualKey(post);
+    if (key) keys.set(post.id, key);
+  }
+  return keys;
+}
+
+/** Collapse perceptual near-duplicates in ranked order. */
 export function dedupeRankedByBlurhash(posts: FeedPost[]): FeedPost[] {
   const seenKeys = new Set<string>();
   const result: FeedPost[] = [];
   for (const post of posts) {
-    if (post.blurhash) {
-      const key = `${post.blurhash}|${post.width ?? ""}x${post.height ?? ""}`;
+    const key = perceptualKey(post);
+    if (key) {
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
     }
@@ -738,115 +349,156 @@ export function dedupeRankedByBlurhash(posts: FeedPost[]): FeedPost[] {
   return result;
 }
 
-// ============================================
-// Feed build
-// ============================================
+interface FeedBuildResult {
+  feed: FeedPost[];
+  degraded: boolean;
+}
 
-async function resolveEmbeddingConfig(): Promise<EmbeddingConfig | null> {
+interface FeedVectorCache {
+  key: string;
+  vectors: Map<number, Float32Array>;
+}
+
+interface FeedCentroidCache {
+  key: string;
+  centroids: Float32Array;
+}
+
+const globalForTaste = globalThis as unknown as {
+  __feedVectors?: FeedVectorCache;
+  __feedCentroids?: FeedCentroidCache;
+};
+
+function embeddingConfigKey(config: EmbeddingConfig): string {
+  return [
+    config.baseUrl,
+    config.model,
+    config.dimensions,
+    config.imageMaxResolution,
+  ].join("|");
+}
+
+async function resolveEmbeddingConfig(): Promise<{
+  config: EmbeddingConfig | null;
+  failed: boolean;
+}> {
   try {
-    return toEmbeddingConfig(await getEmbeddingOpenRouterSettings());
+    const settings = await getEmbeddingOpenRouterSettings();
+    return {
+      config: isEmbeddingProviderConfigured(settings)
+        ? toEmbeddingConfig(settings)
+        : null,
+      failed: false,
+    };
   } catch (error) {
-    feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: embeddings unavailable, falling back to tag similarity only");
-    return null;
+    feedLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Feed: embedding settings unavailable"
+    );
+    return { config: null, failed: true };
   }
 }
 
-/**
- * Image-embedding nearest neighbors for every seed, keyed by seed post id,
- * with CALIBRATED scores (see @/lib/embeddings/calibration).
- *
- * The store batches seed ids into 16-seed LATERAL kNN queries: large enough to
- * avoid per-seed round trips, small enough to keep Postgres parallelism across
- * chunks. Every returned score is rescaled against the baseline, then the
- * calibrated `config.minEmbeddingScore` floor is applied in JS, after the
- * fixed-LIMIT fetch — not as a SQL distance predicate. A distance predicate
- * on an ANN ORDER BY ... LIMIT query is unbounded: when a seed's
- * neighborhood cannot satisfy it, the index scan never reaches its LIMIT and
- * falls back to walking the whole vector index (measured: 60s+ per such
- * seed versus 0.6s unfiltered). Filtering the fetched top-K afterwards is
- * result-identical, and the scan always terminates at LIMIT rows.
- *
- * Returns an empty map when embeddings are unconfigured. Missing source
- * embeddings are absent from the map, and chunk-level failures degrade to
- * empty neighborhoods rather than failing the whole build.
- */
-export async function fetchEmbeddingNeighborhoods(
-  seeds: FeedSeed[],
-  embeddingConfig: EmbeddingConfig | null,
+async function rankFallback(
+  favorites: readonly FavoriteSeedInput[],
+  excluded: ReadonlySet<number>,
+  now: Date,
   config: FeedConfig,
-  baseline: number
-): Promise<Map<number, EmbeddedRelatedPost[]>> {
-  if (!embeddingConfig || seeds.length === 0) return new Map();
+  degraded: boolean
+): Promise<FeedBuildResult> {
+  const seeds = favorites.slice(0, FALLBACK_FAVORITE_COUNT).map((favorite) => ({
+    postId: favorite.postId,
+    hash: favorite.hash,
+    weight: seedWeight(favorite.favoritedAt, now, config.recencyHalfLifeDays),
+  }));
+  if (seeds.length === 0) return { feed: [], degraded };
 
+  let neighborhoods: Map<number, RecommendedPost[]>;
   try {
-    const bySeed = await findRelatedPostsByEmbeddingForPosts({
-      postIds: seeds.map((seed) => seed.postId),
-      config: embeddingConfig,
-      limit: config.neighborsPerSeed,
-      // No minScore: see the doc comment — the floor is applied below.
-    });
-
-    // Calibrate then floor. At baseline 0 the rescale is the identity
-    // (clamped), so the floor applies to the raw cosine — the legacy
-    // semantics of the old SQL prefilter, now race- and scan-safe.
-    const calibrated = new Map<number, EmbeddedRelatedPost[]>();
-    for (const [seedId, neighbors] of bySeed) {
-      calibrated.set(
-        seedId,
-        neighbors
-          .map((neighbor) => ({
-            ...neighbor,
-            score: calibrateEmbeddingScore(neighbor.score, baseline),
-          }))
-          .filter((neighbor) => neighbor.score >= config.minEmbeddingScore)
-      );
-    }
-    return calibrated;
+    neighborhoods = await getTagNeighborhoodsForSeeds(
+      seeds.map((seed) => seed.postId),
+      FALLBACK_NEIGHBOR_COUNT
+    );
   } catch (error) {
-    feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched embedding neighbors failed");
-    return new Map();
+    feedLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Feed: tag fallback recommendations failed"
+    );
+    return { feed: [], degraded: true };
+  }
+
+  const merged = mergeSeedCandidates(
+    seeds.map((seed) => ({ seed, idf: neighborhoods.get(seed.postId) ?? [] })),
+    excluded
+  );
+  if (merged.length === 0) return { feed: [], degraded };
+
+  const ids = merged.map((post) => post.id);
+  const [importedRows, groupRows, candidateViews] = await Promise.all([
+    config.freshnessBoost > 0
+      ? prisma.post.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, importedAt: true },
+        })
+      : Promise.resolve([]),
+    prisma.postGroup.findMany({
+      where: { postId: { in: ids } },
+      select: { postId: true, groupId: true },
+    }),
+    config.viewedCandidatePenaltyFloor < 1
+      ? prisma.postView.findMany({
+          where: { postId: { in: ids } },
+          select: { postId: true, lastViewedAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const importedAtByPostId = new Map<number, Date>(
+    importedRows.map((post) => [post.id, post.importedAt])
+  );
+  const groupIdsByPostId = new Map<number, number[]>();
+  for (const { postId, groupId } of groupRows) {
+    const existing = groupIdsByPostId.get(postId);
+    if (existing) existing.push(groupId);
+    else groupIdsByPostId.set(postId, [groupId]);
+  }
+  const lastViewedByPostId = new Map<number, Date>(
+    candidateViews.map((view) => [view.postId, view.lastViewedAt])
+  );
+  const freshened = applyFreshnessBoost(merged, importedAtByPostId, now, config);
+  const penalized = applyViewedPenalty(freshened, lastViewedByPostId, now, config);
+  return {
+    feed: dedupeRankedByBlurhash(
+      dedupeRankedByGroup(penalized, groupIdsByPostId)
+    ).slice(0, config.maxFeedSize),
+    degraded,
+  };
+}
+
+/**
+ * Build a taste-cluster feed. Store/taste failures return a degraded result;
+ * only successfully-read disabled embeddings or zero embedded members use the
+ * tag fallback, so transient settings or cluster failures never replace a
+ * healthy cached feed with a tag-only ranking.
+ */
+async function buildFeedDetailed(
+  config: FeedConfig = FEED_CONFIG
+): Promise<FeedBuildResult> {
+  try {
+    return await buildFeedUnsafe(config);
+  } catch (error) {
+    feedLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Feed: build failed"
+    );
+    return { feed: [], degraded: true };
   }
 }
 
-/**
- * Assemble per-seed candidate neighborhoods from the two engines. Tag-IDF
- * neighborhoods are computed for ALL seeds in one batched query (see
- * {@link getTagNeighborhoodsForSeeds}); embedding neighborhoods are fetched in
- * chunked batches. Missing entries degrade to empty.
- */
-function assembleContributions(
-  seeds: FeedSeed[],
-  embeddingBySeed: Map<number, EmbeddedRelatedPost[]>,
-  idfBySeed: Map<number, RecommendedPost[]>,
-  polarity: 1 | -1
-): SeedContribution[] {
-  return seeds.map((seed) => ({
-    seed,
-    embedding: embeddingBySeed.get(seed.postId) ?? [],
-    idf: idfBySeed.get(seed.postId) ?? [],
-    polarity,
-  }));
-}
-
-/**
- * Build the full ranked feed from scratch.
- *
- * Positive seeds (favorites, views) pull in similar posts; negative seeds
- * (recent dismissals) push down posts similar to them. Taste signals are
- * first collapsed to one representative per group (a favorited multi-page
- * set is ONE seed, not one per page). Excludes favorited posts, dismissed
- * posts, and any post sharing a group with a seed of either sign (the
- * per-seed engines already exclude the seed's own group; this applies the
- * rule across seeds too). After merging, candidates receive a small freshness
- * boost, already-viewed candidates are downweighted (decaying with view age),
- * group siblings among candidates collapse to one representative, and only
- * then is the final feed sliced to `maxFeedSize`. Both engines degrade to
- * empty per-seed results on failure rather than failing the build.
- */
-export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
+async function buildFeedUnsafe(
+  config: FeedConfig = FEED_CONFIG
+): Promise<FeedBuildResult> {
   const now = new Date();
-
-  const [favorites, dismissedIds, recentDismissals, views] = await Promise.all([
+  const [favorites, dismissedRows, views] = await Promise.all([
     prisma.favorite.findMany({
       orderBy: { favoritedAt: "desc" },
       select: {
@@ -855,33 +507,11 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
         post: { select: { hash: true } },
       },
     }),
-    // ALL dismissed post ids — needed to exclude every dismissed post from the
-    // feed. Id-only, unordered: a cheap primary-key scan even with thousands of
-    // dismissals.
     prisma.feedDismissal.findMany({ select: { postId: true } }),
-    // Only the most-recent dismissals become negative seeds, so only these need
-    // the ordered read + Post join for their hash (embedding lookup). Served by
-    // the dismissedAt index; over-fetched so group collapse cannot starve the
-    // signal (see SEED_COLLAPSE_OVERFETCH) — selectNegativeSeeds still caps
-    // seeds at negativeSeedCount.
-    config.negativeSeedCount > 0
-      ? prisma.feedDismissal.findMany({
-          orderBy: { dismissedAt: "desc" },
-          take: config.negativeSeedCount * SEED_COLLAPSE_OVERFETCH,
-          select: {
-            postId: true,
-            dismissedAt: true,
-            post: { select: { hash: true } },
-          },
-        })
-      : Promise.resolve([]),
-    // Recently-viewed posts that carry no explicit signal yet (not favorited,
-    // not dismissed) — the implicit-engagement seeds. Over-fetched like the
-    // dismissals above; selectViewSeeds caps seeds at viewSeedCount.
     prisma.postView.findMany({
       where: { post: { favorite: { is: null }, feedDismissal: { is: null } } },
       orderBy: { lastViewedAt: "desc" },
-      take: config.viewSeedCount * SEED_COLLAPSE_OVERFETCH,
+      take: config.viewSeedCount * SIGNAL_COLLAPSE_OVERFETCH,
       select: {
         postId: true,
         viewCount: true,
@@ -890,35 +520,23 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
       },
     }),
   ]);
+  if (favorites.length === 0) return { feed: [], degraded: false };
 
-  // Without favorites there is no positive taste to seed from; a feed built
-  // only from dislikes/views would have too little explicit signal to rank on.
-  if (favorites.length === 0) return [];
-
-  const favoriteInputs: FavoriteSeedInput[] = favorites.map((fav) => ({
-    postId: fav.postId,
-    hash: fav.post.hash,
-    favoritedAt: fav.favoritedAt,
+  const favoriteInputs: FavoriteSeedInput[] = favorites.map((favorite) => ({
+    postId: favorite.postId,
+    hash: favorite.post.hash,
+    favoritedAt: favorite.favoritedAt,
   }));
-  const viewInputs: ViewSeedInput[] = views.map((v) => ({
-    postId: v.postId,
-    hash: v.post.hash,
-    viewCount: v.viewCount,
-    lastViewedAt: v.lastViewedAt,
+  const viewInputs: ViewSeedInput[] = views.map((view) => ({
+    postId: view.postId,
+    hash: view.post.hash,
+    viewCount: view.viewCount,
+    lastViewedAt: view.lastViewedAt,
   }));
-  const dismissalInputs: DismissalSeedInput[] = recentDismissals.map((d) => ({
-    postId: d.postId,
-    hash: d.post.hash,
-    dismissedAt: d.dismissedAt,
-  }));
-
-  // Group memberships of every taste signal, for seed-level group collapse:
-  // a favorited/viewed/dismissed multi-page set must count as ONE signal, not
-  // one per page (see collapseSignalsByGroup).
+  const dismissedIds = dismissedRows.map((dismissal) => dismissal.postId);
   const signalIds = [
-    ...favoriteInputs.map((f) => f.postId),
-    ...viewInputs.map((v) => v.postId),
-    ...dismissalInputs.map((d) => d.postId),
+    ...favoriteInputs.map((favorite) => favorite.postId),
+    ...viewInputs.map((view) => view.postId),
   ];
   const signalGroupRows = await prisma.postGroup.findMany({
     where: { postId: { in: signalIds } },
@@ -930,11 +548,6 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     if (existing) existing.push(groupId);
     else signalGroupsByPostId.set(postId, [groupId]);
   }
-
-  // Positive signals share one seen-set — favorites collapse first so a
-  // viewed sibling of a favorited set defers to the (stronger) favorite seed.
-  // Negative signals collapse independently: a dismissal inside an otherwise-
-  // liked set is an explicit correction that must keep its seed.
   const seenPositiveGroups = new Set<number>();
   const collapsedFavorites = collapseSignalsByGroup(
     favoriteInputs,
@@ -946,189 +559,308 @@ export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedP
     signalGroupsByPostId,
     seenPositiveGroups
   );
-  const collapsedDismissals = collapseSignalsByGroup(dismissalInputs, signalGroupsByPostId);
-
-  const favoriteSeeds = selectSeeds(
-    collapsedFavorites,
+  const modelFavorites = collapsedFavorites.slice(0, config.maxTasteMembers);
+  const favoriteMembers: TasteMember[] = modelFavorites.map((favorite) => ({
+    postId: favorite.postId,
+    weight: seedWeight(favorite.favoritedAt, now, config.recencyHalfLifeDays),
+    kind: "favorite",
+  }));
+  const remainingMemberCapacity = Math.max(
+    0,
+    config.maxTasteMembers - favoriteMembers.length
+  );
+  const viewMembers: TasteMember[] = selectViewSeeds(
+    collapsedViews,
     now,
-    config,
-    mulberry32(currentSeedBucket())
-  );
+    config
+  )
+    .slice(0, remainingMemberCapacity)
+    .map((view) => ({
+      postId: view.postId,
+      weight: view.weight,
+      kind: "view",
+    }));
+  const members = [...favoriteMembers, ...viewMembers];
 
-  const viewSeeds = selectViewSeeds(collapsedViews, now, config);
-
-  const negativeSeeds = selectNegativeSeeds(collapsedDismissals, now, config);
-
-  // Favorites and views are positive (boost neighbors); dismissals are negative
-  // (suppress neighbors). All three feed the same batched tag compute and
-  // chunked embedding fetch, so extra signals add seeds without multiplying
-  // query count per seed. Seed sets are disjoint by construction (views exclude
-  // favorited/dismissed; favorites and dismissals are mutually exclusive).
-  const positiveSeeds = [...favoriteSeeds, ...viewSeeds];
-  const allSeeds = [...positiveSeeds, ...negativeSeeds];
-  const allSeedIds = allSeeds.map((s) => s.postId);
-
-  const embeddingConfig = await resolveEmbeddingConfig();
-  // Model-specific random-pair baseline for score calibration; 0 (identity)
-  // when unconfigured, the store is too small, or estimation fails. Chained
-  // (not awaited) into the embedding branch so the baseline read/estimation
-  // overlaps the independent group-sibling and tag-IDF queries below.
-  const embeddingBySeedPromise = (embeddingConfig
-    ? getEmbeddingBaseline(embeddingConfig)
-    : Promise.resolve(0)
-  ).then((baseline) =>
-    fetchEmbeddingNeighborhoods(allSeeds, embeddingConfig, config, baseline)
-  );
-
-  // Group-sibling exclusion anchors on EVERY favorite, not just this build's
-  // sampled seeds: a page of a set the user already favorited must never be
-  // re-served, even when that favorite lost the seed lottery this build
-  // (observed in prod: 13 of the top-100 feed items were siblings of
-  // unsampled favorites). Favorites are matched server-side via the
-  // Favorite relation — never materialized into the client-side IN list,
-  // which would grow with the whole favorites table and can exceed bind-
-  // parameter limits. Only the bounded seed ids (which include view and
-  // dismissal seeds with no Favorite row) travel as parameters.
-
-  // Tag-IDF neighborhoods for every seed come from ONE batched query; embedding
-  // neighborhoods are fetched in bounded chunks so the ANN work can use several
-  // backends without one round trip per seed.
-  const [excludedGroupSiblings, idfBySeed, embeddingBySeed] = await Promise.all([
-    prisma.postGroup.findMany({
-      where: {
-        group: {
-          posts: {
-            some: {
-              OR: [
-                { postId: { in: allSeedIds } },
-                { post: { favorite: { isNot: null } } },
-              ],
-            },
+  const excludedGroupSiblingsPromise = prisma.postGroup.findMany({
+    where: {
+      group: {
+        posts: {
+          some: {
+            OR: [
+              { postId: { in: dismissedIds } },
+              { post: { favorite: { isNot: null } } },
+            ],
           },
         },
       },
-      select: { postId: true },
-    }),
-    getTagNeighborhoodsForSeeds(allSeedIds, config.neighborsPerSeed).catch(
-      (error): Map<number, RecommendedPost[]> => {
-        feedLog.error({ error: error instanceof Error ? error.message : String(error) }, "Feed: batched tag recommendations failed");
-        return new Map();
-      }
-    ),
-    embeddingBySeedPromise,
-  ]);
-
-  const contributions = [
-    ...assembleContributions(positiveSeeds, embeddingBySeed, idfBySeed, 1),
-    ...assembleContributions(negativeSeeds, embeddingBySeed, idfBySeed, -1),
-  ];
-
+    },
+    select: { postId: true },
+  });
+  const [{ config: embeddingConfig, failed: embeddingConfigFailed }, excludedGroupSiblings] =
+    await Promise.all([resolveEmbeddingConfig(), excludedGroupSiblingsPromise]);
   const excluded = new Set<number>([
-    ...favorites.map((fav) => fav.postId),
-    ...dismissedIds.map((d) => d.postId),
-    ...excludedGroupSiblings.map((g) => g.postId),
+    ...favorites.map((favorite) => favorite.postId),
+    ...dismissedIds,
+    ...excludedGroupSiblings.map((row) => row.postId),
   ]);
 
-  // Exact embedding availability for the merge's per-pair achievable-weight
-  // normalization: which of the seeds AND candidates actually have a stored
-  // embedding under the active config (mirrors findRelatedPostsByEmbedding's
-  // source filter). One batched indexed read over ~seeds + all distinct
-  // candidates; skipped entirely when embeddings are unconfigured (null makes
-  // the normalization a uniform, ranking-neutral rescale).
-  let embeddedPostIds: ReadonlySet<number> | null = null;
-  if (embeddingConfig) {
-    const probeIds = new Set<number>(allSeedIds);
-    for (const contribution of contributions) {
-      for (const neighbor of contribution.embedding) probeIds.add(neighbor.id);
-      for (const rec of contribution.idf) probeIds.add(rec.id);
+  if (embeddingConfigFailed) {
+    return { feed: [], degraded: true };
+  }
+
+  if (!embeddingConfig) {
+    return rankFallback(collapsedFavorites, excluded, now, config, false);
+  }
+
+    const cacheKey = embeddingConfigKey(embeddingConfig);
+    let vectorCache = globalForTaste.__feedVectors;
+    if (!vectorCache || vectorCache.key !== cacheKey) {
+      vectorCache = { key: cacheKey, vectors: new Map() };
+      globalForTaste.__feedVectors = vectorCache;
+      globalForTaste.__feedCentroids = undefined;
     }
-    const embeddedRows =
-      probeIds.size > 0
-        ? await prisma.postEmbedding.findMany({
-            where: {
-              postId: { in: [...probeIds] },
-              baseUrl: embeddingConfig.baseUrl,
-              model: embeddingConfig.model,
-              dimensions: embeddingConfig.dimensions,
-              imageMaxResolution: embeddingConfig.imageMaxResolution,
-              // COMPLETE rows always carry a non-null vector (see the upsert
-              // in @/lib/embeddings/store), so status alone is sufficient.
-              status: "COMPLETE",
-            },
-            select: { postId: true },
+    const missingIds = members
+      .map((member) => member.postId)
+      .filter((postId) => !vectorCache.vectors.has(postId));
+    if (missingIds.length > 0) {
+      const rows = await getEmbeddingVectorsForPosts({
+        postIds: missingIds,
+        config: embeddingConfig,
+      });
+      for (const row of rows) vectorCache.vectors.set(row.postId, row.vector);
+    }
+
+    const embeddedMembers = members.filter((member) =>
+      vectorCache.vectors.has(member.postId)
+    );
+    if (embeddedMembers.length === 0) {
+      return rankFallback(collapsedFavorites, excluded, now, config, false);
+    }
+    const vectors = new Float32Array(
+      embeddedMembers.length * embeddingConfig.dimensions
+    );
+    for (let row = 0; row < embeddedMembers.length; row++) {
+      const vector = vectorCache.vectors.get(embeddedMembers[row].postId);
+      if (!vector) continue;
+      vectors.set(vector, row * embeddingConfig.dimensions);
+    }
+    normalizeRows(vectors, embeddingConfig.dimensions);
+    const centroidCache = globalForTaste.__feedCentroids;
+    const warmStart =
+      centroidCache?.key === cacheKey ? centroidCache.centroids : null;
+    const model = fitTasteModel(
+      embeddedMembers,
+      vectors,
+      embeddingConfig.dimensions,
+      {
+        clusterCount: config.clusterCount,
+        minClusterSize: config.minClusterSize,
+        maxIterations: config.clusterIterations,
+      },
+      currentSeedBucket(),
+      warmStart
+    );
+    const currentMemberIds = new Set(members.map((member) => member.postId));
+    for (const postId of vectorCache.vectors.keys()) {
+      if (!currentMemberIds.has(postId)) vectorCache.vectors.delete(postId);
+    }
+    const centroids = new Float32Array(
+      model.clusters.length * embeddingConfig.dimensions
+    );
+    for (let index = 0; index < model.clusters.length; index++) {
+      centroids.set(
+        model.clusters[index].centroid,
+        index * embeddingConfig.dimensions
+      );
+    }
+    globalForTaste.__feedCentroids = {
+      key: cacheKey,
+      centroids,
+    };
+    if (model.clusters.length === 0) {
+      return { feed: [], degraded: true };
+    }
+
+    const baselinePromise = getEmbeddingBaseline(embeddingConfig);
+    const annPromise = Promise.all(
+      model.clusters.map((cluster) =>
+        findNearestByVector({
+          vector: cluster.centroid,
+          config: embeddingConfig,
+          limit: config.neighborsPerCluster,
+        })
+      )
+    );
+    const [baseline, neighborhoods] = await Promise.all([
+      baselinePromise,
+      annPromise,
+    ]);
+    const candidatesByCluster = new Map<
+      number,
+      { id: number; score: number }[]
+    >();
+    for (let index = 0; index < model.clusters.length; index++) {
+      const cluster = model.clusters[index];
+      const candidates = neighborhoods[index]
+        .map((neighbor) => ({
+          id: neighbor.postId,
+          score: calibrateEmbeddingScore(neighbor.score, baseline),
+        }))
+        .filter(
+          (candidate) =>
+            candidate.score >= config.minEmbeddingScore &&
+            !excluded.has(candidate.id)
+        );
+      candidatesByCluster.set(cluster.index, candidates);
+    }
+
+    await Promise.all(
+      model.clusters.map(async (cluster) => {
+        const candidates = candidatesByCluster.get(cluster.index) ?? [];
+        if (cluster.favoritePostIds.length === 0 || candidates.length === 0) return;
+        const similarities = await getMaxSimilarityToReferences({
+          candidateIds: candidates.map((candidate) => candidate.id),
+          referenceIds: cluster.favoritePostIds,
+          config: embeddingConfig,
+        });
+        candidatesByCluster.set(
+          cluster.index,
+          candidates.filter((candidate) => {
+            const raw = similarities.get(candidate.id);
+            return (
+              raw !== undefined &&
+              calibrateEmbeddingScore(raw, baseline) >= config.memberGate
+            );
           })
-        : [];
-    embeddedPostIds = new Set(embeddedRows.map((row) => row.postId));
-  }
+        );
+      })
+    );
 
-  const merged = mergeSeedCandidates(contributions, excluded, config, embeddedPostIds);
-  if (merged.length === 0) return merged;
+    if (dismissedIds.length > 0) {
+      const allCandidateIds = [
+        ...new Set(
+          [...candidatesByCluster.values()].flatMap((candidates) =>
+            candidates.map((candidate) => candidate.id)
+          )
+        ),
+      ];
+      if (allCandidateIds.length > 0) {
+        const similarities = await getMaxSimilarityToReferences({
+          candidateIds: allCandidateIds,
+          referenceIds: dismissedIds,
+          config: embeddingConfig,
+        });
+        for (const [cluster, candidates] of candidatesByCluster) {
+          candidatesByCluster.set(
+            cluster,
+            candidates.filter((candidate) => {
+              const raw = similarities.get(candidate.id);
+              return (
+                raw === undefined ||
+                calibrateEmbeddingScore(raw, baseline) < config.dismissalRadius
+              );
+            })
+          );
+        }
+      }
+    }
 
-  // Up to three batched lookups over the merged candidates, only when there is
-  // a feed: import timestamps (freshness boost), group memberships (per-group
-  // dedup below), and view state (the already-seen penalty).
-  const mergedIds = merged.map((p) => p.id);
-  const [importedRows, groupRows, candidateViews] = await Promise.all([
-    config.freshnessBoost > 0
-      ? prisma.post.findMany({
-          where: { id: { in: mergedIds } },
-          select: { id: true, importedAt: true },
-        })
-      : Promise.resolve([]),
-    prisma.postGroup.findMany({
-      where: { postId: { in: mergedIds } },
-      select: { postId: true, groupId: true },
-    }),
-    config.viewedCandidatePenaltyFloor < 1
-      ? prisma.postView.findMany({
-          where: { postId: { in: mergedIds } },
-          select: { postId: true, lastViewedAt: true },
-        })
-      : Promise.resolve([]),
-  ]);
-  const groupIdsByPostId = new Map<number, number[]>();
-  for (const { postId, groupId } of groupRows) {
-    const existing = groupIdsByPostId.get(postId);
-    if (existing) existing.push(groupId);
-    else groupIdsByPostId.set(postId, [groupId]);
-  }
-  const importedAtByPostId = new Map<number, Date>(
-    importedRows.map((p) => [p.id, p.importedAt])
-  );
-  const lastViewedByPostId = new Map<number, Date>(
-    candidateViews.map((v) => [v.postId, v.lastViewedAt])
-  );
+    const survivingIds = [
+      ...new Set(
+        [...candidatesByCluster.values()].flatMap((candidates) =>
+          candidates.map((candidate) => candidate.id)
+        )
+      ),
+    ];
+    if (survivingIds.length === 0) return { feed: [], degraded: false };
+    const [postRows, groupRows, candidateViews] = await Promise.all([
+      prisma.post.findMany({
+        where: { id: { in: survivingIds } },
+        select: { ...postCardSelect, importedAt: true },
+      }),
+      prisma.postGroup.findMany({
+        where: { postId: { in: survivingIds } },
+        select: { postId: true, groupId: true },
+      }),
+      config.viewedCandidatePenaltyFloor < 1
+        ? prisma.postView.findMany({
+            where: { postId: { in: survivingIds } },
+            select: { postId: true, lastViewedAt: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const postsById = new Map(postRows.map((post) => [post.id, post]));
+    const importedAtByPostId = new Map(
+      postRows.map((post) => [post.id, post.importedAt])
+    );
+    const groupIdsByPostId = new Map<number, number[]>();
+    for (const { postId, groupId } of groupRows) {
+      const existing = groupIdsByPostId.get(postId);
+      if (existing) existing.push(groupId);
+      else groupIdsByPostId.set(postId, [groupId]);
+    }
+    const lastViewedByPostId = new Map<number, Date>(
+      candidateViews.map((view) => [view.postId, view.lastViewedAt])
+    );
+    const rankedByCluster = new Map<number, FeedPost[]>();
+    const massByCluster = new Map<number, number>();
+    for (const cluster of model.clusters) {
+      const ranked: FeedPost[] = [];
+      for (const candidate of candidatesByCluster.get(cluster.index) ?? []) {
+        const post = postsById.get(candidate.id);
+        if (!post) continue;
+        ranked.push({
+          id: post.id,
+          hash: post.hash,
+          width: post.width,
+          height: post.height,
+          blurhash: post.blurhash,
+          mimeType: post.mimeType,
+          score: candidate.score,
+        });
+      }
+      const freshened = applyFreshnessBoost(
+        ranked,
+        importedAtByPostId,
+        now,
+        config
+      );
+      rankedByCluster.set(
+        cluster.index,
+        applyViewedPenalty(freshened, lastViewedByPostId, now, config)
+      );
+      massByCluster.set(cluster.index, cluster.mass);
+    }
+    const allocated = allocateAcrossClusters(
+      rankedByCluster,
+      massByCluster,
+      groupIdsByPostId,
+      {
+        pageSize: config.pageSize,
+        pageCount: config.pageCount,
+        floorShare: config.floorShare,
+      },
+      perceptualKeyByPostId(postRows)
+    );
+    return {
+      feed: allocated.map(({ item }) => item).slice(0, config.maxFeedSize),
+      degraded: false,
+    };
+}
 
-  // Freshness runs before the viewed penalty: the first-look window applies to
-  // new candidates, but a candidate the user already opened can still sink.
-  const freshened = applyFreshnessBoost(merged, importedAtByPostId, now, config);
-
-  // Penalize already-viewed candidates BEFORE choosing group representatives,
-  // so an unviewed sibling can represent its set over a just-viewed one.
-  const penalized = applyViewedPenalty(freshened, lastViewedByPostId, now, config);
-
-  // Collapse multi-post sets (a candidate whose group sibling is also a
-  // candidate) to one representative each, so a large set near the user's
-  // taste cannot flood the feed, then collapse cross-group perceptual
-  // near-duplicates by blurhash. Slice only after both collapses so dropped
-  // entries cannot leave fillable holes.
-  return dedupeRankedByBlurhash(
-    dedupeRankedByGroup(penalized, groupIdsByPostId)
-  ).slice(0, config.maxFeedSize);
+export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
+  return (await buildFeedDetailed(config)).feed;
 }
 
 /**
  * Full ranked feed cached per seed-sample bucket, shared across Next.js route
  * bundles via globalThis.
  *
- * getFeedPage previously rebuilt the entire ranked feed from scratch on every
- * request — up to ~145 seed neighborhoods (favorites + views + dismissals),
- * one embedding k-NN query each. Pagination clicks and repeat visits all paid
- * that full build. But the ranked feed is DETERMINISTIC within a seed-sample
- * bucket ({@link SEED_SAMPLE_BUCKET_MS}): the sampler reseeds identically, so a
- * rebuild inside the same bucket reproduces the same order for the same data.
- * Caching the built feed keyed by that bucket serves every page within a bucket
- * from a single build.
+ * getFeedPage previously rebuilt the ranked feed on every request, repeating
+ * the same centroid ANN and gate queries for pagination clicks. The model seed
+ * and ranked feed are deterministic within {@link SEED_SAMPLE_BUCKET_MS}, so
+ * one cached build serves every page in that bucket.
  *
  * A module-level `let` is per-bundle under Next.js (the /recommended page and
  * the /api/feed route are separate module instances), which is why an earlier
@@ -1222,6 +954,17 @@ export function invalidateFeedCache(): void {
 export function clearFeedCache(): void {
   invalidateFeedCache();
   feedCache().entry = null;
+  clearTasteCaches();
+}
+
+/**
+ * Drop the cached member vectors and centroids. Required whenever stored
+ * embeddings under the active config are deleted or replaced; the vector
+ * cache otherwise treats a post as embedded for as long as its id is present.
+ */
+export function clearTasteCaches(): void {
+  globalForTaste.__feedVectors = undefined;
+  globalForTaste.__feedCentroids = undefined;
 }
 
 /**
@@ -1233,9 +976,9 @@ export function clearFeedCache(): void {
  * bucket) is returned immediately while the rebuild completes in the
  * background. A read awaits the build only when no entry is retained (cold
  * start, or first read after {@link clearFeedCache}).
- * On completion the result is cached only if no invalidation or bucket roll
- * raced it; a failed background rebuild is logged and retried by the next
- * read (the stale entry keeps serving meanwhile).
+ * On completion the result is cached only if neither engine degraded and no
+ * invalidation or bucket roll raced it; degraded cold-start results return to
+ * the caller but are retried on the next read.
  */
 async function getCachedFeed(): Promise<FeedPost[]> {
   const cache = feedCache();
@@ -1249,14 +992,20 @@ async function getCachedFeed(): Promise<FeedPost[]> {
   let build = cache.inFlight && cache.inFlightBucket === bucket ? cache.inFlight : null;
   if (!build) {
     const generation = cache.generation;
-    const started = buildFeed()
-      .then((feed) => {
-        // Cache only if nothing invalidated or superseded this build
-        // (generation unchanged) AND the bucket has not rolled mid-build —
-        // otherwise a build that straddled a bucket boundary could clobber
-        // the newer bucket's entry with a stale-labeled one.
-        if (cache.generation === generation && currentSeedBucket() === bucket) {
+    const started = buildFeedDetailed()
+      .then(({ feed, degraded }) => {
+        // Cache only if both engines were healthy, nothing invalidated or
+        // superseded this build, and its sample bucket did not roll.
+        if (
+          !degraded &&
+          cache.generation === generation &&
+          currentSeedBucket() === bucket
+        ) {
           cache.entry = { bucket, generation, feed };
+        } else if (degraded) {
+          feedLog.warn(
+            "Feed: degraded rebuild was not cached; retaining stale feed when available"
+          );
         }
         return feed;
       })

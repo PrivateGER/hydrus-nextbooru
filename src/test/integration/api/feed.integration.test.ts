@@ -11,6 +11,7 @@ import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
 import * as viewRoute from '@/app/api/posts/[hash]/view/route';
 import { buildFeed, FEED_CONFIG, invalidateFeedCache, clearFeedCache, settleFeedRebuild, feedRebuildInFlight } from '@/lib/feed';
 import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
+import { upsertCompleteEmbedding } from '@/lib/embeddings/store';
 
 const TASTE_TAGS = ['1girl', 'blue hair', 'school uniform'];
 
@@ -130,6 +131,107 @@ describe('GET /api/feed (Integration)', () => {
     expect(data.posts[0].score).toBeGreaterThan(0);
   });
 
+  it('interleaves embedding taste clusters and applies favorite, sibling, and dismissal exclusions', async () => {
+    const prisma = getTestPrisma();
+    const dimensions = 768;
+    const embeddingConfig = {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'google/gemini-embedding-2-preview',
+      dimensions,
+      imageMaxResolution: 1024,
+    };
+    const zeroTail = Array.from({ length: dimensions - 2 }, () => 0);
+    const favoriteA = await createPostWithTags(prisma, ['cluster a favorite']);
+    const favoriteB = await createPostWithTags(prisma, ['cluster b favorite']);
+    const sibling = await createPostWithTags(prisma, ['favorite sibling']);
+    const candidatesA = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        createPostWithTags(prisma, [`cluster a candidate ${index}`])
+      )
+    );
+    const candidatesB = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        createPostWithTags(prisma, [`cluster b candidate ${index}`])
+      )
+    );
+    const dismissed = await createPostWithTags(prisma, ['cluster a dismissal']);
+    const group = await prisma.group.create({
+      data: { sourceType: 'PIXIV', sourceId: 'embedding-favorite-group' },
+    });
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: favoriteA.id, groupId: group.id, position: 0 },
+        { postId: sibling.id, groupId: group.id, position: 1 },
+      ],
+    });
+    const rows: Array<[number, number[]]> = [
+      [favoriteA.id, [1, 0, ...zeroTail]],
+      [favoriteB.id, [0, 1, ...zeroTail]],
+      [sibling.id, [1, 0.001, ...zeroTail]],
+      [dismissed.id, [1, 0, ...zeroTail]],
+      ...candidatesA.map(
+        (post, index): [number, number[]] => [
+          post.id,
+          [1, (index + 1) / 100, ...zeroTail],
+        ]
+      ),
+      ...candidatesB.map(
+        (post, index): [number, number[]] => [
+          post.id,
+          [(index + 1) / 100, 1, ...zeroTail],
+        ]
+      ),
+    ];
+    for (const [postId, embedding] of rows) {
+      await upsertCompleteEmbedding({
+        postId,
+        config: embeddingConfig,
+        embedding,
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+    }
+    await prisma.settings.createMany({
+      data: [
+        { key: 'openrouter.apiKey', value: 'sk-or-v1-test' },
+        { key: 'openrouter.embedding.model', value: embeddingConfig.model },
+        { key: 'openrouter.embedding.dimensions', value: String(dimensions) },
+        {
+          key: 'openrouter.embedding.imageMaxResolution',
+          value: String(embeddingConfig.imageMaxResolution),
+        },
+      ],
+    });
+    await favorite(favoriteA.hash);
+    await favorite(favoriteB.hash);
+    clearFeedCache();
+    const clusterConfig = {
+      ...FEED_CONFIG,
+      clusterCount: 2,
+      minClusterSize: 1,
+      neighborsPerCluster: 20,
+      pageSize: 8,
+      pageCount: 1,
+      maxFeedSize: 8,
+    };
+    const interleaved = await buildFeed(clusterConfig);
+    const clusterAHashes = new Set(candidatesA.map((post) => post.hash));
+    const clusterBHashes = new Set(candidatesB.map((post) => post.hash));
+
+    expect(interleaved.slice(0, 4).some((post) => clusterAHashes.has(post.hash))).toBe(true);
+    expect(interleaved.slice(0, 4).some((post) => clusterBHashes.has(post.hash))).toBe(true);
+    expect(interleaved.map((post) => post.hash)).not.toContain(favoriteA.hash);
+    expect(interleaved.map((post) => post.hash)).not.toContain(favoriteB.hash);
+    expect(interleaved.map((post) => post.hash)).not.toContain(sibling.hash);
+
+    await dismiss(dismissed.hash);
+    const filtered = await buildFeed(clusterConfig);
+    expect(filtered.some((post) => clusterAHashes.has(post.hash))).toBe(false);
+    expect(filtered.some((post) => clusterBHashes.has(post.hash))).toBe(true);
+  });
+
   it('reflects a new favorite after revalidation, serving the stale feed meanwhile', async () => {
     const prisma = getTestPrisma();
     const seed = await createPostWithTags(prisma, TASTE_TAGS);
@@ -193,11 +295,11 @@ describe('GET /api/feed (Integration)', () => {
     expect(hashes).toContain(outsider.hash);
   });
 
-  it('excludes group siblings of favorites that were not sampled as seeds', async () => {
+  it('excludes group siblings of every favorite in the fallback path', async () => {
     const prisma = getTestPrisma();
-    const seedFav = await createPostWithTags(prisma, TASTE_TAGS); // newest favorite -> the only seed
-    const oldFav = await createPostWithTags(prisma, TASTE_TAGS); // older favorite, NOT a seed
-    const sibling = await createPostWithTags(prisma, TASTE_TAGS); // same set as oldFav
+    const seedFav = await createPostWithTags(prisma, TASTE_TAGS);
+    const oldFav = await createPostWithTags(prisma, TASTE_TAGS);
+    const sibling = await createPostWithTags(prisma, TASTE_TAGS);
     const outsider = await createPostWithTags(prisma, TASTE_TAGS);
     await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
     await recalculatePostTagNorms(); // cosine denominator derives from the forced idf
@@ -219,14 +321,11 @@ describe('GET /api/feed (Integration)', () => {
       data: { postId: seedFav.id, favoritedAt: new Date() },
     });
 
-    // One recent seed, no sampled/view/negative strata: oldFav is a favorite
-    // that is NOT a seed this build — its set sibling must still be excluded.
+    // The fallback ranks from recent favorites, while the server-side
+    // favorite relation excludes siblings of every favorite.
     const posts = await buildFeed({
       ...FEED_CONFIG,
-      recentSeedCount: 1,
-      sampledSeedCount: 0,
       viewSeedCount: 0,
-      negativeSeedCount: 0,
     });
 
     const hashes = posts.map((p) => p.hash);

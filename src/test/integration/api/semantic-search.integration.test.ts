@@ -4,8 +4,12 @@ import { setTestPrisma } from "@/lib/db";
 import { SourceType } from "@/generated/prisma/client";
 import { createGroup, createPost, createPostsBulk } from "../factories";
 import {
+  findNearestByVector,
   findRelatedPostsByEmbedding,
   findRelatedPostsByEmbeddingForPosts,
+  getEmbeddingSimilarityForPairs,
+  getEmbeddingVectorsForPosts,
+  getMaxSimilarityToReferences,
   searchPostsByEmbedding,
   upsertCompleteEmbedding,
 } from "@/lib/embeddings/store";
@@ -349,6 +353,57 @@ describe("semantic image embedding search", () => {
     expect(filtered.get(seedA.id)?.map((post) => post.id)).toEqual([aBest.id]);
     expect(filtered.get(seedB.id)?.map((post) => post.id)).toEqual([bBest.id]);
     expect(filtered.has(seedWithoutEmbedding.id)).toBe(false);
+
+    // Exact pairwise fill (feed gap fill): a pair outside the kNN window still
+    // gets its real cosine; pairs with an unembedded end are absent; group
+    // siblings are NOT excluded here (the feed's exclusion set handles that).
+    const pairSimilarity = await getEmbeddingSimilarityForPairs({
+      pairs: [
+        { sourceId: seedA.id, candidateId: aSecond.id },
+        { sourceId: seedA.id, candidateId: bBest.id },
+        { sourceId: seedA.id, candidateId: aGroupSibling.id },
+        { sourceId: seedA.id, candidateId: seedWithoutEmbedding.id },
+        { sourceId: seedWithoutEmbedding.id, candidateId: aBest.id },
+      ],
+      config,
+    });
+    expect(pairSimilarity.get(`${seedA.id}:${aSecond.id}`)).toBeCloseTo(
+      related.get(seedA.id)![1].score,
+      6
+    );
+    expect(pairSimilarity.get(`${seedA.id}:${bBest.id}`)).toBeCloseTo(0.01 / Math.hypot(0.01, 0.99), 6);
+    expect(pairSimilarity.get(`${seedA.id}:${aGroupSibling.id}`)).toBeCloseTo(1, 6);
+    expect(pairSimilarity.has(`${seedA.id}:${seedWithoutEmbedding.id}`)).toBe(false);
+    expect(pairSimilarity.has(`${seedWithoutEmbedding.id}:${aBest.id}`)).toBe(false);
+    expect(await getEmbeddingSimilarityForPairs({ pairs: [], config })).toEqual(new Map());
+    const nearestToA = await findNearestByVector({
+      vector: embedding(1, 0),
+      config,
+      limit: 5,
+    });
+    expect(nearestToA.slice(0, 2).map((row) => row.postId).sort((a, b) => a - b)).toEqual(
+      [seedA.id, aGroupSibling.id].sort((a, b) => a - b)
+    );
+    expect(nearestToA[2].postId).toBe(aBest.id);
+    expect(nearestToA[0].score).toBeCloseTo(1, 6);
+    expect(nearestToA[1].score).toBeCloseTo(1, 6);
+    expect(nearestToA[2].score).toBeCloseTo(0.99 / Math.hypot(0.99, 0.01), 6);
+
+    const maxSimilarity = await getMaxSimilarityToReferences({
+      candidateIds: [aSecond.id, bBest.id],
+      referenceIds: [seedA.id, seedB.id],
+      config,
+    });
+    expect(maxSimilarity.get(aSecond.id)).toBeCloseTo(0.9 / Math.hypot(0.9, 0.1), 6);
+    expect(maxSimilarity.get(bBest.id)).toBeCloseTo(0.99 / Math.hypot(0.01, 0.99), 6);
+
+    const storedVectors = await getEmbeddingVectorsForPosts({
+      postIds: [seedA.id, seedWithoutEmbedding.id],
+      config,
+    });
+    expect(storedVectors.map((row) => row.postId)).toEqual([seedA.id]);
+    expect(Array.from(storedVectors[0].vector)).toEqual(embedding(1, 0));
+
 
     // This hand-written EXPLAIN mirrors the production LATERAL shape closely
     // enough to prove the expression/partial vchordrq index is usable with the

@@ -77,6 +77,8 @@ const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
 // bound, while per-seed fan-out burns round trips and pool slots. Sixteen seeds
 // per LATERAL query keeps multi-core parallelism with about seven round trips.
 const RELATED_EMBEDDING_SEED_CHUNK_SIZE = 16;
+const EMBEDDING_VECTOR_POST_CHUNK_SIZE = 500;
+const MAX_SIMILARITY_CANDIDATE_CHUNK_SIZE = 1000;
 /**
  * Clamp an optional similarity floor to [-1, 1]; null disables it.
  *
@@ -407,6 +409,251 @@ export async function getPostEmbeddingVector(options: {
     embedding: validateEmbeddingVector(parseVectorLiteral(row.embedding), config.dimensions),
   };
 }
+/**
+ * Read COMPLETE embedding vectors for the requested posts under the active
+ * config. Missing posts are omitted and rows have no guaranteed order.
+ */
+export async function getEmbeddingVectorsForPosts(options: {
+  postIds: number[];
+  config: EmbeddingConfig;
+}): Promise<{ postId: number; vector: Float32Array }[]> {
+  const { config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const uniquePostIds = new Set<number>();
+  for (const postId of options.postIds) {
+    if (Number.isInteger(postId)) uniquePostIds.add(postId);
+  }
+  const postIds = [...uniquePostIds];
+  if (postIds.length === 0) return [];
+
+  const chunks: number[][] = [];
+  for (let index = 0; index < postIds.length; index += EMBEDDING_VECTOR_POST_CHUNK_SIZE) {
+    chunks.push(postIds.slice(index, index + EMBEDDING_VECTOR_POST_CHUNK_SIZE));
+  }
+
+  const chunkRows = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.$queryRaw<{ postId: number; embedding: string }[]>`
+        SELECT pe."postId", pe.embedding::text AS embedding
+        FROM "PostEmbedding" pe
+        WHERE pe."postId" = ANY(${chunk}::int[])
+          AND pe."baseUrl" = ${config.baseUrl}
+          AND pe.model = ${config.model}
+          AND pe.dimensions = ${config.dimensions}
+          AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+          AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+          AND pe.embedding IS NOT NULL
+      `
+    )
+  );
+
+  return chunkRows.flatMap((rows) =>
+    rows.map((row) => ({
+      postId: Number(row.postId),
+      vector: Float32Array.from(
+        validateEmbeddingVector(parseVectorLiteral(row.embedding), config.dimensions)
+      ),
+    }))
+  );
+}
+
+/**
+ * Find the nearest COMPLETE embeddings to a literal vector under the active
+ * config, returning raw cosine similarity.
+ *
+ * This deliberately uses a fixed-LIMIT ANN scan with no distance predicate,
+ * for the same reason documented by normalizeEmbeddingMinScore above: an
+ * unsatisfiable predicate can force a full vector-index walk before LIMIT.
+ */
+export async function findNearestByVector(options: {
+  vector: ArrayLike<number>;
+  config: EmbeddingConfig;
+  limit: number;
+}): Promise<{ postId: number; score: number }[]> {
+  const { config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const embedding = validateEmbeddingVector(Array.from(options.vector), config.dimensions);
+  const vector = toVectorLiteral(embedding);
+  const vectorTypeSql = vectorType(config.dimensions);
+  const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : 1;
+  const limit = Math.min(Math.max(1, requestedLimit), 500);
+
+  const rows = await prisma.$queryRaw<{ postId: number; score: number }[]>`
+    SELECT
+      pe."postId",
+      (1 - (pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}))::float8 AS score
+    FROM "PostEmbedding" pe
+    WHERE pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+      AND pe.embedding IS NOT NULL
+    ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
+    LIMIT ${limit}
+  `;
+
+  return rows.map((row) => ({
+    postId: Number(row.postId),
+    score: Number(row.score),
+  }));
+}
+
+/**
+ * Compute each candidate's maximum raw cosine similarity to the supplied
+ * reference posts. Candidates without a COMPLETE computable pair are absent.
+ * Each statement compares at most 1,000 candidates with 200 references.
+ */
+export async function getMaxSimilarityToReferences(options: {
+  candidateIds: number[];
+  referenceIds: number[];
+  config: EmbeddingConfig;
+}): Promise<Map<number, number>> {
+  const similarities = new Map<number, number>();
+  if (options.candidateIds.length === 0 || options.referenceIds.length === 0) {
+    return similarities;
+  }
+
+  const { config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const vectorTypeSql = vectorType(config.dimensions);
+  const candidateChunks: number[][] = [];
+  for (
+    let index = 0;
+    index < options.candidateIds.length;
+    index += MAX_SIMILARITY_CANDIDATE_CHUNK_SIZE
+  ) {
+    candidateChunks.push(
+      options.candidateIds.slice(index, index + MAX_SIMILARITY_CANDIDATE_CHUNK_SIZE)
+    );
+  }
+
+  const referenceChunks: number[][] = [];
+  for (let index = 0; index < options.referenceIds.length; index += 200) {
+    referenceChunks.push(options.referenceIds.slice(index, index + 200));
+  }
+
+  for (const candidateIds of candidateChunks) {
+    const chunkRows = await Promise.all(
+      referenceChunks.map((referenceIds) =>
+        prisma.$queryRaw<{ postId: number; similarity: number }[]>`
+          SELECT
+            candidate.id AS "postId",
+            max(
+              1 - (
+                reference_embedding.embedding::${vectorTypeSql}
+                <=> candidate_embedding.embedding::${vectorTypeSql}
+              )
+            )::float8 AS similarity
+          FROM unnest(${candidateIds}::int[]) AS candidate(id)
+          CROSS JOIN unnest(${referenceIds}::int[]) AS reference(id)
+          JOIN "PostEmbedding" reference_embedding
+            ON reference_embedding."postId" = reference.id
+           AND reference_embedding."baseUrl" = ${config.baseUrl}
+           AND reference_embedding.model = ${config.model}
+           AND reference_embedding.dimensions = ${config.dimensions}
+           AND reference_embedding."imageMaxResolution" = ${config.imageMaxResolution}
+           AND reference_embedding.status = 'COMPLETE'::"EmbeddingStatus"
+           AND reference_embedding.embedding IS NOT NULL
+          JOIN "PostEmbedding" candidate_embedding
+            ON candidate_embedding."postId" = candidate.id
+           AND candidate_embedding."baseUrl" = ${config.baseUrl}
+           AND candidate_embedding.model = ${config.model}
+           AND candidate_embedding.dimensions = ${config.dimensions}
+           AND candidate_embedding."imageMaxResolution" = ${config.imageMaxResolution}
+           AND candidate_embedding.status = 'COMPLETE'::"EmbeddingStatus"
+           AND candidate_embedding.embedding IS NOT NULL
+          GROUP BY candidate.id
+        `
+      )
+    );
+    for (const rows of chunkRows) {
+      for (const row of rows) {
+        const postId = Number(row.postId);
+        const similarity = Number(row.similarity);
+        const current = similarities.get(postId);
+        if (current === undefined || similarity > current) {
+          similarities.set(postId, similarity);
+        }
+      }
+    }
+  }
+  return similarities;
+}
+
+
+export interface EmbeddingPair {
+  sourceId: number;
+  candidateId: number;
+}
+
+/**
+ * Exact raw cosine similarity for specific (source, candidate) post pairs
+ * under the active config, keyed `${sourceId}:${candidateId}`.
+ *
+ * The feed's kNN fetch only reveals each seed's nearest `limit` posts; a
+ * candidate reached through the tag channel that sits just outside that
+ * window has a real, computable embedding similarity, and treating it as
+ * unknown biases ranking by fetch depth rather than relevance. This computes
+ * that similarity directly — no ANN index, one row per pair from two
+ * primary-key lookups, so thousands of pairs cost milliseconds. Pairs where
+ * either end has no COMPLETE embedding are absent from the result.
+ */
+export async function getEmbeddingSimilarityForPairs(options: {
+  pairs: readonly EmbeddingPair[];
+  config: EmbeddingConfig;
+}): Promise<Map<string, number>> {
+  const { config } = options;
+  const bySeedPair = new Map<string, number>();
+  if (options.pairs.length === 0) return bySeedPair;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+
+  const vectorTypeSql = vectorType(config.dimensions);
+  const sourceIds = options.pairs.map((pair) => pair.sourceId);
+  const candidateIds = options.pairs.map((pair) => pair.candidateId);
+
+  const rows = await prisma.$queryRaw<
+    { sourceId: number; candidateId: number; similarity: number }[]
+  >`
+    SELECT
+      pair.source_id AS "sourceId",
+      pair.candidate_id AS "candidateId",
+      (1 - (se.embedding::${vectorTypeSql} <=> ce.embedding::${vectorTypeSql}))::float8 AS similarity
+    FROM unnest(${sourceIds}::int[], ${candidateIds}::int[]) AS pair(source_id, candidate_id)
+    JOIN "PostEmbedding" se
+      ON se."postId" = pair.source_id
+     AND se."baseUrl" = ${config.baseUrl}
+     AND se.model = ${config.model}
+     AND se.dimensions = ${config.dimensions}
+     AND se."imageMaxResolution" = ${config.imageMaxResolution}
+     AND se.status = 'COMPLETE'::"EmbeddingStatus"
+     AND se.embedding IS NOT NULL
+    JOIN "PostEmbedding" ce
+      ON ce."postId" = pair.candidate_id
+     AND ce."baseUrl" = ${config.baseUrl}
+     AND ce.model = ${config.model}
+     AND ce.dimensions = ${config.dimensions}
+     AND ce."imageMaxResolution" = ${config.imageMaxResolution}
+     AND ce.status = 'COMPLETE'::"EmbeddingStatus"
+     AND ce.embedding IS NOT NULL
+  `;
+
+  for (const row of rows) {
+    bySeedPair.set(`${row.sourceId}:${row.candidateId}`, Number(row.similarity));
+  }
+  return bySeedPair;
+}
 
 export async function findRelatedPostsByEmbeddingForPosts(options: {
   postIds: number[];
@@ -450,6 +697,11 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
     chunks.push(postIds.slice(index, index + RELATED_EMBEDDING_SEED_CHUNK_SIZE));
   }
 
+  // A failed chunk REJECTS the whole call (after logging which seeds it
+  // covered). Returning [] for it would silently drop those seeds'
+  // neighborhoods, and the feed's stale-while-revalidate guard could then
+  // cache a partial ranking as healthy; the feed marks the build degraded on
+  // rejection instead and keeps serving its previous entry.
   const chunkRows = await Promise.all(
     chunks.map(async (chunk): Promise<ResultRow[]> => {
       try {
@@ -502,7 +754,7 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
         `;
       } catch (error) {
         aiLog.error({ seeds: chunk.join(","), error: error instanceof Error ? error.message : String(error) }, "Embedding related-post chunk failed");
-        return [];
+        throw error;
       }
     })
   );

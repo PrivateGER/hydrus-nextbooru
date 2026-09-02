@@ -10,6 +10,7 @@ const {
   mockGetEmbeddingStats,
   mockUpdateEmbeddingSettings,
   mockInvalidateFeedCache,
+  mockClearTasteCaches,
   mockInvalidateEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockGetEmbeddingStats: vi.fn(),
   mockUpdateEmbeddingSettings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
+  mockClearTasteCaches: vi.fn(),
   mockInvalidateEmbeddingCalibration: vi.fn(),
 }));
 
@@ -46,6 +48,7 @@ vi.mock("@/lib/logger", () => ({
 
 vi.mock("@/lib/feed", () => ({
   invalidateFeedCache: mockInvalidateFeedCache,
+  clearTasteCaches: mockClearTasteCaches,
 }));
 
 vi.mock("@/lib/embeddings/calibration", () => ({
@@ -188,7 +191,7 @@ describe("admin embeddings route", () => {
     await flush();
   });
 
-  it("DELETE clears current embeddings and invalidates the feed cache", async () => {
+  it("DELETE clears current embeddings, the taste caches, and the feed cache", async () => {
     mockClearEmbeddingsForConfig.mockResolvedValueOnce(12);
     const { DELETE } = await import("./route");
 
@@ -198,6 +201,7 @@ describe("admin embeddings route", () => {
     expect(response.status).toBe(200);
     expect(data.count).toBe(12);
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
+    expect(mockClearTasteCaches).toHaveBeenCalledTimes(1);
     // The wiped store was the calibration sample source — the persisted
     // baseline must drop with it.
     expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);

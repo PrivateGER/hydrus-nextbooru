@@ -7,7 +7,11 @@ import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
 import { updateHomeStatsCache } from "@/lib/stats";
-import { invalidateAllRecommendations, invalidateRecommendationsForPost } from "@/lib/recommendations";
+import {
+  bumpTagStatsGeneration,
+  invalidateAllRecommendations,
+  invalidateRecommendationsForPost,
+} from "@/lib/recommendations";
 import { syncLog } from "@/lib/logger";
 import { withSpan, addSpanEvent } from "@/lib/tracing";
 import { computePhash, PHASH_SUPPORTED_MIMES, PHASH_ALGORITHM_VERSION } from "@/lib/phash";
@@ -1341,9 +1345,12 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     progress.phase = "complete";
 
     const totalPosts = await updateTotalPostCount();
-    // Recalculate tag post counts for efficient sorting
     await recalculateTagCounts();
-    // IDF refresh can change scores globally; invalidate only when corpus drift is material.
+    // Every sync advances the generation: relation-only changes (group
+    // membership) also reshape neighborhoods, and per-post invalidation
+    // cannot see them.
+    await bumpTagStatsGeneration();
+    // Keep the material-drift full wipe as a space-reclamation policy.
     await invalidateRecommendationsIfNeeded(totalPosts);
     try {
       await prisma.$executeRawUnsafe(
