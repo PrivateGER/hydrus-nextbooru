@@ -69,38 +69,33 @@ const QUERY_BUDGETS = {
   // this PR (post detail queries no favorite state); the prior 11 predates the
   // current guard calibration.
   postDetail: 12,
-  // Compute path + the cache-write transaction (postRecommendation
-  // deleteMany + createMany), which client-level capture now observes.
-  recommendationsCold: 7,
-  // This budget measures the fixture below: FEED_GUARD_SEEDS favorites (<
-  // recentSeedCount, so every favorite is a seed with no sampling), NO
-  // dismissals/views seeded, and no explicit embedding settings. The feed still
-  // resolves a default embedding config, so the embedding path is exercised as
-  // one 3-seed kNN chunk plus the batched embedding-availability read; the
-  // PERF embeddings seeded in beforeAll do not match that default config, so
-  // this base fixture has no embedding neighbors. The remaining query count is
-  // constant in seed count: fixed signal reads + signal group memberships +
-  // seed group-siblings + default embedding-config resolution + a SINGLE
-  // batched tag-IDF compute for ALL seeds (getTagNeighborhoodsForSeeds: cache
-  // read + one set-based compute + one post-detail fetch + the cache-write
-  // transaction's deleteMany + createMany, now visible to client-level
-  // capture). A non-empty merged list then costs THREE extra batched
-  // `postId IN (...)` lookups (postGroup for per-group feed dedup + postView
-  // for the already-seen penalty + post importedAt for the freshness boost,
-  // which is on by default — single indexed batches, not N+1s). Embedding
-  // calibration adds a constant THREE statements on this cold path: the
-  // invalidation-generation Settings read, the cached-baseline Settings
-  // read, and the (empty-store) estimation sample query — nothing is
-  // persisted because the sample is empty. Observed 24; the budget keeps
-  // headroom for one extra constant statement.
-  feed: 26,
-  // Embedding-configured feed with 17 seeds (> one 16-seed chunk): the
-  // embedding neighborhood phase should add a small constant number of
-  // statements (two k-NN chunks + one availability read + the three
-  // calibration reads above; a store with a full 48-embedding sample would
-  // also persist the baseline once — headroom covers it), not one query per
-  // seed. Observed 26.
-  feedWithEmbeddings: 28,
+  // Compute path + the generation-fence Settings reads (before and after SQL)
+  // + cache-write transaction (postRecommendation deleteMany + createMany).
+  recommendationsCold: 9,
+  // Cold no-embeddings fixture: 5 signal statements (favorites plus Post
+  // hydration, dismissals, views plus Post hydration), 2 group reads (signal
+  // collapse and favorite/dismissal sibling exclusion), and 1 embedding
+  // settings read. The tag fallback costs 8 more: generation Settings, cache
+  // read plus its recommended-Post hydration, recommendation SQL, card
+  // hydration, and the generation-lock/delete/create write transaction. A
+  // non-empty fallback adds 3 candidate batches (importedAt, groups, views).
+  // Total: 5 + 2 + 1 + 8 + 3 = 19, constant in the favorite count.
+  feed: 19,
+  // Cold configured cluster fixture with 17 embedded favorites. Enumeration:
+  // 5 signal statements + 2 group reads + 1 settings read + 1 vector fetch;
+  // calibration's 3 reads (generation, cached baseline, sample) + 1 upsert;
+  // K ANN queries + gate queries (one per cluster per 200-favorite reference
+  // chunk per 1000-candidate chunk — see getMaxSimilarityToReferences, so a
+  // production cluster with >200 favorites issues several); 0 dismissal-
+  // radius queries here (in prod: one per 200-dismissal x 1000-candidate
+  // chunk); and 3 final candidate batches (cards+importedAt, groups, views).
+  // With minClusterSize=3, K <= floor(17/3)=5 after merging and every
+  // cluster has <200 favorites, so THIS FIXTURE's worst case is
+  // 5 + 2 + 1 + 1 + 4 + 2K + 0 + 3 = 26 — a fixture bound, not a production
+  // ceiling. The current fixture observes 14 because K=1 and its ANN rows
+  // fall below the calibrated floor before gate or card hydration. ANN/gate
+  // statements scale with clusters and reference chunks, never with seeds.
+  feedWithEmbeddings: 26,
   // PUT = getPostIdByHash + the setFavorite/setDismissal transaction:
   // advisory-lock SELECT, delete-opposite, upsert-self. Prisma 7.8 plants
   // SELECT-then-INSERT/UPDATE (2 statements) for this upsert instead of a
@@ -118,8 +113,7 @@ const QUERY_BUDGETS = {
   ocrAdminStatus: 5,
 } as const;
 
-// Fixed favorite count for the feed guard: small and < recentSeedCount so the
-// build fans out deterministically over exactly this many seeds.
+// Fixed favorite counts for the fallback and embedded cluster feed guards.
 const FEED_GUARD_SEEDS = 3;
 const FEED_EMBEDDING_GUARD_SEEDS = 17;
 
@@ -250,9 +244,8 @@ describe('Query count guards', () => {
   it('feed build stays within budget for a fixed seed count', async () => {
     const prisma = getTestPrisma();
 
-    // Deterministic slice: clear preference + cached-recommendation state, then
-    // seed exactly FEED_GUARD_SEEDS favorites so buildFeed genuinely fans out
-    // (an empty favorites set early-returns after a single query).
+    // Deterministic fallback slice: seed exactly FEED_GUARD_SEEDS favorites
+    // (an empty favorites set early-returns after the signal reads).
     const seeds = await prisma.post.findMany({
       orderBy: { id: 'asc' },
       take: FEED_GUARD_SEEDS,
@@ -272,7 +265,7 @@ describe('Query count guards', () => {
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feed);
   });
 
-  it('feed build with embeddings stays within chunked budget for more than one chunk', async () => {
+  it('feed build with embeddings stays within the taste-cluster budget', async () => {
     const prisma = getTestPrisma();
     const seeds = await prisma.post.findMany({
       orderBy: { id: 'asc' },
