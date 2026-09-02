@@ -85,3 +85,31 @@ export function dedupeFilmstripGroups<G extends FilmstripGroupShape>(
     return [survivor];
   });
 }
+
+/** Thumbnails rendered on each side of the current post in a filmstrip. */
+export const FILMSTRIP_RADIUS = 25;
+
+export interface FilmstripWindow<P> {
+  posts: P[];
+  /** Absolute index of `posts[0]` within the full group. */
+  offset: number;
+  total: number;
+}
+
+/**
+ * Slice a group's members to a bounded window around the current post so
+ * large groups (hundreds of members) don't render every thumbnail. The window
+ * is centered on the current post and clamped to the group bounds, so it is
+ * always `2 * FILMSTRIP_RADIUS + 1` wide when the group is at least that big.
+ * A post not in the group windows from the start.
+ */
+export function windowFilmstrip<P extends { post: { hash: string } }>(
+  posts: P[],
+  currentHash: string
+): FilmstripWindow<P> {
+  const size = 2 * FILMSTRIP_RADIUS + 1;
+  if (posts.length <= size) return { posts, offset: 0, total: posts.length };
+  const current = Math.max(0, posts.findIndex((p) => p.post.hash === currentHash));
+  const offset = Math.min(Math.max(0, current - FILMSTRIP_RADIUS), posts.length - size);
+  return { posts: posts.slice(offset, offset + size), offset, total: posts.length };
+}

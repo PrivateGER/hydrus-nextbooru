@@ -32,6 +32,10 @@ interface GroupFilmstripProps {
   switchNavUrl?: string;
   /** Height class for thumbnails (default: h-32) */
   heightClass?: string;
+  /** Absolute index of `posts[0]` when `posts` is a window of the group. */
+  offset?: number;
+  /** Full group size when `posts` is a window of the group. */
+  total?: number;
 }
 
 /**
@@ -44,7 +48,9 @@ export function GroupFilmstrip({
   groupId,
   isActiveNav = false,
   switchNavUrl,
-  heightClass = "h-32"
+  heightClass = "h-32",
+  offset = 0,
+  total = posts.length,
 }: GroupFilmstripProps) {
   const currentRef = useRef<HTMLAnchorElement>(null);
 
@@ -64,17 +70,20 @@ export function GroupFilmstrip({
       // Use getBoundingClientRect to get accurate position regardless of offsetParent
       const elRect = el.getBoundingClientRect();
       const parentRect = parent.getBoundingClientRect();
-      const offset = elRect.left - parentRect.left + parent.scrollLeft;
+      const left = elRect.left - parentRect.left + parent.scrollLeft;
       // Disable smooth scroll temporarily for instant jump
       const prevBehavior = parent.style.scrollBehavior;
       parent.style.scrollBehavior = "auto";
-      parent.scrollLeft = Math.max(0, offset - (parent.clientWidth - el.offsetWidth) / 2);
+      parent.scrollLeft = Math.max(0, left - (parent.clientWidth - el.offsetWidth) / 2);
       parent.style.scrollBehavior = prevBehavior;
     }
   }, [currentHash]);
 
-  const currentIndex = posts.findIndex(pg => pg.post.hash === currentHash);
-  const totalPosts = posts.length;
+  const windowIndex = posts.findIndex(pg => pg.post.hash === currentHash);
+  const currentIndex = windowIndex === -1 ? -1 : offset + windowIndex;
+  const totalPosts = total;
+  const hiddenBefore = offset;
+  const hiddenAfter = total - offset - posts.length;
 
   return (
     <div className="space-y-2">
@@ -109,6 +118,9 @@ export function GroupFilmstrip({
       )}
 
       <Filmstrip scrollAmount={200}>
+        {hiddenBefore > 0 && groupId !== undefined && (
+          <TruncationLink groupId={groupId} count={hiddenBefore} />
+        )}
         {posts.map((pg, index) => {
           const isCurrent = pg.post.hash === currentHash;
           return (
@@ -139,13 +151,28 @@ export function GroupFilmstrip({
                     ? "bg-blue-500 text-white"
                     : "bg-black/70 text-white"
                 }`}>
-                  {index + 1}
+                  {offset + index + 1}
                 </span>
               </ThumbnailCard>
             </Link>
           );
         })}
+        {hiddenAfter > 0 && groupId !== undefined && (
+          <TruncationLink groupId={groupId} count={hiddenAfter} />
+        )}
       </Filmstrip>
     </div>
+  );
+}
+
+function TruncationLink({ groupId, count }: { groupId: number; count: number }) {
+  return (
+    <Link
+      href={`/groups/${groupId}`}
+      className="flex w-20 shrink-0 self-stretch snap-start items-center justify-center rounded-lg bg-zinc-100 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-800 dark:bg-zinc-700/50 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+      title={`${count} more in this group`}
+    >
+      +{count}
+    </Link>
   );
 }

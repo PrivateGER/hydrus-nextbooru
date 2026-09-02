@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SourceType } from "@/generated/prisma/enums";
-import { dedupeFilmstripGroups } from "./filmstrip-groups";
+import { dedupeFilmstripGroups, windowFilmstrip, FILMSTRIP_RADIUS } from "./filmstrip-groups";
 
 interface TestGroup {
   id: number;
@@ -140,5 +140,46 @@ describe("dedupeFilmstripGroups", () => {
 
   it("handles an empty group list", () => {
     expect(dedupeFilmstripGroups([])).toEqual([]);
+  });
+});
+
+describe("windowFilmstrip", () => {
+  const size = 2 * FILMSTRIP_RADIUS + 1;
+  const members = (n: number) => Array.from({ length: n }, (_, i) => ({ post: { hash: `h${i}` } }));
+  const hashes = (w: { posts: Array<{ post: { hash: string } }> }) => w.posts.map((p) => p.post.hash);
+
+  it("returns the whole group untouched when it fits the window", () => {
+    const posts = members(size);
+    const w = windowFilmstrip(posts, "h3");
+    expect(w).toEqual({ posts, offset: 0, total: size });
+  });
+
+  it("centers the window on the current post", () => {
+    const posts = members(300);
+    const w = windowFilmstrip(posts, "h150");
+    expect(w.offset).toBe(150 - FILMSTRIP_RADIUS);
+    expect(w.total).toBe(300);
+    expect(w.posts).toHaveLength(size);
+    expect(hashes(w)[FILMSTRIP_RADIUS]).toBe("h150");
+  });
+
+  it("clamps to the start and end without shrinking the window", () => {
+    const posts = members(300);
+    const start = windowFilmstrip(posts, "h2");
+    expect(start.offset).toBe(0);
+    expect(hashes(start)[0]).toBe("h0");
+    expect(start.posts).toHaveLength(size);
+
+    const end = windowFilmstrip(posts, "h298");
+    expect(end.offset).toBe(300 - size);
+    expect(hashes(end).at(-1)).toBe("h299");
+    expect(end.posts).toHaveLength(size);
+  });
+
+  it("windows from the start when the current post is not a member", () => {
+    const w = windowFilmstrip(members(300), "missing");
+    expect(w.offset).toBe(0);
+    expect(hashes(w)[0]).toBe("h0");
+    expect(w.posts).toHaveLength(size);
   });
 });
