@@ -32,7 +32,7 @@ function createMemoryStorage(): Storage {
 
 function storageGlobalWorks(key: 'localStorage' | 'sessionStorage'): boolean {
   try {
-    const storage = (globalThis as Record<string, Storage | undefined>)[key];
+    const storage = (globalThis as unknown as Record<string, Storage | undefined>)[key];
     storage?.getItem('__webstorage_probe__');
     return storage != null;
   } catch {

@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, cache } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -17,7 +17,7 @@ import { TranslateImageButton } from "@/components/translate-image-button";
 import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-posts";
 import { RecordView } from "@/components/post/record-view";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
-import { dedupeFilmstripGroups } from "@/lib/filmstrip-groups";
+import { dedupeFilmstripGroups, windowFilmstrip } from "@/lib/filmstrip-groups";
 import {
   selectNavigationGroup,
   buildPostUrl,
@@ -53,20 +53,7 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
     return { title: "Not Found - Booru" };
   }
 
-  const post = await prisma.post.findUnique({
-    where: { hash: hash.toLowerCase() },
-    select: {
-      hash: true,
-      tags: {
-        include: { tag: { select: { name: true, category: true } } },
-        where: { tag: { category: { in: ["ARTIST", "CHARACTER", "COPYRIGHT"] } } },
-      },
-      groups: {
-        include: { group: { select: { title: true } } },
-        take: 1,
-      },
-    },
-  });
+  const post = await getPost(hash.toLowerCase());
 
   if (!post) {
     return { title: "Not Found - Booru" };
@@ -107,7 +94,7 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
 }
 
 
-async function getPost(hash: string) {
+const getPost = cache(async (hash: string) => {
   const post = await prisma.post.findUnique({
     where: { hash },
     include: {
@@ -157,7 +144,7 @@ async function getPost(hash: string) {
   });
 
   return post;
-}
+});
 
 /**
  * Render the post detail page for a given post hash.
@@ -402,6 +389,7 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
           const ordinalInGroup = group.posts.findIndex((pg) => pg.post.hash === post.hash) + 1;
           const isActiveNav = !hasListingContext && navGroup?.id === group.id;
+          const filmstrip = windowFilmstrip(group.posts, post.hash);
 
           return (
             <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -454,7 +442,9 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
                 </Link>
               </div>
               <GroupFilmstrip
-                posts={group.posts}
+                posts={filmstrip.posts}
+                offset={filmstrip.offset}
+                total={filmstrip.total}
                 currentHash={post.hash}
                 groupId={group.id}
                 isActiveNav={isActiveNav}
