@@ -5,6 +5,7 @@ import {
   getOrComputeRecommendations,
   getOrComputeRecommendationsByHash,
   getRecommendationStats,
+  getTagNeighborhoodsForSeeds,
   hasRecommendations,
   invalidateAllRecommendations,
   invalidateRecommendationsForPost,
@@ -17,7 +18,10 @@ const {
   mockPostRecommendationCount,
   mockPostFindUnique,
   mockPostFindMany,
+  mockSettingsFindUnique,
   mockQueryRaw,
+  mockTransactionQueryRaw,
+  mockExecuteRaw,
   mockTransaction,
 } = vi.hoisted(() => ({
   mockPostRecommendationFindMany: vi.fn(),
@@ -26,7 +30,10 @@ const {
   mockPostRecommendationCount: vi.fn(),
   mockPostFindUnique: vi.fn(),
   mockPostFindMany: vi.fn(),
+  mockSettingsFindUnique: vi.fn(),
   mockQueryRaw: vi.fn(),
+  mockTransactionQueryRaw: vi.fn(),
+  mockExecuteRaw: vi.fn(),
   mockTransaction: vi.fn(),
 }));
 
@@ -42,13 +49,25 @@ vi.mock("@/lib/db", () => ({
       findUnique: mockPostFindUnique,
       findMany: mockPostFindMany,
     },
+    settings: {
+      findUnique: mockSettingsFindUnique,
+    },
     $queryRaw: mockQueryRaw,
+    $executeRaw: mockExecuteRaw,
     $transaction: mockTransaction,
   },
 }));
 
-function recommended(id: number, score: number, computedAt = new Date()) {
+function recommended(
+  id: number,
+  score: number,
+  computedAt = new Date(),
+  generation = 0,
+  postId = 10
+) {
   return {
+    postId,
+    generation,
     recommended: {
       id,
       hash: `hash-${id}`,
@@ -74,13 +93,18 @@ describe("recommendations", () => {
     mockPostFindUnique.mockResolvedValue(null);
     mockPostFindMany.mockResolvedValue([]);
     mockQueryRaw.mockResolvedValue([]);
+    mockTransactionQueryRaw.mockResolvedValue([]);
+    mockSettingsFindUnique.mockResolvedValue(null);
+    mockExecuteRaw.mockResolvedValue(0);
     mockTransaction.mockImplementation(async (callback: (tx: {
+      $queryRaw: typeof mockTransactionQueryRaw;
       postRecommendation: {
         deleteMany: typeof mockPostRecommendationDeleteMany;
         createMany: typeof mockPostRecommendationCreateMany;
       };
     }) => Promise<void>) =>
       callback({
+        $queryRaw: mockTransactionQueryRaw,
         postRecommendation: {
           deleteMany: mockPostRecommendationDeleteMany,
           createMany: mockPostRecommendationCreateMany,
@@ -118,10 +142,16 @@ describe("recommendations", () => {
     );
   });
 
-  it("treats missing computedAt cache rows as stale and replaces them with fresh results", async () => {
+  it("replaces cache rows from an older tag-statistics generation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T00:00:00.000Z"));
-    mockPostRecommendationFindMany.mockResolvedValueOnce([recommended(1, 0.9, null as unknown as Date)]);
+    mockSettingsFindUnique
+      .mockResolvedValueOnce({ value: "1" })
+      .mockResolvedValueOnce({ value: "1" });
+    mockTransactionQueryRaw.mockResolvedValueOnce([{ value: "1" }]);
+    mockPostRecommendationFindMany.mockResolvedValueOnce([
+      recommended(1, 0.9, new Date("2026-01-01T12:00:00.000Z"), 0),
+    ]);
     mockQueryRaw.mockResolvedValueOnce([
       { recommended_id: 3, score: 0.7 },
       { recommended_id: 4, score: 0.6 },
@@ -149,7 +179,9 @@ describe("recommendations", () => {
       },
     ]);
     expect(mockTransaction).toHaveBeenCalledTimes(1);
-    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({ where: { postId: 10 } });
+    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({
+      where: { postId: 10, generation: { lte: 1 } },
+    });
     expect(mockPostRecommendationCreateMany).toHaveBeenCalledWith({
       data: [
         {
@@ -157,12 +189,14 @@ describe("recommendations", () => {
           recommendedId: 3,
           score: 0.7,
           computedAt: new Date("2026-01-02T00:00:00.000Z"),
+          generation: 1,
         },
         {
           postId: 10,
           recommendedId: 4,
           score: 0.6,
           computedAt: new Date("2026-01-02T00:00:00.000Z"),
+          generation: 1,
         },
       ],
       skipDuplicates: true,
@@ -170,10 +204,14 @@ describe("recommendations", () => {
   });
 
   it("deletes stale cache rows when recomputation returns no recommendations", async () => {
+    mockSettingsFindUnique.mockReset().mockResolvedValue(null);
+    mockTransactionQueryRaw.mockReset().mockResolvedValue([]);
     mockQueryRaw.mockResolvedValueOnce([]);
 
-    await expect(getOrComputeRecommendations(10, Number.NaN)).resolves.toEqual([]);
-    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({ where: { postId: 10 } });
+    await expect(getOrComputeRecommendations(13, Number.NaN)).resolves.toEqual([]);
+    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({
+      where: { postId: 13, generation: { lte: 0 } },
+    });
   });
 
   it("looks up recommendations by hash and returns empty for missing posts", async () => {
@@ -205,22 +243,29 @@ describe("recommendations", () => {
     ]);
   });
 
-  it("invalidates recommendations touching a post and can invalidate all rows", async () => {
-    const client = {
-      postRecommendation: {
-        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-      },
+  it("invalidates every affected source while leaving unrelated sources untouched", async () => {
+    const postRecommendation = {
+      findMany: vi.fn().mockResolvedValue([{ postId: 8 }, { postId: 12 }]),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     };
+    // Partial delegate: only the two methods invalidation may touch exist.
+    const client = { postRecommendation } as unknown as Parameters<typeof invalidateRecommendationsForPost>[1];
 
     await invalidateRecommendationsForPost(5, client);
-    expect(client.postRecommendation.deleteMany).toHaveBeenCalledWith({
-      where: {
-        OR: [{ postId: 5 }, { recommendedId: 5 }],
-      },
+    expect(postRecommendation.findMany).toHaveBeenCalledWith({
+      where: { recommendedId: 5 },
+      distinct: ["postId"],
+      select: { postId: true },
+    });
+    expect(postRecommendation.deleteMany).toHaveBeenCalledWith({
+      where: { postId: { in: [5, 8, 12] } },
+    });
+    expect(postRecommendation.deleteMany).not.toHaveBeenCalledWith({
+      where: { postId: { in: expect.arrayContaining([99]) } },
     });
 
     await invalidateAllRecommendations(client);
-    expect(client.postRecommendation.deleteMany).toHaveBeenLastCalledWith();
+    expect(postRecommendation.deleteMany).toHaveBeenLastCalledWith();
   });
 
   it("coalesces concurrent cold-cache calls for the same postId into one computation", async () => {
@@ -267,6 +312,91 @@ describe("recommendations", () => {
     for (const result of [a, b, c]) {
       expect(result.map((r) => r.id)).toEqual([3, 4]);
     }
+  });
+
+  it("has a maximum recommendation limit of 20", async () => {
+    const cached = Array.from({ length: 25 }, (_, index) => recommended(index + 1, 1 - index / 100));
+    mockPostRecommendationFindMany.mockResolvedValueOnce(cached);
+
+    const results = await getOrComputeRecommendations(10, 100);
+
+    expect(MAX_RECOMMENDATION_LIMIT).toBe(20);
+    expect(results).toHaveLength(20);
+    expect(results.at(-1)?.id).toBe(20);
+  });
+
+  it("joins a pending single-post compute and batches only truly cold seeds", async () => {
+    let resolveSingleQuery!: (rows: { recommended_id: number; score: number }[]) => void;
+    const pendingSingleQuery = new Promise<{ recommended_id: number; score: number }[]>((resolve) => {
+      resolveSingleQuery = resolve;
+    });
+    mockQueryRaw
+      .mockImplementationOnce(() => pendingSingleQuery)
+      .mockResolvedValueOnce([{ source_id: 11, recommended_id: 201, score: 0.7 }]);
+    mockPostFindMany
+      .mockResolvedValueOnce([
+        {
+          id: 201,
+          hash: "hash-201",
+          width: 201,
+          height: 301,
+          blurhash: null,
+          mimeType: "image/png",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 200,
+          hash: "hash-200",
+          width: 200,
+          height: 300,
+          blurhash: null,
+          mimeType: "image/png",
+        },
+      ]);
+
+    const singleRequest = getOrComputeRecommendations(10, 20);
+    await vi.waitFor(() => expect(mockQueryRaw).toHaveBeenCalledTimes(1));
+
+    const batchRequest = getTagNeighborhoodsForSeeds([10, 11], 20);
+    await vi.waitFor(() => expect(mockQueryRaw).toHaveBeenCalledTimes(2));
+    resolveSingleQuery([{ recommended_id: 200, score: 0.8 }]);
+
+    const [singleNeighbors, neighborhoods] = await Promise.all([singleRequest, batchRequest]);
+
+    expect(singleNeighbors.map((post) => post.id)).toEqual([200]);
+    expect(neighborhoods.get(10)?.map((post) => post.id)).toEqual([200]);
+    expect(neighborhoods.get(11)?.map((post) => post.id)).toEqual([201]);
+    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({
+      where: { postId: { in: [11] }, generation: { lte: 0 } },
+    });
+    expect(mockPostRecommendationDeleteMany).toHaveBeenCalledWith({
+      where: { postId: 10, generation: { lte: 0 } },
+    });
+  });
+
+  it("returns a computed response without caching it when the tag generation advances", async () => {
+    mockTransactionQueryRaw.mockResolvedValueOnce([{ value: "4" }]);
+    mockSettingsFindUnique
+      .mockResolvedValueOnce({ value: "3" })
+      .mockResolvedValueOnce({ value: "4" });
+    mockQueryRaw.mockResolvedValueOnce([{ recommended_id: 9, score: 0.5 }]);
+    mockPostFindMany.mockResolvedValueOnce([
+      {
+        id: 9,
+        hash: "hash-9",
+        width: 1,
+        height: 1,
+        blurhash: null,
+        mimeType: "image/png",
+      },
+    ]);
+
+    await expect(getOrComputeRecommendations(10, 10)).resolves.toMatchObject([
+      { id: 9, score: 0.5 },
+    ]);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockPostRecommendationDeleteMany).not.toHaveBeenCalled();
   });
 
   it("runs a fresh computation after a previous coalesced batch settles (key cleaned up on success)", async () => {
