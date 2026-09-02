@@ -40,9 +40,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Install prisma CLI for migrations and create thumbnails dir
+# The migration CLI must match the client the app was generated with; an
+# unpinned `bun add prisma` follows npm's `latest` tag (currently an 8.x RC).
+COPY --from=builder /app/node_modules/prisma/package.json /tmp/prisma-package.json
 RUN rm -f package.json bun.lock && \
-    bun add prisma dotenv pino pino-pretty && \
+    PRISMA_VERSION=$(bun -e 'console.log(require("/tmp/prisma-package.json").version)') && \
+    bun add "prisma@${PRISMA_VERSION}" dotenv pino pino-pretty && \
+    rm -f /tmp/prisma-package.json && \
     rm -rf ~/.bun/install/cache && \
     mkdir -p /thumbnails && chown nextjs:nodejs /thumbnails
 
