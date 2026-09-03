@@ -212,6 +212,7 @@ describe('GET /api/similar (Integration)', () => {
         blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH',
         mimeType: 'image/png',
         distance: 0,
+        favorited: false,
       });
     });
   });

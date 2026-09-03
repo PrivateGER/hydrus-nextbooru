@@ -3,9 +3,11 @@
 import Link from "next/link";
 import DOMPurify from "isomorphic-dompurify";
 import type { PostSummary } from "@/types/post";
+import { FavoriteOverlayButton } from "@/components/favorite-overlay-button";
 
 interface Post extends PostSummary {
   id: number;
+  favorited: boolean;
 }
 
 interface NoteSearchResultProps {
@@ -41,49 +43,61 @@ export function NoteSearchResult({ note }: NoteSearchResultProps) {
       {/* Thumbnails */}
       <div className="flex shrink-0 gap-1.5">
         {/* Primary thumbnail */}
-        <Link href={postUrl} className="relative overflow-hidden rounded-md bg-zinc-300 dark:bg-zinc-700">
-          <img
-            src={thumbnailUrl}
-            alt=""
-            loading="lazy"
-            className="h-32 w-auto"
-            style={
-              primaryPost.width && primaryPost.height
-                ? { aspectRatio: `${primaryPost.width} / ${primaryPost.height}` }
-                : { aspectRatio: "1" }
-            }
-          />
-          {(isVideo || isAnimated) && (
-            <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-              {isVideo ? "VIDEO" : "GIF"}
-            </span>
-          )}
-        </Link>
+        <div className="relative overflow-hidden rounded-md bg-zinc-300 dark:bg-zinc-700">
+          <Link href={postUrl} className="block">
+            <img
+              src={thumbnailUrl}
+              alt=""
+              loading="lazy"
+              className="h-32 w-auto"
+              style={
+                primaryPost.width && primaryPost.height
+                  ? { aspectRatio: `${primaryPost.width} / ${primaryPost.height}` }
+                  : { aspectRatio: "1" }
+              }
+            />
+            {(isVideo || isAnimated) && (
+              <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
+                {isVideo ? "VIDEO" : "GIF"}
+              </span>
+            )}
+          </Link>
+          <FavoriteOverlayButton hash={primaryPost.hash} initialFavorited={primaryPost.favorited} />
+        </div>
 
         {/* Additional thumbnails strip */}
         {additionalPosts.length > 0 && (
           <div className="flex flex-col gap-1">
             {additionalPosts.slice(0, 3).map((post) => (
-              <Link
+              <div
                 key={post.hash}
-                href={`/post/${post.hash}`}
-                className="relative overflow-hidden rounded bg-zinc-300 dark:bg-zinc-700 hover:ring-2 hover:ring-amber-500 transition-all"
+                className="relative overflow-hidden rounded bg-zinc-300 dark:bg-zinc-700"
               >
-                <img
-                  src={`/api/thumbnails/${post.hash}.webp?size=grid`}
-                  alt=""
-                  loading="lazy"
-                  className="h-10 w-10 object-cover"
+                <Link
+                  href={`/post/${post.hash}`}
+                  className="block hover:ring-2 hover:ring-amber-500 transition-all"
+                >
+                  <img
+                    src={`/api/thumbnails/${post.hash}.webp?size=grid`}
+                    alt=""
+                    loading="lazy"
+                    className="h-11 w-11 object-cover"
+                  />
+                  {post.mimeType.startsWith("video/") && (
+                    <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-center text-white">
+                      VID
+                    </span>
+                  )}
+                </Link>
+                <FavoriteOverlayButton
+                  hash={post.hash}
+                  initialFavorited={post.favorited}
+                  size="compact"
                 />
-                {post.mimeType.startsWith("video/") && (
-                  <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-center text-white">
-                    VID
-                  </span>
-                )}
-              </Link>
+              </div>
             ))}
             {additionalPosts.length > 3 && (
-              <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-400 dark:bg-zinc-600 text-xs text-zinc-600 dark:text-zinc-400">
+              <div className="flex h-11 w-11 items-center justify-center rounded bg-zinc-400 dark:bg-zinc-600 text-xs text-zinc-600 dark:text-zinc-400">
                 +{additionalPosts.length - 3}
               </div>
             )}

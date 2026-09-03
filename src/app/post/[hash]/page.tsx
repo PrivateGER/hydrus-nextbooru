@@ -123,6 +123,7 @@ const getPost = cache(async (hash: string) => {
                       height: true,
                       blurhash: true,
                       mimeType: true,
+                      favorite: { select: { postId: true } },
                     },
                   },
                 },

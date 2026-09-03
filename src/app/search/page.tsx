@@ -25,7 +25,7 @@ import { checkRateLimit, getClientIPFromHeaders } from "@/lib/rate-limit";
 import { ResolvedWildcard } from "@/lib/wildcard";
 import { TagCategory } from "@/generated/prisma/client";
 import { TAG_BADGE_COLORS } from "@/lib/tag-colors";
-import { mergeFavoritedState } from "@/lib/favorites";
+import { getFavoritedPostIdSet } from "@/lib/favorites";
 import { isFavoriteTag } from "@/lib/meta-tags-shared";
 import { searchContextQuery } from "@/lib/post-navigation";
 
@@ -192,12 +192,20 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
       : null;
 
   const rawPosts = result && "posts" in result ? result.posts : [];
-  // Merge favorite state after cache retrieval (never cached) so hearts are fresh.
-  const posts = await mergeFavoritedState(rawPosts);
   const rawNotes = result && "notes" in result ? result.notes : [];
+  // Merge favorite state after cache retrieval (never cached) so hearts are fresh.
+  const favoritedIds = await getFavoritedPostIdSet([
+    ...rawPosts.map((post) => post.id),
+    ...rawNotes.map((note) => note.post.id),
+  ]);
+  const posts = rawPosts.map((post) => ({ ...post, favorited: favoritedIds.has(post.id) }));
+  const decoratedNotes = rawNotes.map((note) => ({
+    ...note,
+    post: { ...note.post, favorited: favoritedIds.has(note.post.id) },
+  }));
 
   // Group notes by contentHash to merge duplicate content (e.g., same Pixiv description across multiple images)
-  const groupedNotes = rawNotes.reduce((acc, note) => {
+  const groupedNotes = decoratedNotes.reduce((acc, note) => {
     const existing = acc.get(note.contentHash);
     if (existing) {
       existing.posts.push(note.post);
@@ -205,7 +213,7 @@ async function SearchPageContent({ searchParams }: { searchParams: Promise<Searc
       acc.set(note.contentHash, { ...note, posts: [note.post] });
     }
     return acc;
-  }, new Map<string, typeof rawNotes[0] & { posts: typeof rawNotes[0]["post"][] }>());
+  }, new Map<string, typeof decoratedNotes[0] & { posts: typeof decoratedNotes[0]["post"][] }>());
   const notes = Array.from(groupedNotes.values());
 
   const relatedTags: RelatedTag[] =

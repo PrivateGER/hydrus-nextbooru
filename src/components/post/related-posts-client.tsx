@@ -11,8 +11,8 @@ import type { EmbeddedRelatedPost } from "@/lib/embeddings/store";
 interface RelatedPostsClientProps {
   /** SHA-256 of the current post; seeds the full semantic view when opened. */
   hash: string;
-  recommendations: RecommendedPost[];
-  semanticPosts?: EmbeddedRelatedPost[];
+  recommendations: Array<RecommendedPost & { favorited: boolean }>;
+  semanticPosts?: Array<EmbeddedRelatedPost & { favorited: boolean }>;
 }
 
 type RelatedPostsMode = "similar" | "semantic";
@@ -200,6 +200,7 @@ export function RelatedPostsClient({ hash, recommendations, semanticPosts = [] }
               height={post.height}
               blurhash={post.blurhash}
               mimeType={post.mimeType}
+              favorited={post.favorited}
               heightClass="h-36"
               className="rounded-lg"
             />

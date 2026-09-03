@@ -7,6 +7,7 @@ import {
 import { checkApiRateLimit, type ApiRateLimitConfig } from "@/lib/rate-limit";
 import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
 import { apiLog } from "@/lib/logger";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 /** Cap query-image uploads (matches the perceptual-hash reverse-search limit). */
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024; // 20MB
@@ -122,8 +123,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: result.error }, { status: 500 });
   }
 
+  const posts = await mergeFavoritedState(result.posts);
+
   return NextResponse.json({
-    posts: result.posts,
+    posts,
     totalCount: result.totalCount,
     totalPages: result.totalPages,
   });

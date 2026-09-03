@@ -14,6 +14,7 @@ import { parseGroupsPageParams, type GroupsPageRawParams } from "@/lib/groups-pa
 import { readerHref } from "@/lib/reader";
 import { buildPostUrl } from "@/lib/post-navigation";
 import { BookOpenIcon } from "@heroicons/react/24/outline";
+import { ThumbnailCard } from "@/components/thumbnail-card";
 
 export const metadata: Metadata = {
   title: "Groups - Booru",
@@ -317,21 +318,20 @@ async function GroupsPageContent({ searchParams }: { searchParams: Promise<Group
                     href={buildPostUrl(pg.post.hash, primaryGroup.id)}
                     className="relative shrink-0 overflow-hidden rounded-lg bg-zinc-200 dark:bg-zinc-700 snap-start transition-all duration-200 hover:scale-[1.03] hover:ring-2 hover:ring-blue-500 hover:shadow-md hover:shadow-black/20 dark:hover:shadow-black/30"
                   >
-                    <img
-                      src={`/api/thumbnails/${pg.post.hash}.webp`}
-                      alt=""
-                      loading="lazy"
-                      className="h-44 w-auto object-cover"
-                      style={
-                        pg.post.width && pg.post.height
-                          ? { aspectRatio: `${pg.post.width} / ${pg.post.height}` }
-                          : { aspectRatio: "1" }
-                      }
-                    />
-                    {/* Position badge */}
-                    <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/60 dark:bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
-                      {pg.position ?? index + 1}
-                    </span>
+                    <ThumbnailCard
+                      hash={pg.post.hash}
+                      width={pg.post.width}
+                      height={pg.post.height}
+                      blurhash={pg.post.blurhash}
+                      mimeType={pg.post.mimeType}
+                      favorited={pg.post.favorited}
+                      heightClass="h-44"
+                    >
+                      {/* Position badge */}
+                      <span className="absolute bottom-1.5 left-1.5 rounded-md bg-black/60 dark:bg-black/75 px-2 py-0.5 text-xs font-semibold text-white backdrop-blur-sm">
+                        {pg.position ?? index + 1}
+                      </span>
+                    </ThumbnailCard>
                   </Link>
                 ))}
                 {postCount > 10 && (

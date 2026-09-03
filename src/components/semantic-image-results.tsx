@@ -9,6 +9,7 @@ interface SemanticImageResult extends PostSummary {
   id: number;
   distance: number;
   score?: number;
+  favorited: boolean;
 }
 
 /**
@@ -157,6 +158,7 @@ export function SemanticImageResults({ source, page }: SemanticImageResultsProps
                 blurhash={post.blurhash}
                 mimeType={post.mimeType}
                 layout="grid"
+                favorited={post.favorited}
               />
               {post.score != null && (
                 <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white tabular-nums">

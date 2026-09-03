@@ -4,7 +4,7 @@ import { PostCard } from "@/components/post-card";
 import type { PostSummary } from "@/types/post";
 
 interface RandomHighlightsProps {
-  posts: PostSummary[];
+  posts: Array<PostSummary & { favorited: boolean }>;
 }
 
 export function RandomHighlights({ posts }: RandomHighlightsProps) {
@@ -26,6 +26,7 @@ export function RandomHighlights({ posts }: RandomHighlightsProps) {
             blurhash={post.blurhash}
             mimeType={post.mimeType}
             layout="grid"
+            favorited={post.favorited}
           />
         ))}
       </div>
