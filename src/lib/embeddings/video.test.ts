@@ -232,6 +232,28 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
     expect(range.end).toBeLessThan(15.2);
   }, 60000);
 
+  it.each([
+    { name: "short black ending", duration: 3.8, black: "gte(t,3.7)" },
+    { name: "black boundary between sample timestamps", duration: 9.3, black: "gte(t,6.1)" },
+    { name: "single-frame black opening", duration: 3.8, black: "lt(t,0.03)" },
+  ])("does not retain a $name in the encoded sample", async ({ duration, black }) => {
+    const input = join(dir, `boundary-${duration}.mp4`);
+    runFixtureFfmpeg([
+      "-loglevel", "error",
+      "-f", "lavfi", "-i", `color=c=gray:size=160x90:rate=30:duration=${duration}`,
+      "-vf", `drawbox=color=black:t=fill:enable='${black}'`,
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", input,
+    ]);
+
+    const sample = await preprocessVideoForEmbedding(input);
+    const luma = execFileSync(FFMPEG, [
+      "-v", "error", "-i", "-", "-an",
+      "-vf", "scale=1:1,format=gray", "-f", "rawvideo", "-",
+    ], { input: Buffer.from(sample.dataUrl.split(",")[1], "base64") });
+    expect(Math.max(...luma)).toBeGreaterThan(80);
+    expect(Math.min(...luma)).toBeGreaterThan(16);
+  });
+
   it("rejects files without a video stream", async () => {
     const audioOnly = join(dir, "audio.m4a");
     runFixtureFfmpeg([

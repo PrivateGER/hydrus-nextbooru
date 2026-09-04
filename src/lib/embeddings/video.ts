@@ -13,8 +13,6 @@ import {
 const VIDEO_SAMPLE_FPS = 2;
 const MAX_SAMPLE_FRAMES =
   EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT * EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS * VIDEO_SAMPLE_FPS;
-/** Shortest black run worth cutting; fades produce sub-second runs. */
-const BLACK_MIN_DURATION_SECONDS = 0.2;
 /**
  * ffmpeg's default luma threshold. Kept conservative: with pic_th 0.98 it
  * still catches leaders and the darker half of fades without swallowing
@@ -278,9 +276,10 @@ async function analyzeLuma(filePath: string): Promise<LumaAnalysis> {
   const frames: FrameLuma[] = [];
   let pendingTime: number | null = null;
   const filters = [
-    `fps=${ANALYSIS_FPS}`,
+    `fps=${ANALYSIS_FPS}:round=up`,
     "scale=160:-2",
-    `blackdetect=d=${BLACK_MIN_DURATION_SECONDS}:pix_th=${BLACK_PIXEL_THRESHOLD}`,
+    // Even one black analysis frame can become a half-second sample frame.
+    `blackdetect=d=0:pix_th=${BLACK_PIXEL_THRESHOLD}`,
     "signalstats",
     "metadata=print:key=lavfi.signalstats.YAVG",
   ].join(",");
@@ -291,7 +290,8 @@ async function analyzeLuma(filePath: string): Promise<LumaAnalysis> {
     (line) => {
       const black = BLACK_INTERVAL_PATTERN.exec(line);
       if (black) {
-        blackIntervals.push({ start: Number(black[1]), end: Number(black[2]) });
+        // Cover the final black frame at EOF and allow one frame of timing slack.
+        blackIntervals.push({ start: Number(black[1]), end: Number(black[2]) + 1 / ANALYSIS_FPS });
         return;
       }
       const time = FRAME_TIME_PATTERN.exec(line);
@@ -369,7 +369,8 @@ async function transcodeSample(
     .map((range) => `gte(t,${range.start.toFixed(3)})*lt(t,${range.end.toFixed(3)})`)
     .join("+");
   const filters = [
-    `fps=${VIDEO_SAMPLE_FPS}`,
+    // Round source timestamps up so samples use earlier frames, not later black ones.
+    `fps=${VIDEO_SAMPLE_FPS}:round=up`,
     `select='${selectExpr}'`,
     `trim=end_frame=${MAX_SAMPLE_FRAMES}`,
     `setpts=N/(${VIDEO_SAMPLE_FPS}*TB)`,
