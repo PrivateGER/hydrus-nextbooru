@@ -174,8 +174,9 @@ export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise
  * Video samples are produced at a fixed resolution, so their vectors are
  * identical under every `imageMaxResolution`. When the admin changes that
  * setting, move existing video rows to the new key instead of re-embedding
- * them. Rows already present under the new key (from an earlier stint at that
- * resolution) are replaced, so the toggle never accumulates stale duplicates.
+ * them. Where a post already has a row under the new key, the COMPLETE row
+ * wins (the existing target if both are); the loser is deleted so a FAILED
+ * row never displaces a valid vector and the toggle never leaves duplicates.
  */
 export async function rekeyVideoEmbeddings(
   from: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">,
@@ -183,24 +184,34 @@ export async function rekeyVideoEmbeddings(
 ): Promise<number> {
   if (from.imageMaxResolution === toImageMaxResolution) return 0;
 
-  const [, moved] = await prisma.$transaction([
+  const conflictSql = Prisma.sql`
+    USING "PostEmbedding" other, "Post" p
+    WHERE p.id = pe."postId"
+      AND p."mimeType" LIKE 'video/%'
+      AND other."postId" = pe."postId"
+      AND other."baseUrl" = pe."baseUrl"
+      AND other.model = pe.model
+      AND other.dimensions = pe.dimensions
+      AND pe."baseUrl" = ${from.baseUrl}
+      AND pe.model = ${from.model}
+      AND pe.dimensions = ${from.dimensions}
+  `;
+
+  const [, , moved] = await prisma.$transaction([
+    // Drop a source row that would collide with a COMPLETE target.
     prisma.$executeRaw`
       DELETE FROM "PostEmbedding" pe
-      USING "Post" p
-      WHERE p.id = pe."postId"
-        AND p."mimeType" LIKE 'video/%'
-        AND pe."baseUrl" = ${from.baseUrl}
-        AND pe.model = ${from.model}
-        AND pe.dimensions = ${from.dimensions}
+      ${conflictSql}
+        AND pe."imageMaxResolution" = ${from.imageMaxResolution}
+        AND other."imageMaxResolution" = ${toImageMaxResolution}
+        AND other.status = 'COMPLETE'::"EmbeddingStatus"
+    `,
+    // Drop a target row that a remaining source row will replace.
+    prisma.$executeRaw`
+      DELETE FROM "PostEmbedding" pe
+      ${conflictSql}
         AND pe."imageMaxResolution" = ${toImageMaxResolution}
-        AND EXISTS (
-          SELECT 1 FROM "PostEmbedding" src
-          WHERE src."postId" = pe."postId"
-            AND src."baseUrl" = pe."baseUrl"
-            AND src.model = pe.model
-            AND src.dimensions = pe.dimensions
-            AND src."imageMaxResolution" = ${from.imageMaxResolution}
-        )
+        AND other."imageMaxResolution" = ${from.imageMaxResolution}
     `,
     prisma.$executeRaw`
       UPDATE "PostEmbedding" pe
