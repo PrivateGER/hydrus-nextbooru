@@ -170,6 +170,54 @@ export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise
   return result;
 }
 
+/**
+ * Video samples are produced at a fixed resolution, so their vectors are
+ * identical under every `imageMaxResolution`. When the admin changes that
+ * setting, move existing video rows to the new key instead of re-embedding
+ * them. Rows already present under the new key (from an earlier stint at that
+ * resolution) are replaced, so the toggle never accumulates stale duplicates.
+ */
+export async function rekeyVideoEmbeddings(
+  from: Pick<EmbeddingConfig, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">,
+  toImageMaxResolution: number
+): Promise<number> {
+  if (from.imageMaxResolution === toImageMaxResolution) return 0;
+
+  const [, moved] = await prisma.$transaction([
+    prisma.$executeRaw`
+      DELETE FROM "PostEmbedding" pe
+      USING "Post" p
+      WHERE p.id = pe."postId"
+        AND p."mimeType" LIKE 'video/%'
+        AND pe."baseUrl" = ${from.baseUrl}
+        AND pe.model = ${from.model}
+        AND pe.dimensions = ${from.dimensions}
+        AND pe."imageMaxResolution" = ${toImageMaxResolution}
+        AND EXISTS (
+          SELECT 1 FROM "PostEmbedding" src
+          WHERE src."postId" = pe."postId"
+            AND src."baseUrl" = pe."baseUrl"
+            AND src.model = pe.model
+            AND src.dimensions = pe.dimensions
+            AND src."imageMaxResolution" = ${from.imageMaxResolution}
+        )
+    `,
+    prisma.$executeRaw`
+      UPDATE "PostEmbedding" pe
+      SET "imageMaxResolution" = ${toImageMaxResolution}, "updatedAt" = NOW()
+      FROM "Post" p
+      WHERE p.id = pe."postId"
+        AND p."mimeType" LIKE 'video/%'
+        AND pe."baseUrl" = ${from.baseUrl}
+        AND pe.model = ${from.model}
+        AND pe.dimensions = ${from.dimensions}
+        AND pe."imageMaxResolution" = ${from.imageMaxResolution}
+    `,
+  ]);
+
+  return moved;
+}
+
 export async function deleteFailedEmbeddingsForConfig(config: EmbeddingConfig): Promise<number> {
   const result = await prisma.$executeRaw`
     DELETE FROM "PostEmbedding"

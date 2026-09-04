@@ -73,7 +73,8 @@ describe("planVideoSampleWindows", () => {
   });
 });
 
-const ffmpegInstalled = spawnSync("ffmpeg", ["-version"], { stdio: "pipe" }).status === 0;
+const runs = (command: string) => spawnSync(command, ["-version"], { stdio: "pipe" }).status === 0;
+const ffmpegInstalled = runs(process.env.FFMPEG_PATH || "ffmpeg") && runs(process.env.FFPROBE_PATH || "ffprobe");
 
 describe("extendBlackThroughFades", () => {
   /** 10 fps frames from t=0 with the given luma sequence. */

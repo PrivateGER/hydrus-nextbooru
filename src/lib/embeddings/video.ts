@@ -1,4 +1,3 @@
-import ffmpeg, { type FfprobeData } from "fluent-ffmpeg";
 import { spawn } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -8,13 +7,6 @@ import {
   EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT,
   EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS,
 } from "@/lib/openrouter/types";
-
-if (process.env.FFMPEG_PATH) {
-  ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
-}
-if (process.env.FFPROBE_PATH) {
-  ffmpeg.setFfprobePath(process.env.FFPROBE_PATH);
-}
 
 /** Gemini samples video at 1 fps; 2 fps keeps a margin without inflating the payload. */
 const VIDEO_SAMPLE_FPS = 2;
@@ -159,45 +151,106 @@ function mergeRanges(ranges: TimeRange[]): TimeRange[] {
   return merged;
 }
 
+interface ProbeStream {
+  codec_type?: string;
+  width?: number;
+  height?: number;
+  duration?: string;
+}
+
+interface ProbeData {
+  streams?: ProbeStream[];
+  format?: { duration?: string };
+}
+
 interface VideoProbe {
   durationSeconds: number;
   width: number | null;
   height: number | null;
 }
 
-function ffprobe(filePath: string): Promise<FfprobeData> {
-  const { promise, resolve, reject } = Promise.withResolvers<FfprobeData>();
-  ffmpeg.ffprobe(filePath, (error, data) => (error ? reject(error) : resolve(data)));
+const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
+/** A stalled child must not pin a preprocessing slot for the life of the worker. */
+const PROCESS_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Run a child to completion with a hard deadline. Resolves with stdout;
+ * stderr is streamed line-by-line to `onStderrLine` and its tail is included
+ * in the rejection on non-zero exit.
+ */
+function runProcess(
+  command: string,
+  args: string[],
+  onStderrLine?: (line: string) => void
+): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const stdout: Buffer[] = [];
+  const stderrTail: string[] = [];
+  let stderrRest = "";
+
+  const timer = setTimeout(() => {
+    child.kill("SIGKILL");
+    reject(new Error(`${command} timed out after ${PROCESS_TIMEOUT_MS / 1000}s`));
+  }, PROCESS_TIMEOUT_MS);
+
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => {
+    const lines = (stderrRest + chunk.toString()).split(/\r?\n/);
+    stderrRest = lines.pop() ?? "";
+    for (const line of lines) {
+      onStderrLine?.(line);
+      stderrTail.push(line);
+      if (stderrTail.length > 5) stderrTail.shift();
+    }
+  });
+  child.on("error", (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+  child.on("close", (code) => {
+    clearTimeout(timer);
+    if (stderrRest) onStderrLine?.(stderrRest);
+    if (code === 0) {
+      resolve(Buffer.concat(stdout).toString());
+    } else {
+      reject(new Error(`${command} exited with code ${code}: ${stderrTail.join(" | ")}`));
+    }
+  });
   return promise;
 }
 
-function executableRuns(command: string): Promise<boolean> {
-  const { promise, resolve } = Promise.withResolvers<boolean>();
-  const child = spawn(command, ["-version"], { stdio: "ignore" });
-  child.on("error", () => resolve(false));
-  child.on("exit", (code) => resolve(code === 0));
-  return promise;
+async function ffprobe(filePath: string): Promise<ProbeData> {
+  const json = await runProcess(FFPROBE, [
+    "-v", "error",
+    "-print_format", "json",
+    "-show_streams",
+    "-show_format",
+    filePath,
+  ]);
+  return JSON.parse(json) as ProbeData;
 }
 
 /** Both binaries are needed: ffprobe for duration/dims, ffmpeg for detection and transcode. */
 export async function isVideoToolingAvailable(): Promise<boolean> {
-  const [ffmpegOk, ffprobeOk] = await Promise.all([
-    executableRuns(process.env.FFMPEG_PATH || "ffmpeg"),
-    executableRuns(process.env.FFPROBE_PATH || "ffprobe"),
+  const results = await Promise.allSettled([
+    runProcess(FFMPEG, ["-version"]),
+    runProcess(FFPROBE, ["-version"]),
   ]);
-  return ffmpegOk && ffprobeOk;
+  return results.every((result) => result.status === "fulfilled");
 }
 
 async function probeVideo(filePath: string): Promise<VideoProbe> {
   const data = await ffprobe(filePath);
-  const stream = data.streams.find((candidate) => candidate.codec_type === "video");
+  const stream = data.streams?.find((candidate) => candidate.codec_type === "video");
   if (!stream) {
     throw new Error("File has no video stream");
   }
 
-  const durationSeconds = Number(data.format.duration ?? stream.duration);
+  const durationSeconds = Number(data.format?.duration ?? stream.duration);
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new Error(`Could not determine video duration (${data.format.duration ?? stream.duration})`);
+    throw new Error(`Could not determine video duration (${data.format?.duration ?? stream.duration})`);
   }
 
   return {
@@ -233,23 +286,22 @@ interface LumaAnalysis {
  * One decode pass at thumbnail scale: ffmpeg reports strict black runs and
  * per-frame average luma on stderr.
  */
-function analyzeLuma(filePath: string): Promise<LumaAnalysis> {
-  const { promise, resolve, reject } = Promise.withResolvers<LumaAnalysis>();
+async function analyzeLuma(filePath: string): Promise<LumaAnalysis> {
   const blackIntervals: TimeRange[] = [];
   const frames: FrameLuma[] = [];
   let pendingTime: number | null = null;
-  ffmpeg(filePath)
-    .noAudio()
-    .videoFilters([
-      `fps=${ANALYSIS_FPS}`,
-      "scale=160:-2",
-      `blackdetect=d=${BLACK_MIN_DURATION_SECONDS}:pix_th=${BLACK_PIXEL_THRESHOLD}`,
-      "signalstats",
-      "metadata=print:key=lavfi.signalstats.YAVG",
-    ])
-    .outputOptions(["-f", "null"])
-    .output("-")
-    .on("stderr", (line: string) => {
+  const filters = [
+    `fps=${ANALYSIS_FPS}`,
+    "scale=160:-2",
+    `blackdetect=d=${BLACK_MIN_DURATION_SECONDS}:pix_th=${BLACK_PIXEL_THRESHOLD}`,
+    "signalstats",
+    "metadata=print:key=lavfi.signalstats.YAVG",
+  ].join(",");
+
+  await runProcess(
+    FFMPEG,
+    ["-hide_banner", "-nostdin", "-i", filePath, "-an", "-vf", filters, "-f", "null", "-"],
+    (line) => {
       const black = BLACK_INTERVAL_PATTERN.exec(line);
       if (black) {
         blackIntervals.push({ start: Number(black[1]), end: Number(black[2]) });
@@ -265,11 +317,9 @@ function analyzeLuma(filePath: string): Promise<LumaAnalysis> {
         frames.push({ time: pendingTime, luma: Number(luma[1]) });
         pendingTime = null;
       }
-    })
-    .on("end", () => resolve({ blackIntervals, frames }))
-    .on("error", reject)
-    .run();
-  return promise;
+    }
+  );
+  return { blackIntervals, frames };
 }
 
 /**
@@ -322,7 +372,7 @@ export function extendBlackThroughFades(
   }));
 }
 
-function transcodeSample(
+async function transcodeSample(
   filePath: string,
   ranges: TimeRange[],
   durationSeconds: number,
@@ -344,27 +394,21 @@ function transcodeSample(
       ":force_original_aspect_ratio=decrease:force_divisible_by=2"
   );
 
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const command = ffmpeg(filePath);
-  if (!coversWholeVideo) {
-    command.inputOptions(["-t", (lastEnd + 1).toFixed(3)]);
-  }
-  command
-    .noAudio()
-    .videoFilters(filters)
-    .videoCodec("libx264")
-    .outputOptions([
-      "-preset", "veryfast",
-      "-crf", "28",
-      "-pix_fmt", "yuv420p",
-      "-movflags", "+faststart",
-    ])
-    .format("mp4")
-    .output(outputPath)
-    .on("end", () => resolve())
-    .on("error", reject)
-    .run();
-  return promise;
+  const inputArgs = coversWholeVideo ? [] : ["-t", (lastEnd + 1).toFixed(3)];
+  await runProcess(FFMPEG, [
+    "-hide_banner", "-nostdin",
+    ...inputArgs,
+    "-i", filePath,
+    "-an",
+    "-vf", filters.join(","),
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "28",
+    "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    "-f", "mp4",
+    "-y", outputPath,
+  ]);
 }
 
 /**
@@ -385,7 +429,7 @@ export async function preprocessVideoForEmbedding(filePath: string): Promise<Pro
     if (data.byteLength > MAX_PROCESSED_BYTES) {
       throw new Error(`Processed video sample is ${data.byteLength} bytes; expected under ${MAX_PROCESSED_BYTES}`);
     }
-    const outputStream = output.streams.find((stream) => stream.codec_type === "video");
+    const outputStream = output.streams?.find((stream) => stream.codec_type === "video");
     if (!outputStream?.width || !outputStream.height) {
       throw new Error("Processed video sample has no video stream");
     }

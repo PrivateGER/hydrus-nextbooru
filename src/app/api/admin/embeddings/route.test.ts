@@ -9,6 +9,7 @@ const {
   mockGetEmbeddingSettings,
   mockGetEmbeddingStats,
   mockUpdateEmbeddingSettings,
+  mockRekeyVideoEmbeddings,
   mockInvalidateFeedCache,
   mockClearTasteCaches,
   mockInvalidateEmbeddingCalibration,
@@ -20,6 +21,7 @@ const {
   mockGetEmbeddingSettings: vi.fn(),
   mockGetEmbeddingStats: vi.fn(),
   mockUpdateEmbeddingSettings: vi.fn(),
+  mockRekeyVideoEmbeddings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
   mockClearTasteCaches: vi.fn(),
   mockInvalidateEmbeddingCalibration: vi.fn(),
@@ -32,7 +34,10 @@ vi.mock("@/lib/embeddings", () => ({
   deleteFailedEmbeddingsForConfig: mockDeleteFailedEmbeddingsForConfig,
   getEmbeddingSettings: mockGetEmbeddingSettings,
   getEmbeddingStats: mockGetEmbeddingStats,
+  isSupportedEmbeddingResolution: (value: number) => [512, 768, 1024, 1536, 2048].includes(value),
   MAX_EMBEDDING_BATCH_SIZE: 64,
+  normalizeEmbeddingBaseUrl: (value: string | null | undefined) => value || "https://openrouter.ai/api/v1",
+  rekeyVideoEmbeddings: mockRekeyVideoEmbeddings,
   toEmbeddingConfig: (settings: unknown) => settings,
   updateEmbeddingSettings: mockUpdateEmbeddingSettings,
 }));
@@ -117,6 +122,31 @@ describe("admin embeddings route", () => {
     expect(mockUpdateEmbeddingSettings).toHaveBeenCalledWith(
       expect.objectContaining({ videoEnabled: undefined })
     );
+  });
+
+  it("PUT re-keys video rows to a new image resolution before saving, and moves them back if the save fails", async () => {
+    mockRekeyVideoEmbeddings.mockResolvedValue(5);
+    const { PUT } = await import("./route");
+
+    await PUT(request("PUT", { model: "test-model", dimensions: 768, imageMaxResolution: 2048 }));
+    expect(mockRekeyVideoEmbeddings).toHaveBeenCalledWith(expect.objectContaining({ imageMaxResolution: 1024 }), 2048);
+    expect(mockRekeyVideoEmbeddings.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUpdateEmbeddingSettings.mock.invocationCallOrder[0]
+    );
+
+    mockRekeyVideoEmbeddings.mockClear();
+    mockUpdateEmbeddingSettings.mockRejectedValueOnce(new Error("db down"));
+    const response = await PUT(request("PUT", { imageMaxResolution: 2048 }));
+    expect(response.status).toBe(400);
+    expect(mockRekeyVideoEmbeddings.mock.calls).toEqual([
+      [expect.objectContaining({ imageMaxResolution: 1024 }), 2048],
+      [expect.objectContaining({ imageMaxResolution: 2048 }), 1024],
+    ]);
+
+    // Changing the model alongside the resolution is a new identity: nothing to move.
+    mockRekeyVideoEmbeddings.mockClear();
+    await PUT(request("PUT", { model: "other-model", imageMaxResolution: 2048 }));
+    expect(mockRekeyVideoEmbeddings).not.toHaveBeenCalled();
   });
 
   it("PUT surfaces validation errors as 400", async () => {

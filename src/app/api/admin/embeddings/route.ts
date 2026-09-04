@@ -6,7 +6,10 @@ import {
   deleteFailedEmbeddingsForConfig,
   getEmbeddingSettings,
   getEmbeddingStats,
+  isSupportedEmbeddingResolution,
   MAX_EMBEDDING_BATCH_SIZE,
+  normalizeEmbeddingBaseUrl,
+  rekeyVideoEmbeddings,
   toEmbeddingConfig,
   updateEmbeddingSettings,
 } from "@/lib/embeddings";
@@ -59,14 +62,43 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    await updateEmbeddingSettings({
+    const input = {
       apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
       baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
       model: typeof body.model === "string" ? body.model : undefined,
       dimensions: typeof body.dimensions === "number" ? body.dimensions : undefined,
       imageMaxResolution: typeof body.imageMaxResolution === "number" ? body.imageMaxResolution : undefined,
       videoEnabled: typeof body.videoEnabled === "boolean" ? body.videoEnabled : undefined,
-    });
+    };
+
+    // Video vectors don't depend on image resolution: move them to the new key
+    // rather than re-embedding. Done before the settings write so a failed
+    // move leaves the config untouched; a failed write moves them back.
+    const previous = toEmbeddingConfig(await getEmbeddingSettings());
+    const keepsIdentity =
+      (input.baseUrl === undefined || normalizeEmbeddingBaseUrl(input.baseUrl) === previous.baseUrl) &&
+      (input.model === undefined || input.model.trim() === previous.model) &&
+      (input.dimensions === undefined || input.dimensions === previous.dimensions);
+    const rekeyTo =
+      keepsIdentity &&
+      input.imageMaxResolution !== undefined &&
+      isSupportedEmbeddingResolution(input.imageMaxResolution) &&
+      input.imageMaxResolution !== previous.imageMaxResolution
+        ? input.imageMaxResolution
+        : null;
+
+    const moved = rekeyTo === null ? 0 : await rekeyVideoEmbeddings(previous, rekeyTo);
+    try {
+      await updateEmbeddingSettings(input);
+    } catch (error) {
+      if (rekeyTo !== null) {
+        await rekeyVideoEmbeddings({ ...previous, imageMaxResolution: rekeyTo }, previous.imageMaxResolution);
+      }
+      throw error;
+    }
+    if (moved > 0) {
+      aiLog.info({ moved, from: previous.imageMaxResolution, to: rekeyTo }, "Re-keyed video embeddings to new image resolution");
+    }
     // Switching the active embedding config changes which PostEmbedding rows the
     // feed's k-NN reads, reshaping neighborhoods — invalidate the cached feed.
     invalidateFeedCache();
