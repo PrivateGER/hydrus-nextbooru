@@ -4,14 +4,15 @@ import { join } from "path";
 import { readFile, rm } from "fs/promises";
 import { randomUUID } from "crypto";
 import {
+  EMBEDDING_VIDEO_MAX_RESOLUTION,
   EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT,
   EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS,
 } from "@/lib/openrouter/types";
 
 /** Gemini samples video at 1 fps; 2 fps keeps a margin without inflating the payload. */
 const VIDEO_SAMPLE_FPS = 2;
-/** Token count is resolution-independent (measured 320p vs 720p), so keep the payload small. */
-const VIDEO_SAMPLE_MAX_RESOLUTION = 480;
+const MAX_SAMPLE_FRAMES =
+  EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT * EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS * VIDEO_SAMPLE_FPS;
 /** Shortest black run worth cutting; fades produce sub-second runs. */
 const BLACK_MIN_DURATION_SECONDS = 0.2;
 /**
@@ -36,40 +37,19 @@ export interface ProcessedEmbeddingVideo {
   sourceHeight: number | null;
   processedWidth: number;
   processedHeight: number;
-  byteLength: number;
-  sourceDurationSeconds: number;
   sampledRanges: TimeRange[];
 }
 
-export interface VideoSamplePlanOptions {
-  windowSeconds: number;
-  windowCount: number;
-}
-
 /**
- * Choose which real-time ranges of a video to embed.
- *
- * Black runs (leaders, fades, trailers) are removed to form a "content
- * timeline". If the remaining content fits the sample budget it is embedded
- * whole; otherwise `windowCount` windows of `windowSeconds` are spread evenly
- * across the content timeline (first at its start, last at its end) and mapped
- * back to real time, so a window straddling a black run yields two ranges.
- * A video that is entirely black falls back to its full duration.
+ * Remove black runs, then choose up to three 10-second windows from the
+ * start, middle, and end of the remaining content timeline.
  */
 export function planVideoSampleWindows(
   durationSeconds: number,
-  blackIntervals: TimeRange[],
-  options: VideoSamplePlanOptions = {
-    windowSeconds: EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS,
-    windowCount: EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT,
-  }
+  blackIntervals: TimeRange[]
 ): TimeRange[] {
-  const { windowSeconds, windowCount } = options;
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new RangeError(`Video duration must be positive, got ${durationSeconds}`);
-  }
-  if (!(windowSeconds > 0) || !Number.isInteger(windowCount) || windowCount < 1) {
-    throw new RangeError("Invalid sample window options");
   }
 
   let content = subtractRanges({ start: 0, end: durationSeconds }, blackIntervals)
@@ -79,20 +59,24 @@ export function planVideoSampleWindows(
   }
 
   const contentSeconds = content.reduce((sum, range) => sum + (range.end - range.start), 0);
-  const budgetSeconds = windowSeconds * windowCount;
+  const budgetSeconds =
+    EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS * EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT;
   if (contentSeconds <= budgetSeconds) {
     return content;
   }
 
-  const lastOffset = contentSeconds - windowSeconds;
-  const offsets = windowCount === 1
-    ? [0]
-    : Array.from({ length: windowCount }, (_, index) => (index * lastOffset) / (windowCount - 1));
-
-  const ranges = offsets.flatMap((offset) =>
-    mapContentWindowToRealTime(content, offset, offset + windowSeconds)
+  const lastOffset = contentSeconds - EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS;
+  const offsets = Array.from(
+    { length: EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT },
+    (_, index) => index * lastOffset / (EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT - 1)
   );
-  return mergeRanges(ranges);
+  return mergeRanges(offsets.flatMap((offset) =>
+    mapContentWindowToRealTime(
+      content,
+      offset,
+      offset + EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS
+    )
+  ));
 }
 
 /** Remove `cuts` from `span`; result is sorted and non-overlapping. */
@@ -174,11 +158,6 @@ const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
 /** A stalled child must not pin a preprocessing slot for the life of the worker. */
 const PROCESS_TIMEOUT_MS = 5 * 60_000;
 
-/**
- * Run a child to completion with a hard deadline. Resolves with stdout;
- * stderr is streamed line-by-line to `onStderrLine` and its tail is included
- * in the rejection on non-zero exit.
- */
 function runProcess(
   command: string,
   args: string[],
@@ -189,10 +168,12 @@ function runProcess(
   const stdout: Buffer[] = [];
   const stderrTail: string[] = [];
   let stderrRest = "";
+  let processError: Error | undefined;
+  let timedOut = false;
 
   const timer = setTimeout(() => {
+    timedOut = true;
     child.kill("SIGKILL");
-    reject(new Error(`${command} timed out after ${PROCESS_TIMEOUT_MS / 1000}s`));
   }, PROCESS_TIMEOUT_MS);
 
   child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -206,16 +187,22 @@ function runProcess(
     }
   });
   child.on("error", (error) => {
-    clearTimeout(timer);
-    reject(error);
+    processError = error;
   });
   child.on("close", (code) => {
     clearTimeout(timer);
-    if (stderrRest) onStderrLine?.(stderrRest);
-    if (code === 0) {
-      resolve(Buffer.concat(stdout).toString());
+    if (stderrRest) {
+      onStderrLine?.(stderrRest);
+      stderrTail.push(stderrRest);
+    }
+    if (timedOut) {
+      reject(new Error(`${command} timed out after ${PROCESS_TIMEOUT_MS / 1000}s`));
+    } else if (processError) {
+      reject(processError);
+    } else if (code !== 0) {
+      reject(new Error(`${command} exited with code ${code}: ${stderrTail.slice(-5).join(" | ")}`));
     } else {
-      reject(new Error(`${command} exited with code ${code}: ${stderrTail.join(" | ")}`));
+      resolve(Buffer.concat(stdout).toString());
     }
   });
   return promise;
@@ -375,29 +362,24 @@ export function extendBlackThroughFades(
 async function transcodeSample(
   filePath: string,
   ranges: TimeRange[],
-  durationSeconds: number,
   outputPath: string
 ): Promise<void> {
-  const coversWholeVideo =
-    ranges.length === 1 && ranges[0].start <= 0 && ranges[0].end >= durationSeconds;
   const lastEnd = ranges[ranges.length - 1].end;
+  const selectExpr = ranges
+    .map((range) => `gte(t,${range.start.toFixed(3)})*lt(t,${range.end.toFixed(3)})`)
+    .join("+");
+  const filters = [
+    `fps=${VIDEO_SAMPLE_FPS}`,
+    `select='${selectExpr}'`,
+    `trim=end_frame=${MAX_SAMPLE_FRAMES}`,
+    `setpts=N/(${VIDEO_SAMPLE_FPS}*TB)`,
+    `scale=w='min(${EMBEDDING_VIDEO_MAX_RESOLUTION},iw)':h='min(${EMBEDDING_VIDEO_MAX_RESOLUTION},ih)'` +
+      ":force_original_aspect_ratio=decrease:force_divisible_by=2",
+  ];
 
-  const filters = [`fps=${VIDEO_SAMPLE_FPS}`];
-  if (!coversWholeVideo) {
-    const selectExpr = ranges
-      .map((range) => `gte(t,${range.start.toFixed(3)})*lt(t,${range.end.toFixed(3)})`)
-      .join("+");
-    filters.push(`select='${selectExpr}'`, `setpts=N/(${VIDEO_SAMPLE_FPS}*TB)`);
-  }
-  filters.push(
-    `scale=w='min(${VIDEO_SAMPLE_MAX_RESOLUTION},iw)':h='min(${VIDEO_SAMPLE_MAX_RESOLUTION},ih)'` +
-      ":force_original_aspect_ratio=decrease:force_divisible_by=2"
-  );
-
-  const inputArgs = coversWholeVideo ? [] : ["-t", (lastEnd + 1).toFixed(3)];
   await runProcess(FFMPEG, [
     "-hide_banner", "-nostdin",
-    ...inputArgs,
+    "-t", (lastEnd + 1).toFixed(3),
     "-i", filePath,
     "-an",
     "-vf", filters.join(","),
@@ -418,13 +400,14 @@ async function transcodeSample(
  * seconds, audio stripped, 480p, 2 fps.
  */
 export async function preprocessVideoForEmbedding(filePath: string): Promise<ProcessedEmbeddingVideo> {
-  const [probe, analysis] = await Promise.all([probeVideo(filePath), analyzeLuma(filePath)]);
+  const probe = await probeVideo(filePath);
+  const analysis = await analyzeLuma(filePath);
   const skipped = extendBlackThroughFades(analysis.blackIntervals, analysis.frames, probe.durationSeconds);
   const ranges = planVideoSampleWindows(probe.durationSeconds, skipped);
 
   const outputPath = join(tmpdir(), `embed-video-${randomUUID()}.mp4`);
   try {
-    await transcodeSample(filePath, ranges, probe.durationSeconds, outputPath);
+    await transcodeSample(filePath, ranges, outputPath);
     const [data, output] = await Promise.all([readFile(outputPath), ffprobe(outputPath)]);
     if (data.byteLength > MAX_PROCESSED_BYTES) {
       throw new Error(`Processed video sample is ${data.byteLength} bytes; expected under ${MAX_PROCESSED_BYTES}`);
@@ -441,8 +424,6 @@ export async function preprocessVideoForEmbedding(filePath: string): Promise<Pro
       sourceHeight: probe.height,
       processedWidth: outputStream.width,
       processedHeight: outputStream.height,
-      byteLength: data.byteLength,
-      sourceDurationSeconds: probe.durationSeconds,
       sampledRanges: ranges,
     };
   } finally {

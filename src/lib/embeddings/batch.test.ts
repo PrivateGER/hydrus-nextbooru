@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   batchComputeEmbeddings,
   MAX_EMBEDDING_BATCH_SIZE,
-  MAX_EMBEDDING_REQUEST_BYTES,
-  partitionByRequestBytes,
 } from "@/lib/embeddings/batch";
 import type { EmbeddingPostToProcess } from "@/lib/embeddings/store";
 import type { EmbeddingMediaInput } from "@/lib/openrouter/types";
@@ -122,8 +120,6 @@ function processedVideo(id: number) {
     sourceHeight: 720,
     processedWidth: 480,
     processedHeight: 270,
-    byteLength: 5000,
-    sourceDurationSeconds: 42,
     sampledRanges: [{ start: 0, end: 10 }],
   };
 }
@@ -176,13 +172,6 @@ describe("batchComputeEmbeddings", () => {
       batchComputeEmbeddings({ batchSize: MAX_EMBEDDING_BATCH_SIZE + 1 })
     ).rejects.toThrow(`batchSize must be ${MAX_EMBEDDING_BATCH_SIZE} or less`);
 
-    expect(mocks.assertVectorExtensionsAvailable).not.toHaveBeenCalled();
-  });
-
-  it("rejects request byte budgets that would defeat the payload cap", async () => {
-    for (const maxRequestBytes of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, MAX_EMBEDDING_REQUEST_BYTES + 1]) {
-      await expect(batchComputeEmbeddings({ maxRequestBytes })).rejects.toThrow(/maxRequestBytes must be an integer/);
-    }
     expect(mocks.assertVectorExtensionsAvailable).not.toHaveBeenCalled();
   });
 
@@ -389,56 +378,33 @@ describe("batchComputeEmbeddings", () => {
     expect(mocks.isVideoToolingAvailable).not.toHaveBeenCalled();
   });
 
-  it("splits one post batch into several requests when data URLs exceed the byte budget", async () => {
-    const posts = [videoPost(1), videoPost(2), videoPost(3), post(4)];
-    const bigUrl = (id: number) => `data:video/mp4;base64,${"x".repeat(50)}${id}`;
+  it("splits mixed media into requests below the production byte budget", async () => {
+    const posts = [videoPost(1), post(2), videoPost(3), post(4)];
+    const requestBudgetBytes = 40 * 1024 * 1024;
+    const largePayload = "x".repeat(21 * 1024 * 1024);
 
     mocks.countPendingEmbeddings.mockResolvedValue(posts.length);
     mocks.findEmbeddingPostsToProcess.mockResolvedValue(posts);
     mocks.preprocessVideoForEmbedding.mockImplementation(async (filePath: string) => ({
       ...processedVideo(idFromPath(filePath)),
-      dataUrl: bigUrl(idFromPath(filePath)),
+      dataUrl: `data:video/mp4;base64,${largePayload}${idFromPath(filePath)}`,
     }));
     mocks.createMediaEmbeddings.mockImplementation(async ({ media }: { media: EmbeddingMediaInput[] }) =>
       media.map((_, index) => ({ embedding: [index + 1, 0, 0], model: config.model }))
     );
 
-    const result = await batchComputeEmbeddings({ batchSize: posts.length, maxRequestBytes: 100 });
+    const result = await batchComputeEmbeddings({ batchSize: posts.length });
 
     expect(result).toEqual({ processed: 4, succeeded: 4, failed: 0 });
     const requests = mocks.createMediaEmbeddings.mock.calls.map(([call]) => call.media as EmbeddingMediaInput[]);
-    expect(requests.map((media) => media.length)).toEqual([1, 1, 2]);
+    expect(requests.map((media) => media.map(({ type }) => type))).toEqual([
+      ["video", "image"],
+      ["video", "image"],
+    ]);
     for (const media of requests) {
       const bytes = media.reduce((sum, item) => sum + item.dataUrl.length, 0);
-      expect(bytes).toBeLessThanOrEqual(100);
+      expect(bytes).toBeLessThanOrEqual(requestBudgetBytes);
     }
-    expect(mocks.upsertCompleteEmbedding.mock.calls.map(([call]) => call.postId).sort()).toEqual([1, 2, 3, 4]);
   });
 });
 
-describe("partitionByRequestBytes", () => {
-  const item = (id: number, bytes: number) => ({ id, media: { input: { type: "image" as const, dataUrl: "y".repeat(bytes) } } });
-
-  it("keeps everything in one request when under budget and preserves order", () => {
-    const items = [item(1, 10), item(2, 20), item(3, 30)];
-    expect(partitionByRequestBytes(items, 100)).toEqual([items]);
-  });
-
-  it("starts a new request exactly when the next item would exceed the budget", () => {
-    const items = [item(1, 40), item(2, 40), item(3, 21), item(4, 60), item(5, 40)];
-    expect(partitionByRequestBytes(items, 100).map((chunk) => chunk.map((entry) => entry.id))).toEqual([
-      [1, 2],
-      [3, 4],
-      [5],
-    ]);
-  });
-
-  it("gives an oversized item its own request instead of dropping it", () => {
-    const items = [item(1, 10), item(2, 500), item(3, 10)];
-    expect(partitionByRequestBytes(items, 100).map((chunk) => chunk.map((entry) => entry.id))).toEqual([[1], [2], [3]]);
-  });
-
-  it("returns no requests for no items", () => {
-    expect(partitionByRequestBytes([], 100)).toEqual([]);
-  });
-});

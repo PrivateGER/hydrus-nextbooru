@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { execSync, spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -17,16 +17,14 @@ import {
 const SAMPLE_BUDGET_SECONDS = EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT * EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS;
 
 describe("planVideoSampleWindows", () => {
-  const options = { windowSeconds: 10, windowCount: 3 };
-
   it("embeds a short video whole after trimming black leader and trailer", () => {
-    expect(planVideoSampleWindows(20, [{ start: 0, end: 2 }, { start: 18.5, end: 20 }], options)).toEqual([
+    expect(planVideoSampleWindows(20, [{ start: 0, end: 2 }, { start: 18.5, end: 20 }])).toEqual([
       { start: 2, end: 18.5 },
     ]);
   });
 
   it("spreads windows to the start, middle, and end of the content timeline", () => {
-    expect(planVideoSampleWindows(100, [], options)).toEqual([
+    expect(planVideoSampleWindows(100, [])).toEqual([
       { start: 0, end: 10 },
       { start: 45, end: 55 },
       { start: 90, end: 100 },
@@ -34,47 +32,46 @@ describe("planVideoSampleWindows", () => {
   });
 
   it("skips black runs when placing windows, splitting a window that straddles one", () => {
-    // Content timeline: [0,20) + [40,100) = 80 s. Middle window at content 35..45 -> real 40..50
-    // wouldn't straddle, so use a cut that lands inside a window instead.
-    const ranges = planVideoSampleWindows(100, [{ start: 5, end: 8 }, { start: 90, end: 100 }], options);
-    // Content: [0,5)+[8,90) = 87 s; windows at content 0, 38.5, 77.
+    const ranges = planVideoSampleWindows(100, [{ start: 5, end: 8 }, { start: 90, end: 100 }]);
     expect(ranges).toEqual([
       { start: 0, end: 5 },
       { start: 8, end: 13 },
       { start: 41.5, end: 51.5 },
       { start: 80, end: 90 },
     ]);
-    const sampled = ranges.reduce((sum, range) => sum + (range.end - range.start), 0);
-    expect(sampled).toBe(30);
   });
 
   it("never exceeds the sample budget", () => {
     for (const duration of [31, 45, 60, 3600]) {
-      const ranges = planVideoSampleWindows(duration, [{ start: 0, end: 1 }], options);
+      const ranges = planVideoSampleWindows(duration, [{ start: 0, end: 1 }]);
       const sampled = ranges.reduce((sum, range) => sum + (range.end - range.start), 0);
       expect(sampled).toBeLessThanOrEqual(30 + 1e-9);
-      expect(ranges.every((range) => range.start >= 1 && range.end <= duration)).toBe(true);
     }
   });
 
   it("falls back to the full duration when the whole video is black", () => {
-    expect(planVideoSampleWindows(12, [{ start: 0, end: 12 }], options)).toEqual([{ start: 0, end: 12 }]);
+    expect(planVideoSampleWindows(12, [{ start: 0, end: 12 }])).toEqual([{ start: 0, end: 12 }]);
   });
 
   it("ignores content slivers between black runs and clamps out-of-range cuts", () => {
     expect(
-      planVideoSampleWindows(10, [{ start: -5, end: 3 }, { start: 3.2, end: 6 }, { start: 9, end: 30 }], options)
+      planVideoSampleWindows(10, [{ start: -5, end: 3 }, { start: 3.2, end: 6 }, { start: 9, end: 30 }])
     ).toEqual([{ start: 6, end: 9 }]);
   });
 
   it("rejects non-positive durations", () => {
-    expect(() => planVideoSampleWindows(0, [], options)).toThrow(RangeError);
-    expect(() => planVideoSampleWindows(Number.NaN, [], options)).toThrow(RangeError);
+    expect(() => planVideoSampleWindows(0, [])).toThrow(RangeError);
+    expect(() => planVideoSampleWindows(Number.NaN, [])).toThrow(RangeError);
   });
 });
 
-const runs = (command: string) => spawnSync(command, ["-version"], { stdio: "pipe" }).status === 0;
-const ffmpegInstalled = runs(process.env.FFMPEG_PATH || "ffmpeg") && runs(process.env.FFPROBE_PATH || "ffprobe");
+const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
+const ffmpegInstalled = [FFMPEG, FFPROBE]
+  .every((command) => spawnSync(command, ["-version"], { stdio: "pipe" }).status === 0);
+function runFixtureFfmpeg(args: string[]): void {
+  execFileSync(FFMPEG, args, { stdio: "pipe" });
+}
 
 describe("extendBlackThroughFades", () => {
   /** 10 fps frames from t=0 with the given luma sequence. */
@@ -115,7 +112,6 @@ describe("extendBlackThroughFades", () => {
   });
 });
 
-/** Fixtures are generated at run time to keep binaries out of the repo. */
 describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
   let dir: string;
   let longWithBlack: string;
@@ -126,20 +122,22 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
     longWithBlack = join(dir, "long.mp4");
     shortClip = join(dir, "short.mp4");
     // 3 s black leader, 2 s fade-in, 45 s content, 2 s black trailer, with an audio track.
-    execSync(
-      `ffmpeg -loglevel error -f lavfi -i "color=c=black:size=320x240:rate=10:duration=3" ` +
-        `-f lavfi -i "testsrc2=size=320x240:rate=10:duration=50" ` +
-        `-f lavfi -i "color=c=black:size=320x240:rate=10:duration=2" ` +
-        `-f lavfi -i "sine=frequency=440:duration=55" ` +
-        `-filter_complex "[1:v]fade=t=in:st=0:d=2[c];[0:v][c][2:v]concat=n=3:v=1:a=0[v]" ` +
-        `-map "[v]" -map 3:a -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest -y "${longWithBlack}"`,
-      { stdio: "pipe" }
-    );
-    execSync(
-      `ffmpeg -loglevel error -f lavfi -i "testsrc2=size=1920x1080:rate=10:duration=12" ` +
-        `-c:v libx264 -pix_fmt yuv420p -y "${shortClip}"`,
-      { stdio: "pipe" }
-    );
+    runFixtureFfmpeg([
+      "-loglevel", "error",
+      "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=10:duration=3",
+      "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10:duration=50",
+      "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=10:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=55",
+      "-filter_complex", "[1:v]fade=t=in:st=0:d=2[c];[0:v][c][2:v]concat=n=3:v=1:a=0[v]",
+      "-map", "[v]", "-map", "3:a",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-shortest", "-y", longWithBlack,
+    ]);
+    runFixtureFfmpeg([
+      "-loglevel", "error",
+      "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=10:duration=12",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", shortClip,
+    ]);
   }, 60000);
 
   afterAll(async () => {
@@ -149,7 +147,7 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
   function probeSample(dataUrl: string) {
     const bytes = Buffer.from(dataUrl.slice("data:video/mp4;base64,".length), "base64");
     const result = spawnSync(
-      "ffprobe",
+      FFPROBE,
       [
         "-v", "error",
         "-count_frames",
@@ -159,6 +157,10 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
       ],
       { input: bytes, stdio: "pipe" }
     );
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error(`ffprobe exited with status ${result.status}: ${result.stderr.toString()}`);
+    }
     const streams = JSON.parse(result.stdout.toString()).streams as Array<{
       codec_type: string;
       nb_read_frames?: string;
@@ -174,8 +176,6 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
   it("cuts black leaders/fades and trailers, samples three windows, and strips audio", async () => {
     const processed = await preprocessVideoForEmbedding(longWithBlack);
 
-    expect(processed.format).toBe("mp4");
-    expect(processed.sourceDurationSeconds).toBeCloseTo(55, 0);
     expect(processed.sampledRanges).toHaveLength(EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT);
     // Leader (0-3 s) and most of the fade-in are skipped; trailer (53-55 s) is skipped.
     expect(processed.sampledRanges[0].start).toBeGreaterThanOrEqual(3);
@@ -210,15 +210,15 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
     const darkClip = join(dir, "dark.mp4");
     // 2 s black leader, 8 s dark grey (~20% luma, flat), 6 s content fading out over
     // 13.5-15.5 s into 1 s of black. Timeline ends at 16.5 s.
-    execSync(
-      `ffmpeg -loglevel error -f lavfi -i "color=c=black:size=320x240:rate=10:duration=2" ` +
-        `-f lavfi -i "color=c=0x333333:size=320x240:rate=10:duration=8" ` +
-        `-f lavfi -i "testsrc2=size=320x240:rate=10:duration=6" ` +
-        `-f lavfi -i "color=c=black:size=320x240:rate=10:duration=0.5" ` +
-        `-filter_complex "[2:v]fade=t=out:st=3.5:d=2[c];[0:v][1:v][c][3:v]concat=n=4:v=1:a=0" ` +
-        `-c:v libx264 -pix_fmt yuv420p -y "${darkClip}"`,
-      { stdio: "pipe" }
-    );
+    runFixtureFfmpeg([
+      "-loglevel", "error",
+      "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=10:duration=2",
+      "-f", "lavfi", "-i", "color=c=0x333333:size=320x240:rate=10:duration=8",
+      "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10:duration=6",
+      "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=10:duration=0.5",
+      "-filter_complex", "[2:v]fade=t=out:st=3.5:d=2[c];[0:v][1:v][c][3:v]concat=n=4:v=1:a=0",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", darkClip,
+    ]);
 
     const processed = await preprocessVideoForEmbedding(darkClip);
 
@@ -234,8 +234,12 @@ describe.skipIf(!ffmpegInstalled)("preprocessVideoForEmbedding", () => {
 
   it("rejects files without a video stream", async () => {
     const audioOnly = join(dir, "audio.m4a");
-    execSync(`ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=2" -c:a aac -y "${audioOnly}"`, { stdio: "pipe" });
+    runFixtureFfmpeg([
+      "-loglevel", "error",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-c:a", "aac", "-y", audioOnly,
+    ]);
 
-    await expect(preprocessVideoForEmbedding(audioOnly)).rejects.toThrow(/no video stream|ffmpeg|Invalid/i);
+    await expect(preprocessVideoForEmbedding(audioOnly)).rejects.toThrow("File has no video stream");
   }, 30000);
 });

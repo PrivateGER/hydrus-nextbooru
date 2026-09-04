@@ -227,6 +227,8 @@ export const DEFAULT_EMBEDDING_MODEL = "google/gemini-embedding-2-preview";
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 export const DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION = 1024;
 export const DEFAULT_EMBEDDING_VIDEO_ENABLED = false;
+// Reserved outside EMBEDDING_RESOLUTION_OPTIONS: video vectors ignore image settings.
+export const EMBEDDING_VIDEO_MAX_RESOLUTION = 480;
 /** Length of each sampled video window in seconds. */
 export const EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS = 10;
 /** Number of windows sampled from a long video (start, middle, end). */

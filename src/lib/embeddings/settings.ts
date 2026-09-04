@@ -27,10 +27,8 @@ export interface EmbeddingSettings {
 }
 
 /**
- * Identifies which `PostEmbedding` rows are current. `videoEnabled` is not
- * part of the row key: it only decides whether video posts are eligible for
- * computation. Turning it off neither invalidates image vectors nor hides
- * already-computed video vectors from retrieval (they share the model space).
+ * Images use imageMaxResolution; videos use the fixed 480px key.
+ * videoEnabled gates computation only, never retrieval of existing vectors.
  */
 export interface EmbeddingConfig {
   baseUrl: string;

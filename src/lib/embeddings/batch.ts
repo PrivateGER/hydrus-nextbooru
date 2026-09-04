@@ -6,22 +6,18 @@ import { aiLog } from "@/lib/logger";
 import { preprocessImageForEmbedding } from "@/lib/embeddings/image";
 import { isVideoToolingAvailable, preprocessVideoForEmbedding } from "@/lib/embeddings/video";
 import {
-  getEmbeddingSettings,
   getEmbeddingOpenRouterSettings,
   isEmbeddingProviderConfigured,
   toEmbeddingConfig,
   type EmbeddingConfig,
-  type EmbeddingSettings,
 } from "@/lib/embeddings/settings";
 import {
   assertVectorExtensionsAvailable,
   countPendingEmbeddings,
   findEmbeddingPostsToProcess,
-  getEmbeddingStats,
   upsertCompleteEmbedding,
   upsertFailedEmbedding,
   type EmbeddingPostToProcess,
-  type EmbeddingStats,
 } from "@/lib/embeddings/store";
 
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
@@ -30,7 +26,7 @@ export const MAX_EMBEDDING_BATCH_SIZE = 32;
  * Upper bound on data-URL bytes per embeddings request. OpenRouter rejects
  * bodies over 50 MiB; JSON framing is negligible next to the base64 payload.
  */
-export const MAX_EMBEDDING_REQUEST_BYTES = 40 * 1024 * 1024;
+const MAX_EMBEDDING_REQUEST_BYTES = 40 * 1024 * 1024;
 const PREPROCESS_CONCURRENCY = 2;
 const FALLBACK_CONCURRENCY = 2;
 
@@ -48,8 +44,6 @@ export interface BatchEmbeddingOptions {
   limit?: number;
   retryFailed?: boolean;
   onProgress?: (processed: number, total: number) => void;
-  /** Data-URL bytes per embeddings request; test seam, defaults to {@link MAX_EMBEDDING_REQUEST_BYTES}. */
-  maxRequestBytes?: number;
 }
 
 export interface BatchEmbeddingResult {
@@ -66,7 +60,6 @@ export async function batchComputeEmbeddings(
     limit,
     retryFailed = false,
     onProgress,
-    maxRequestBytes = MAX_EMBEDDING_REQUEST_BYTES,
   } = options;
 
   if (!Number.isInteger(batchSize) || batchSize < 1) {
@@ -77,9 +70,6 @@ export async function batchComputeEmbeddings(
   }
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
     throw new RangeError(`limit must be a non-negative integer, got ${limit}`);
-  }
-  if (!Number.isInteger(maxRequestBytes) || maxRequestBytes < 1 || maxRequestBytes > MAX_EMBEDDING_REQUEST_BYTES) {
-    throw new RangeError(`maxRequestBytes must be an integer in 1..${MAX_EMBEDDING_REQUEST_BYTES}, got ${maxRequestBytes}`);
   }
 
   await assertVectorExtensionsAvailable();
@@ -125,7 +115,6 @@ export async function batchComputeEmbeddings(
         client,
         config,
         posts,
-        maxRequestBytes,
       });
     } catch (error) {
       results = await recordFailedEmbeddingBatch({
@@ -207,21 +196,19 @@ async function computeEmbeddingPostBatch(options: {
   client: OpenRouterClient;
   config: EmbeddingConfig;
   posts: EmbeddingPostToProcess[];
-  maxRequestBytes: number;
 }): Promise<boolean[]> {
-  const { client, config, posts, maxRequestBytes } = options;
-  const prepared: Array<{
+  const { client, config, posts } = options;
+  type PreparedPost = {
     post: EmbeddingPostToProcess;
     media: PreparedMedia;
-  }> = [];
+  };
   const results = new Map<number, boolean>();
 
   const preprocessLimit = pLimit(PREPROCESS_CONCURRENCY);
-  await Promise.all(posts.map((post) =>
-    preprocessLimit(async () => {
+  const prepared = (await Promise.all(posts.map((post) =>
+    preprocessLimit(async (): Promise<PreparedPost | null> => {
       try {
-        const media = await preprocessPost(post, config);
-        prepared.push({ post, media });
+        return { post, media: await preprocessPost(post, config) };
       } catch (error) {
         await recordFailedEmbedding({
           post,
@@ -230,11 +217,27 @@ async function computeEmbeddingPostBatch(options: {
           error,
         });
         results.set(post.id, false);
+        return null;
       }
     })
-  ));
+  ))).filter((item): item is PreparedPost => item !== null);
 
-  for (const chunk of partitionByRequestBytes(prepared, maxRequestBytes)) {
+  const chunks: PreparedPost[][] = [];
+  let chunk: PreparedPost[] = [];
+  let chunkBytes = 0;
+  for (const item of prepared) {
+    const bytes = item.media.input.dataUrl.length;
+    if (chunk.length > 0 && chunkBytes + bytes > MAX_EMBEDDING_REQUEST_BYTES) {
+      chunks.push(chunk);
+      chunk = [];
+      chunkBytes = 0;
+    }
+    chunk.push(item);
+    chunkBytes += bytes;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+
+  for (const chunk of chunks) {
     try {
       const embeddingResults = await client.createMediaEmbeddings({
         model: config.model,
@@ -283,31 +286,6 @@ async function computeEmbeddingPostBatch(options: {
   }
 
   return posts.map((post) => results.get(post.id) ?? false);
-}
-
-/**
- * Split prepared media into request-sized chunks, preserving order. An item
- * larger than the budget on its own still gets a chunk (the API decides).
- */
-export function partitionByRequestBytes<T extends { media: Pick<PreparedMedia, "input"> }>(
-  items: T[],
-  maxBytes = MAX_EMBEDDING_REQUEST_BYTES
-): T[][] {
-  const chunks: T[][] = [];
-  let current: T[] = [];
-  let currentBytes = 0;
-  for (const item of items) {
-    const bytes = item.media.input.dataUrl.length;
-    if (current.length > 0 && currentBytes + bytes > maxBytes) {
-      chunks.push(current);
-      current = [];
-      currentBytes = 0;
-    }
-    current.push(item);
-    currentBytes += bytes;
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
 }
 
 async function computePreparedEmbedding(options: {
@@ -391,29 +369,4 @@ async function recordFailedEmbedding(options: {
     processedWidth: prepared?.processedWidth ?? null,
     processedHeight: prepared?.processedHeight ?? null,
   });
-}
-
-export async function getCurrentEmbeddingStats(): Promise<{
-  settings: Pick<
-    EmbeddingSettings,
-    "apiKeyConfigured" | "apiKeyRequired" | "maskedApiKey" | "baseUrl" | "model" | "dimensions" | "imageMaxResolution" | "videoEnabled"
-  >;
-  stats: EmbeddingStats;
-}> {
-  const settings = await getEmbeddingSettings();
-  const stats = await getEmbeddingStats(toEmbeddingConfig(settings));
-
-  return {
-    settings: {
-      apiKeyConfigured: settings.apiKeyConfigured,
-      apiKeyRequired: settings.apiKeyRequired,
-      maskedApiKey: settings.maskedApiKey,
-      baseUrl: settings.baseUrl,
-      model: settings.model,
-      dimensions: settings.dimensions,
-      imageMaxResolution: settings.imageMaxResolution,
-      videoEnabled: settings.videoEnabled,
-    },
-    stats,
-  };
 }
