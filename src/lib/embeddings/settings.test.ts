@@ -73,12 +73,14 @@ describe("embedding settings", () => {
         model: "embedding-model",
         dimensions: 768,
         imageMaxResolution: 512,
+        videoEnabled: true,
       })
     ).toEqual({
       baseUrl: "https://local.example/v1",
       model: "embedding-model",
       dimensions: 768,
       imageMaxResolution: 512,
+      videoEnabled: true,
     });
   });
 
@@ -89,6 +91,7 @@ describe("embedding settings", () => {
       { key: SETTINGS_KEYS.EMBEDDING_MODEL, value: "custom-embedding-model" },
       { key: SETTINGS_KEYS.EMBEDDING_DIMENSIONS, value: "999" },
       { key: SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION, value: "not-a-number" },
+      { key: SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED, value: "yes" },
     ]);
 
     await expect(getEmbeddingSettings()).resolves.toEqual({
@@ -100,6 +103,7 @@ describe("embedding settings", () => {
       model: "custom-embedding-model",
       dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
       imageMaxResolution: DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION,
+      videoEnabled: false,
     });
     expect(mockMaskApiKey).toHaveBeenCalledWith("or-secret-key");
   });
@@ -108,6 +112,7 @@ describe("embedding settings", () => {
     mockSettingsFindMany.mockResolvedValueOnce([
       { key: SETTINGS_KEYS.EMBEDDING_DIMENSIONS, value: "768" },
       { key: SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION, value: "2048" },
+      { key: SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED, value: "true" },
     ]);
 
     await expect(getEmbeddingOpenRouterSettings()).resolves.toEqual({
@@ -117,6 +122,7 @@ describe("embedding settings", () => {
       targetLang: null,
       dimensions: 768,
       imageMaxResolution: 2048,
+      videoEnabled: true,
     });
   });
 
@@ -127,6 +133,7 @@ describe("embedding settings", () => {
       model: "  embedding-model  ",
       dimensions: 3072,
       imageMaxResolution: 1536,
+      videoEnabled: true,
     });
 
     expect(mockUpdateSettings).toHaveBeenCalledWith({
@@ -135,6 +142,7 @@ describe("embedding settings", () => {
       [SETTINGS_KEYS.EMBEDDING_MODEL]: "embedding-model",
       [SETTINGS_KEYS.EMBEDDING_DIMENSIONS]: "3072",
       [SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION]: "1536",
+      [SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED]: "true",
     });
   });
 

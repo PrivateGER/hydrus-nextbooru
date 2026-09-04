@@ -5,6 +5,7 @@ import { useBatchPolling } from "./use-batch-polling";
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
   DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION,
+  DEFAULT_EMBEDDING_VIDEO_ENABLED,
   DEFAULT_EMBEDDING_MODEL,
   POPULAR_EMBEDDING_MODELS,
 } from "@/lib/openrouter/types";
@@ -26,6 +27,8 @@ export interface UseEmbeddingsReturn {
   setDimensions: (value: number) => void;
   imageMaxResolution: number;
   setImageMaxResolution: (value: number) => void;
+  videoEnabled: boolean;
+  setVideoEnabled: (value: boolean) => void;
   fetchStatus: () => Promise<void>;
   saveSettings: () => Promise<void>;
   computeMissing: () => Promise<void>;
@@ -48,6 +51,7 @@ export function useEmbeddings(
   const [customModel, setCustomModel] = useState("");
   const [dimensions, setDimensions] = useState(DEFAULT_EMBEDDING_DIMENSIONS);
   const [imageMaxResolution, setImageMaxResolution] = useState(DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION);
+  const [videoEnabled, setVideoEnabled] = useState(DEFAULT_EMBEDDING_VIDEO_ENABLED);
 
   const applyStatus = useCallback((data: EmbeddingAdminStatus) => {
     setStatus(data);
@@ -56,6 +60,7 @@ export function useEmbeddings(
     setModel(data.settings.model);
     setDimensions(data.settings.dimensions);
     setImageMaxResolution(data.settings.imageMaxResolution);
+    setVideoEnabled(data.settings.videoEnabled);
 
     if (!POPULAR_EMBEDDING_MODELS.some((candidate) => candidate.id === data.settings.model)) {
       setCustomModel(data.settings.model);
@@ -131,6 +136,7 @@ export function useEmbeddings(
           model: effectiveModel,
           dimensions,
           imageMaxResolution,
+          videoEnabled,
         }),
       });
 
@@ -158,6 +164,7 @@ export function useEmbeddings(
     customModel,
     dimensions,
     imageMaxResolution,
+    videoEnabled,
     setMessage,
     triggerSuccessAnimation,
     fetchStatus,
@@ -237,6 +244,8 @@ export function useEmbeddings(
     setDimensions,
     imageMaxResolution,
     setImageMaxResolution,
+    videoEnabled,
+    setVideoEnabled,
     fetchStatus,
     saveSettings,
     computeMissing: () => startBatch(false),

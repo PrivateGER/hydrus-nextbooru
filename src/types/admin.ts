@@ -98,6 +98,7 @@ export interface EmbeddingSettings {
   model: string;
   dimensions: number;
   imageMaxResolution: number;
+  videoEnabled: boolean;
 }
 
 export interface EmbeddingStats {

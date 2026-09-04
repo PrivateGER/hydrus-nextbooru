@@ -4,7 +4,7 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase }
 import { setTestPrisma } from "@/lib/db";
 import { createPost } from "../factories";
 import {
-  batchComputeImageEmbeddings,
+  batchComputeEmbeddings,
   getCurrentEmbeddingStats,
 } from "@/lib/embeddings/batch";
 import {
@@ -170,7 +170,7 @@ describe("/api/admin/embeddings", () => {
       ],
     });
 
-    await expect(batchComputeImageEmbeddings({ limit: 0 })).resolves.toEqual({
+    await expect(batchComputeEmbeddings({ limit: 0 })).resolves.toEqual({
       processed: 0,
       succeeded: 0,
       failed: 0,

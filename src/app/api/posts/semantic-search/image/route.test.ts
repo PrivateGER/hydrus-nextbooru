@@ -19,7 +19,7 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 
 vi.mock("@/lib/embeddings/image", () => ({
-  EMBEDDING_SUPPORTED_MIMES: new Set(["image/png", "image/jpeg", "image/webp"]),
+  EMBEDDING_SUPPORTED_IMAGE_MIMES: new Set(["image/png", "image/jpeg", "image/webp"]),
 }));
 
 import { GET, POST } from "./route";

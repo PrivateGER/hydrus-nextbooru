@@ -1,6 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
-import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
+import { EMBEDDING_SUPPORTED_IMAGE_MIMES } from "@/lib/embeddings/mimes";
 import {
   type EmbeddingConfig,
   isSupportedEmbeddingDimensions,
@@ -97,12 +97,32 @@ function normalizeEmbeddingMinScore(minScore: number | undefined): number | null
   return Math.min(1, Math.max(-1, minScore));
 }
 
+/** SQL predicate for posts the active config can embed (`p` is the Post alias). */
+function eligibleMimeSql(config: EmbeddingConfig): Prisma.Sql {
+  return Prisma.sql`(
+    p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_IMAGE_MIMES])})
+    OR (${config.videoEnabled} AND p."mimeType" LIKE 'video/%')
+  )`;
+}
+
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
-  const [total, supported, embedded, failed, extensions] = await Promise.all([
+  // embedded counts every row "clear" deletes; failed/pending are the
+  // eligibility-filtered sets that "retry"/"compute" actually process, so rows
+  // for media that is no longer eligible (videos after disabling) don't
+  // advertise work the batch would skip.
+  const [total, supported, embedded, failed, pending, extensions] = await Promise.all([
     prisma.post.count(),
-    prisma.post.count({ where: { mimeType: { in: [...EMBEDDING_SUPPORTED_MIMES] } } }),
+    prisma.post.count({
+      where: {
+        OR: [
+          { mimeType: { in: [...EMBEDDING_SUPPORTED_IMAGE_MIMES] } },
+          ...(config.videoEnabled ? [{ mimeType: { startsWith: "video/" } }] : []),
+        ],
+      },
+    }),
     countEmbeddingsByStatus(config, "COMPLETE"),
-    countEmbeddingsByStatus(config, "FAILED"),
+    countPendingEmbeddings(config, true),
+    countPendingEmbeddings(config, false),
     getVectorExtensionVersions(),
   ]);
 
@@ -111,7 +131,7 @@ export async function getEmbeddingStats(config: EmbeddingConfig): Promise<Embedd
     supported,
     embedded,
     failed,
-    pending: Math.max(0, supported - embedded - failed),
+    pending,
     unsupported: Math.max(0, total - supported),
     extensions,
   };
@@ -176,7 +196,7 @@ export async function countPendingEmbeddings(
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+    WHERE ${eligibleMimeSql(config)}
       AND (
         (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
         OR (${!retryFailed} AND pe.id IS NULL)
@@ -203,7 +223,7 @@ export async function findEmbeddingPostsToProcess(options: {
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+    WHERE ${eligibleMimeSql(config)}
       AND (${lastId === undefined} OR p.id > ${lastId ?? 0})
       AND (
         (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
@@ -891,13 +911,11 @@ async function countEmbeddingsByStatus(
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*) AS count
     FROM "PostEmbedding" pe
-    JOIN "Post" p ON p.id = pe."postId"
     WHERE pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
       AND pe."imageMaxResolution" = ${config.imageMaxResolution}
       AND pe.status = ${status}::"EmbeddingStatus"
-      AND p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
   `;
 
   return Number(rows[0]?.count ?? 0n);

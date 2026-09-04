@@ -4,6 +4,7 @@ import {
   DEFAULT_EMBEDDING_DIMENSIONS,
   DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION,
   DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_EMBEDDING_VIDEO_ENABLED,
   EMBEDDING_DIMENSION_OPTIONS,
   EMBEDDING_RESOLUTION_OPTIONS,
   SETTINGS_KEYS,
@@ -22,13 +23,21 @@ export interface EmbeddingSettings {
   model: string;
   dimensions: number;
   imageMaxResolution: number;
+  videoEnabled: boolean;
 }
 
+/**
+ * Identifies which `PostEmbedding` rows are current. `videoEnabled` is not
+ * part of the row key: it only decides whether video posts are eligible for
+ * computation. Turning it off neither invalidates image vectors nor hides
+ * already-computed video vectors from retrieval (they share the model space).
+ */
 export interface EmbeddingConfig {
   baseUrl: string;
   model: string;
   dimensions: number;
   imageMaxResolution: number;
+  videoEnabled: boolean;
 }
 
 export function isSupportedEmbeddingDimensions(value: number): value is typeof EMBEDDING_DIMENSION_OPTIONS[number] {
@@ -52,12 +61,15 @@ export function isEmbeddingProviderConfigured(settings: Pick<EmbeddingSettings, 
   return Boolean(settings.apiKey) || !isEmbeddingApiKeyRequired(settings.baseUrl);
 }
 
-export function toEmbeddingConfig(settings: Pick<EmbeddingSettings, "baseUrl" | "model" | "dimensions" | "imageMaxResolution">): EmbeddingConfig {
+export function toEmbeddingConfig(
+  settings: Pick<EmbeddingSettings, "baseUrl" | "model" | "dimensions" | "imageMaxResolution" | "videoEnabled">
+): EmbeddingConfig {
   return {
     baseUrl: normalizeEmbeddingBaseUrl(settings.baseUrl),
     model: settings.model,
     dimensions: settings.dimensions,
     imageMaxResolution: settings.imageMaxResolution,
+    videoEnabled: settings.videoEnabled,
   };
 }
 
@@ -65,6 +77,12 @@ function parseIntegerSetting(value: string | null, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseBooleanSetting(value: string | null, fallback: boolean): boolean {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }
 
 export async function getEmbeddingSettings(): Promise<EmbeddingSettings> {
@@ -77,6 +95,7 @@ export async function getEmbeddingSettings(): Promise<EmbeddingSettings> {
           SETTINGS_KEYS.EMBEDDING_MODEL,
           SETTINGS_KEYS.EMBEDDING_DIMENSIONS,
           SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION,
+          SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED,
         ],
       },
     },
@@ -108,6 +127,7 @@ export async function getEmbeddingSettings(): Promise<EmbeddingSettings> {
     model: settings.get(SETTINGS_KEYS.EMBEDDING_MODEL) || DEFAULT_EMBEDDING_MODEL,
     dimensions: safeDimensions,
     imageMaxResolution: safeResolution,
+    videoEnabled: parseBooleanSetting(settings.get(SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED) || null, DEFAULT_EMBEDDING_VIDEO_ENABLED),
   };
 }
 
@@ -121,6 +141,7 @@ export async function getEmbeddingOpenRouterSettings(): Promise<OpenRouterSettin
     targetLang: null,
     dimensions: settings.dimensions,
     imageMaxResolution: settings.imageMaxResolution,
+    videoEnabled: settings.videoEnabled,
   };
 }
 
@@ -130,6 +151,7 @@ export async function updateEmbeddingSettings(input: {
   model?: string;
   dimensions?: number;
   imageMaxResolution?: number;
+  videoEnabled?: boolean;
 }): Promise<void> {
   const settings: Partial<Record<string, string>> = {};
 
@@ -168,6 +190,10 @@ export async function updateEmbeddingSettings(input: {
       throw new Error(`Image resolution must be one of: ${EMBEDDING_RESOLUTION_OPTIONS.join(", ")}`);
     }
     settings[SETTINGS_KEYS.EMBEDDING_IMAGE_MAX_RESOLUTION] = String(input.imageMaxResolution);
+  }
+
+  if (input.videoEnabled !== undefined) {
+    settings[SETTINGS_KEYS.EMBEDDING_VIDEO_ENABLED] = String(input.videoEnabled);
   }
 
   await updateSettings(settings);

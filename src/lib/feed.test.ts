@@ -75,6 +75,7 @@ const EMBEDDING_CONFIG: EmbeddingConfig = {
   model: "test-model",
   dimensions: 4,
   imageMaxResolution: 1024,
+  videoEnabled: false,
 };
 const TEST_CONFIG: FeedConfig = {
   ...FEED_CONFIG,

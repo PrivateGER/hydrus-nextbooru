@@ -1,11 +1,10 @@
 import pLimit from "p-limit";
 import { OpenRouterClient, OpenRouterConfigError } from "@/lib/openrouter";
+import type { EmbeddingMediaInput } from "@/lib/openrouter/types";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { aiLog } from "@/lib/logger";
-import {
-  preprocessImageForEmbedding,
-  type ProcessedEmbeddingImage,
-} from "@/lib/embeddings/image";
+import { preprocessImageForEmbedding } from "@/lib/embeddings/image";
+import { isVideoToolingAvailable, preprocessVideoForEmbedding } from "@/lib/embeddings/video";
 import {
   getEmbeddingSettings,
   getEmbeddingOpenRouterSettings,
@@ -27,14 +26,30 @@ import {
 
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
 export const MAX_EMBEDDING_BATCH_SIZE = 32;
+/**
+ * Upper bound on data-URL bytes per embeddings request. OpenRouter rejects
+ * bodies over 50 MiB; JSON framing is negligible next to the base64 payload.
+ */
+export const MAX_EMBEDDING_REQUEST_BYTES = 40 * 1024 * 1024;
 const PREPROCESS_CONCURRENCY = 2;
 const FALLBACK_CONCURRENCY = 2;
+
+/** Preprocessed media plus the metadata persisted on the `PostEmbedding` row. */
+interface PreparedMedia {
+  input: EmbeddingMediaInput;
+  sourceWidth: number | null;
+  sourceHeight: number | null;
+  processedWidth: number;
+  processedHeight: number;
+}
 
 export interface BatchEmbeddingOptions {
   batchSize?: number;
   limit?: number;
   retryFailed?: boolean;
   onProgress?: (processed: number, total: number) => void;
+  /** Data-URL bytes per embeddings request; test seam, defaults to {@link MAX_EMBEDDING_REQUEST_BYTES}. */
+  maxRequestBytes?: number;
 }
 
 export interface BatchEmbeddingResult {
@@ -43,7 +58,7 @@ export interface BatchEmbeddingResult {
   failed: number;
 }
 
-export async function batchComputeImageEmbeddings(
+export async function batchComputeEmbeddings(
   options: BatchEmbeddingOptions = {}
 ): Promise<BatchEmbeddingResult> {
   const {
@@ -51,6 +66,7 @@ export async function batchComputeImageEmbeddings(
     limit,
     retryFailed = false,
     onProgress,
+    maxRequestBytes = MAX_EMBEDDING_REQUEST_BYTES,
   } = options;
 
   if (!Number.isInteger(batchSize) || batchSize < 1) {
@@ -62,6 +78,9 @@ export async function batchComputeImageEmbeddings(
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
     throw new RangeError(`limit must be a non-negative integer, got ${limit}`);
   }
+  if (!Number.isInteger(maxRequestBytes) || maxRequestBytes < 1 || maxRequestBytes > MAX_EMBEDDING_REQUEST_BYTES) {
+    throw new RangeError(`maxRequestBytes must be an integer in 1..${MAX_EMBEDDING_REQUEST_BYTES}, got ${maxRequestBytes}`);
+  }
 
   await assertVectorExtensionsAvailable();
 
@@ -71,6 +90,9 @@ export async function batchComputeImageEmbeddings(
   }
 
   const config: EmbeddingConfig = toEmbeddingConfig(settings);
+  if (config.videoEnabled && !(await isVideoToolingAvailable())) {
+    throw new Error("Video embedding is enabled but ffmpeg/ffprobe are not available. Install them or disable video embedding.");
+  }
 
   const totalPending = await countPendingEmbeddings(config, retryFailed);
   const total = limit !== undefined ? Math.min(totalPending, limit) : totalPending;
@@ -103,6 +125,7 @@ export async function batchComputeImageEmbeddings(
         client,
         config,
         posts,
+        maxRequestBytes,
       });
     } catch (error) {
       results = await recordFailedEmbeddingBatch({
@@ -133,7 +156,7 @@ async function recordFailedEmbeddingBatch(options: {
   const { posts, config, error } = options;
   const message = error instanceof Error ? error.message : String(error);
 
-  aiLog.warn({ count: posts.length, error: message }, "Image embedding batch failed; continuing with next batch");
+  aiLog.warn({ count: posts.length, error: message }, "Embedding batch failed; continuing with next batch");
 
   const recordLimit = pLimit(FALLBACK_CONCURRENCY);
   await Promise.all(posts.map((post) =>
@@ -142,14 +165,14 @@ async function recordFailedEmbeddingBatch(options: {
         await recordFailedEmbedding({
           post,
           config,
-          processedImage: null,
+          prepared: null,
           error,
         });
       } catch (recordError) {
         aiLog.warn({
           hash: post.hash,
           error: recordError instanceof Error ? recordError.message : String(recordError),
-        }, "Failed to record image embedding batch failure");
+        }, "Failed to record embedding batch failure");
       }
     })
   ));
@@ -157,15 +180,39 @@ async function recordFailedEmbeddingBatch(options: {
   return posts.map(() => false);
 }
 
+async function preprocessPost(post: EmbeddingPostToProcess, config: EmbeddingConfig): Promise<PreparedMedia> {
+  const filePath = buildFilePath(post.hash, post.extension);
+  if (post.mimeType.startsWith("video/")) {
+    const video = await preprocessVideoForEmbedding(filePath);
+    return {
+      input: { type: "video", dataUrl: video.dataUrl, format: video.format },
+      sourceWidth: video.sourceWidth,
+      sourceHeight: video.sourceHeight,
+      processedWidth: video.processedWidth,
+      processedHeight: video.processedHeight,
+    };
+  }
+
+  const image = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
+  return {
+    input: { type: "image", dataUrl: image.dataUrl },
+    sourceWidth: image.sourceWidth,
+    sourceHeight: image.sourceHeight,
+    processedWidth: image.processedWidth,
+    processedHeight: image.processedHeight,
+  };
+}
+
 async function computeEmbeddingPostBatch(options: {
   client: OpenRouterClient;
   config: EmbeddingConfig;
   posts: EmbeddingPostToProcess[];
+  maxRequestBytes: number;
 }): Promise<boolean[]> {
-  const { client, config, posts } = options;
+  const { client, config, posts, maxRequestBytes } = options;
   const prepared: Array<{
     post: EmbeddingPostToProcess;
-    processedImage: ProcessedEmbeddingImage;
+    media: PreparedMedia;
   }> = [];
   const results = new Map<number, boolean>();
 
@@ -173,14 +220,13 @@ async function computeEmbeddingPostBatch(options: {
   await Promise.all(posts.map((post) =>
     preprocessLimit(async () => {
       try {
-        const filePath = buildFilePath(post.hash, post.extension);
-        const processedImage = await preprocessImageForEmbedding(filePath, config.imageMaxResolution);
-        prepared.push({ post, processedImage });
+        const media = await preprocessPost(post, config);
+        prepared.push({ post, media });
       } catch (error) {
         await recordFailedEmbedding({
           post,
           config,
-          processedImage: null,
+          prepared: null,
           error,
         });
         results.set(post.id, false);
@@ -188,15 +234,15 @@ async function computeEmbeddingPostBatch(options: {
     })
   ));
 
-  if (prepared.length > 0) {
+  for (const chunk of partitionByRequestBytes(prepared, maxRequestBytes)) {
     try {
-      const embeddingResults = await client.createImageEmbeddings({
+      const embeddingResults = await client.createMediaEmbeddings({
         model: config.model,
-        imageUrls: prepared.map(({ processedImage }) => processedImage.dataUrl),
+        media: chunk.map(({ media }) => media.input),
         dimensions: config.dimensions,
       });
 
-      const persistenceResults = await Promise.allSettled(prepared.map(async ({ post, processedImage }, index) => {
+      const persistenceResults = await Promise.allSettled(chunk.map(async ({ post, media }, index) => {
         const result = embeddingResults[index];
         if (!result) {
           throw new Error("Embedding response did not include every requested input");
@@ -205,7 +251,7 @@ async function computeEmbeddingPostBatch(options: {
         const succeeded = await recordCompleteEmbedding({
           post,
           config,
-          processedImage,
+          prepared: media,
           embedding: result.embedding,
         });
         results.set(post.id, succeeded);
@@ -218,17 +264,17 @@ async function computeEmbeddingPostBatch(options: {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      aiLog.warn({ count: prepared.length, error: message }, "Failed to compute batched image embeddings; retrying individually");
+      aiLog.warn({ count: chunk.length, error: message }, "Failed to compute batched embeddings; retrying individually");
 
       const fallbackLimit = pLimit(FALLBACK_CONCURRENCY);
-      const unresolved = prepared.filter(({ post }) => results.get(post.id) !== true);
-      await Promise.all(unresolved.map(({ post, processedImage }) =>
+      const unresolved = chunk.filter(({ post }) => results.get(post.id) !== true);
+      await Promise.all(unresolved.map(({ post, media }) =>
         fallbackLimit(async () => {
-          const succeeded = await computePreparedImageEmbedding({
+          const succeeded = await computePreparedEmbedding({
             client,
             config,
             post,
-            processedImage,
+            prepared: media,
           });
           results.set(post.id, succeeded);
         })
@@ -239,32 +285,57 @@ async function computeEmbeddingPostBatch(options: {
   return posts.map((post) => results.get(post.id) ?? false);
 }
 
-async function computePreparedImageEmbedding(options: {
+/**
+ * Split prepared media into request-sized chunks, preserving order. An item
+ * larger than the budget on its own still gets a chunk (the API decides).
+ */
+export function partitionByRequestBytes<T extends { media: Pick<PreparedMedia, "input"> }>(
+  items: T[],
+  maxBytes = MAX_EMBEDDING_REQUEST_BYTES
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const item of items) {
+    const bytes = item.media.input.dataUrl.length;
+    if (current.length > 0 && currentBytes + bytes > maxBytes) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(item);
+    currentBytes += bytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+async function computePreparedEmbedding(options: {
   client: OpenRouterClient;
   config: EmbeddingConfig;
   post: EmbeddingPostToProcess;
-  processedImage: ProcessedEmbeddingImage;
+  prepared: PreparedMedia;
 }): Promise<boolean> {
-  const { client, config, post, processedImage } = options;
+  const { client, config, post, prepared } = options;
 
   try {
-    const result = await client.createImageEmbedding({
+    const [result] = await client.createMediaEmbeddings({
       model: config.model,
-      imageUrl: processedImage.dataUrl,
+      media: [prepared.input],
       dimensions: config.dimensions,
     });
 
     return recordCompleteEmbedding({
       post,
       config,
-      processedImage,
+      prepared,
       embedding: result.embedding,
     });
   } catch (error) {
     await recordFailedEmbedding({
       post,
       config,
-      processedImage,
+      prepared,
       error,
     });
     return false;
@@ -274,27 +345,27 @@ async function computePreparedImageEmbedding(options: {
 async function recordCompleteEmbedding(options: {
   post: EmbeddingPostToProcess;
   config: EmbeddingConfig;
-  processedImage: ProcessedEmbeddingImage;
+  prepared: PreparedMedia;
   embedding: number[];
 }): Promise<boolean> {
-  const { post, config, processedImage, embedding } = options;
+  const { post, config, prepared, embedding } = options;
 
   try {
     await upsertCompleteEmbedding({
       postId: post.id,
       config,
       embedding,
-      sourceWidth: processedImage.sourceWidth,
-      sourceHeight: processedImage.sourceHeight,
-      processedWidth: processedImage.processedWidth,
-      processedHeight: processedImage.processedHeight,
+      sourceWidth: prepared.sourceWidth,
+      sourceHeight: prepared.sourceHeight,
+      processedWidth: prepared.processedWidth,
+      processedHeight: prepared.processedHeight,
     });
     return true;
   } catch (error) {
     await recordFailedEmbedding({
       post,
       config,
-      processedImage,
+      prepared,
       error,
     });
     return false;
@@ -304,28 +375,28 @@ async function recordCompleteEmbedding(options: {
 async function recordFailedEmbedding(options: {
   post: EmbeddingPostToProcess;
   config: EmbeddingConfig;
-  processedImage: ProcessedEmbeddingImage | null;
+  prepared: PreparedMedia | null;
   error: unknown;
 }): Promise<void> {
-  const { post, config, processedImage, error } = options;
+  const { post, config, prepared, error } = options;
   const message = error instanceof Error ? error.message : String(error);
 
-  aiLog.warn({ hash: post.hash, error: message }, "Failed to compute image embedding");
+  aiLog.warn({ hash: post.hash, mimeType: post.mimeType, error: message }, "Failed to compute embedding");
   await upsertFailedEmbedding({
     postId: post.id,
     config,
     errorMessage: message,
-    sourceWidth: processedImage?.sourceWidth ?? post.width,
-    sourceHeight: processedImage?.sourceHeight ?? post.height,
-    processedWidth: processedImage?.processedWidth ?? null,
-    processedHeight: processedImage?.processedHeight ?? null,
+    sourceWidth: prepared?.sourceWidth ?? post.width,
+    sourceHeight: prepared?.sourceHeight ?? post.height,
+    processedWidth: prepared?.processedWidth ?? null,
+    processedHeight: prepared?.processedHeight ?? null,
   });
 }
 
 export async function getCurrentEmbeddingStats(): Promise<{
   settings: Pick<
     EmbeddingSettings,
-    "apiKeyConfigured" | "apiKeyRequired" | "maskedApiKey" | "baseUrl" | "model" | "dimensions" | "imageMaxResolution"
+    "apiKeyConfigured" | "apiKeyRequired" | "maskedApiKey" | "baseUrl" | "model" | "dimensions" | "imageMaxResolution" | "videoEnabled"
   >;
   stats: EmbeddingStats;
 }> {
@@ -341,6 +412,7 @@ export async function getCurrentEmbeddingStats(): Promise<{
       model: settings.model,
       dimensions: settings.dimensions,
       imageMaxResolution: settings.imageMaxResolution,
+      videoEnabled: settings.videoEnabled,
     },
     stats,
   };
