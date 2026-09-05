@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  batchComputeImageEmbeddings,
+  batchComputeEmbeddings,
   clearEmbeddingsForConfig,
   DEFAULT_EMBEDDING_BATCH_SIZE,
   deleteFailedEmbeddingsForConfig,
@@ -18,7 +18,6 @@ import { createBatchRunner } from "@/lib/batch-runner";
 
 type EmbeddingBatchResult = { processed: number; succeeded: number; failed: number };
 
-// The app is deployed as a single instance, matching the other admin batch tasks.
 const batch = createBatchRunner<EmbeddingBatchResult>();
 
 export async function GET() {
@@ -38,6 +37,7 @@ export async function GET() {
         model: settings.model,
         dimensions: settings.dimensions,
         imageMaxResolution: settings.imageMaxResolution,
+        videoEnabled: settings.videoEnabled,
       },
       stats,
       ...batch.snapshot(),
@@ -64,6 +64,7 @@ export async function PUT(request: NextRequest) {
       model: typeof body.model === "string" ? body.model : undefined,
       dimensions: typeof body.dimensions === "number" ? body.dimensions : undefined,
       imageMaxResolution: typeof body.imageMaxResolution === "number" ? body.imageMaxResolution : undefined,
+      videoEnabled: typeof body.videoEnabled === "boolean" ? body.videoEnabled : undefined,
     });
     // Switching the active embedding config changes which PostEmbedding rows the
     // feed's k-NN reads, reshaping neighborhoods — invalidate the cached feed.
@@ -103,7 +104,7 @@ export async function POST(request: NextRequest) {
     aiLog.info({ limit: limit ?? "unlimited", batchSize: batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE, retryFailed }, "Starting image embedding batch");
 
     batch.start(
-      (onProgress) => batchComputeImageEmbeddings({ limit, batchSize, retryFailed, onProgress }),
+      (onProgress) => batchComputeEmbeddings({ limit, batchSize, retryFailed, onProgress }),
       {
         onCompleted: (result) => {
           aiLog.info(result, "Image embedding batch completed");

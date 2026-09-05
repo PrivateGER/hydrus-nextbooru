@@ -5,7 +5,7 @@ import {
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
 } from "@/lib/search";
 import { checkApiRateLimit, type ApiRateLimitConfig } from "@/lib/rate-limit";
-import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
+import { EMBEDDING_SUPPORTED_IMAGE_MIMES } from "@/lib/embeddings/image";
 import { apiLog } from "@/lib/logger";
 
 /** Cap query-image uploads (matches the perceptual-hash reverse-search limit). */
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!fileEntry.type || !EMBEDDING_SUPPORTED_MIMES.has(fileEntry.type)) {
+  if (!fileEntry.type || !EMBEDDING_SUPPORTED_IMAGE_MIMES.has(fileEntry.type)) {
     return NextResponse.json(
       { error: "Unsupported file type. Upload a still image (JPEG, PNG, WebP, etc.)." },
       { status: 415 }

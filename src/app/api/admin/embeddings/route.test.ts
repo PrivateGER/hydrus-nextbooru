@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 
 const {
   mockVerifyAdminSession,
-  mockBatchComputeImageEmbeddings,
+  mockBatchComputeEmbeddings,
   mockClearEmbeddingsForConfig,
   mockDeleteFailedEmbeddingsForConfig,
   mockGetEmbeddingSettings,
@@ -14,7 +14,7 @@ const {
   mockInvalidateEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
-  mockBatchComputeImageEmbeddings: vi.fn(),
+  mockBatchComputeEmbeddings: vi.fn(),
   mockClearEmbeddingsForConfig: vi.fn(),
   mockDeleteFailedEmbeddingsForConfig: vi.fn(),
   mockGetEmbeddingSettings: vi.fn(),
@@ -26,7 +26,7 @@ const {
 }));
 
 vi.mock("@/lib/embeddings", () => ({
-  batchComputeImageEmbeddings: mockBatchComputeImageEmbeddings,
+  batchComputeEmbeddings: mockBatchComputeEmbeddings,
   clearEmbeddingsForConfig: mockClearEmbeddingsForConfig,
   DEFAULT_EMBEDDING_BATCH_SIZE: 8,
   deleteFailedEmbeddingsForConfig: mockDeleteFailedEmbeddingsForConfig,
@@ -63,6 +63,7 @@ const SETTINGS = {
   model: "test-model",
   dimensions: 768,
   imageMaxResolution: 1024,
+  videoEnabled: false,
 };
 
 function request(method: "POST" | "PUT" | "DELETE", body: unknown): NextRequest {
@@ -100,11 +101,11 @@ describe("admin embeddings route", () => {
 
   it("PUT saves settings and invalidates the feed cache", async () => {
     const { PUT } = await import("./route");
-    const response = await PUT(request("PUT", { model: "new-model", dimensions: 512 }));
+    const response = await PUT(request("PUT", { model: "new-model", dimensions: 512, videoEnabled: true }));
 
     expect(response.status).toBe(200);
     expect(mockUpdateEmbeddingSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "new-model", dimensions: 512 })
+      expect.objectContaining({ model: "new-model", dimensions: 512, videoEnabled: true })
     );
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
   });
@@ -120,14 +121,14 @@ describe("admin embeddings route", () => {
   });
 
   it("POST starts a batch, then reports completion and invalidates the feed cache", async () => {
-    mockBatchComputeImageEmbeddings.mockResolvedValueOnce({ processed: 5, succeeded: 5, failed: 0 });
+    mockBatchComputeEmbeddings.mockResolvedValueOnce({ processed: 5, succeeded: 5, failed: 0 });
     const { GET, POST } = await import("./route");
 
     const response = await POST(request("POST", { retryFailed: true }));
     const body = await response.json();
     expect(response.status).toBe(200);
     expect(body.retryFailed).toBe(true);
-    expect(mockBatchComputeImageEmbeddings).toHaveBeenCalledWith(
+    expect(mockBatchComputeEmbeddings).toHaveBeenCalledWith(
       expect.objectContaining({ retryFailed: true })
     );
 
@@ -147,7 +148,7 @@ describe("admin embeddings route", () => {
   });
 
   it("POST reports a failed batch and still invalidates the feed cache", async () => {
-    mockBatchComputeImageEmbeddings.mockRejectedValueOnce(new Error("provider down"));
+    mockBatchComputeEmbeddings.mockRejectedValueOnce(new Error("provider down"));
     const { GET, POST } = await import("./route");
 
     await POST(request("POST", {}));
@@ -170,12 +171,12 @@ describe("admin embeddings route", () => {
     const response = await POST(request("POST", body));
 
     expect(response.status).toBe(400);
-    expect(mockBatchComputeImageEmbeddings).not.toHaveBeenCalled();
+    expect(mockBatchComputeEmbeddings).not.toHaveBeenCalled();
   });
 
   it("POST, PUT, and DELETE return 409 while a batch is running", async () => {
     let resolveBatch!: (value: { processed: number; succeeded: number; failed: number }) => void;
-    mockBatchComputeImageEmbeddings.mockReturnValueOnce(
+    mockBatchComputeEmbeddings.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveBatch = resolve;
       })

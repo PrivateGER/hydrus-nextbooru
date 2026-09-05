@@ -18,6 +18,8 @@ import { ModelSelect } from "@/components/admin/model-select";
 import {
   EMBEDDING_DIMENSION_OPTIONS,
   EMBEDDING_RESOLUTION_OPTIONS,
+  EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT,
+  EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS,
   POPULAR_EMBEDDING_MODELS,
 } from "@/lib/openrouter/types";
 import type { ConfirmModalConfig } from "@/types/admin";
@@ -48,6 +50,8 @@ export function EmbeddingsSection({
     setDimensions,
     imageMaxResolution,
     setImageMaxResolution,
+    videoEnabled,
+    setVideoEnabled,
     saveSettings,
     computeMissing,
     retryFailed,
@@ -133,6 +137,23 @@ export function EmbeddingsSection({
             </div>
           </div>
 
+          <label className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={videoEnabled}
+              onChange={(event) => setVideoEnabled(event.target.checked)}
+            />
+            <span>
+              Embed videos
+              <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                Samples up to {EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT} x {EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS}s per video (start, middle, end; black
+                frames skipped) via ffmpeg. Requires a model with video input; video seconds are billed far above image tokens.
+                Turning this off stops computing new video embeddings; ones already computed stay searchable.
+              </span>
+            </span>
+          </label>
+
           <Button onClick={saveSettings} loading={isSaving} disabled={isSaving || status?.batchRunning}>
             <CheckCircleIconSolid className="h-4 w-4" />
             Save
@@ -167,6 +188,7 @@ export function EmbeddingsSection({
               <span>Backend: {settings?.baseUrl}</span>
               <span>Dimensions: {settings?.dimensions}</span>
               <span>Resolution: {settings?.imageMaxResolution}px</span>
+              <span>Videos: {settings?.videoEnabled ? "on" : "off"}</span>
               <span>vector: {stats.extensions.vector || "missing"}</span>
               <span>vchord: {stats.extensions.vchord || "missing"}</span>
             </div>

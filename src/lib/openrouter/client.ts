@@ -13,7 +13,8 @@ import type {
   EmbeddingResponse,
   EmbeddingResult,
   ImageEmbeddingRequest,
-  ImageEmbeddingsRequest,
+  MediaEmbeddingsRequest,
+  EmbeddingMediaInput,
   EmbeddingMultimodalInput,
 } from "./types";
 import { DEFAULT_CHAT_MODEL, EMBEDDING_INPUT_TYPES } from "./types";
@@ -529,29 +530,24 @@ TRANSLATION:
    * Generate an embedding for a single image.
    */
   async createImageEmbedding(request: ImageEmbeddingRequest): Promise<EmbeddingResult> {
-    const results = await this.createImageEmbeddings({
+    const results = await this.createMediaEmbeddings({
       model: request.model,
-      imageUrls: [request.imageUrl],
+      media: [{ type: "image", dataUrl: request.imageUrl }],
       dimensions: request.dimensions,
     });
     return results[0];
   }
 
   /**
-   * Generate embeddings for multiple images in one embeddings request.
+   * Generate document embeddings for multiple images/videos in one embeddings request.
    */
-  async createImageEmbeddings(request: ImageEmbeddingsRequest): Promise<EmbeddingResult[]> {
+  async createMediaEmbeddings(request: MediaEmbeddingsRequest): Promise<EmbeddingResult[]> {
     return this.createEmbeddings({
       model: request.model,
       dimensions: request.dimensions,
       input_type: EMBEDDING_INPUT_TYPES.SEARCH_DOCUMENT,
-      input: request.imageUrls.map<EmbeddingMultimodalInput>((imageUrl) => ({
-        content: [
-          {
-            type: "image_url",
-            image_url: { url: imageUrl },
-          },
-        ],
+      input: request.media.map<EmbeddingMultimodalInput>((media) => ({
+        content: [toEmbeddingContentPart(media)],
       })),
     });
   }
@@ -696,4 +692,11 @@ export class OpenRouterConfigError extends Error {
     super(message);
     this.name = "OpenRouterConfigError";
   }
+}
+
+function toEmbeddingContentPart(media: EmbeddingMediaInput): EmbeddingMultimodalInput["content"][number] {
+  if (media.type === "video") {
+    return { type: "input_video", input_video: { data: media.dataUrl, format: media.format } };
+  }
+  return { type: "image_url", image_url: { url: media.dataUrl } };
 }

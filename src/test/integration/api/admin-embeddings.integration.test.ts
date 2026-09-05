@@ -3,10 +3,7 @@ import { NextRequest } from "next/server";
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from "../setup";
 import { setTestPrisma } from "@/lib/db";
 import { createPost } from "../factories";
-import {
-  batchComputeImageEmbeddings,
-  getCurrentEmbeddingStats,
-} from "@/lib/embeddings/batch";
+import { batchComputeEmbeddings } from "@/lib/embeddings/batch";
 import {
   countPendingEmbeddings,
   findEmbeddingPostsToProcess,
@@ -141,22 +138,13 @@ describe("/api/admin/embeddings", () => {
     expect(row.value).toBe("sk-or-v1-old");
   });
 
-  it("redacts raw API keys from the current stats helper", async () => {
-    const prisma = getTestPrisma();
-    await prisma.settings.createMany({
-      data: [
-        { key: "openrouter.apiKey", value: "sk-or-v1-secret" },
-        { key: "openrouter.embedding.model", value: config.model },
-        { key: "openrouter.embedding.dimensions", value: String(config.dimensions) },
-        { key: "openrouter.embedding.imageMaxResolution", value: String(config.imageMaxResolution) },
-      ],
+  it("never returns the stored API key in the admin response", async () => {
+    await getTestPrisma().settings.create({
+      data: { key: "openrouter.apiKey", value: "sk-or-v1-secret" },
     });
-
-    const result = await getCurrentEmbeddingStats();
-
-    expect(result.settings).not.toHaveProperty("apiKey");
-    expect(result.settings.apiKeyConfigured).toBe(true);
-    expect(result.settings.maskedApiKey).not.toBe("sk-or-v1-secret");
+    const response = await GET();
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain("sk-or-v1-secret");
   });
 
   it("allows custom embedding backends without an API key", async () => {
@@ -170,7 +158,7 @@ describe("/api/admin/embeddings", () => {
       ],
     });
 
-    await expect(batchComputeImageEmbeddings({ limit: 0 })).resolves.toEqual({
+    await expect(batchComputeEmbeddings({ limit: 0 })).resolves.toEqual({
       processed: 0,
       succeeded: 0,
       failed: 0,

@@ -97,8 +97,13 @@ export interface EmbeddingContentImage {
   image_url: { url: string };
 }
 
+export interface EmbeddingContentVideo {
+  type: "input_video";
+  input_video: { data: string; format: string };
+}
+
 export interface EmbeddingMultimodalInput {
-  content: (EmbeddingContentText | EmbeddingContentImage)[];
+  content: (EmbeddingContentText | EmbeddingContentImage | EmbeddingContentVideo)[];
 }
 
 export type EmbeddingInput = string | string[] | EmbeddingMultimodalInput[];
@@ -124,9 +129,13 @@ export interface ImageEmbeddingRequest {
   dimensions?: number;
 }
 
-export interface ImageEmbeddingsRequest {
+export type EmbeddingMediaInput =
+  | { type: "image"; dataUrl: string }
+  | { type: "video"; dataUrl: string; format: string };
+
+export interface MediaEmbeddingsRequest {
   model?: string;
-  imageUrls: string[];
+  media: EmbeddingMediaInput[];
   dimensions?: number;
 }
 
@@ -163,6 +172,7 @@ export const SETTINGS_KEYS = {
   EMBEDDING_MODEL: "openrouter.embedding.model",
   EMBEDDING_DIMENSIONS: "openrouter.embedding.dimensions",
   EMBEDDING_IMAGE_MAX_RESOLUTION: "openrouter.embedding.imageMaxResolution",
+  EMBEDDING_VIDEO_ENABLED: "openrouter.embedding.videoEnabled",
   EMBEDDING_CALIBRATION: "openrouter.embedding.calibration",
   EMBEDDING_CALIBRATION_GENERATION: "openrouter.embedding.calibrationGeneration",
 } as const;
@@ -216,6 +226,13 @@ export const POPULAR_MODELS: ModelDefinition[] = [
 export const DEFAULT_EMBEDDING_MODEL = "google/gemini-embedding-2-preview";
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 export const DEFAULT_EMBEDDING_IMAGE_MAX_RESOLUTION = 1024;
+export const DEFAULT_EMBEDDING_VIDEO_ENABLED = false;
+// Reserved outside EMBEDDING_RESOLUTION_OPTIONS: video vectors ignore image settings.
+export const EMBEDDING_VIDEO_MAX_RESOLUTION = 480;
+/** Length of each sampled video window in seconds. */
+export const EMBEDDING_VIDEO_SAMPLE_WINDOW_SECONDS = 10;
+/** Number of windows sampled from a long video (start, middle, end). */
+export const EMBEDDING_VIDEO_SAMPLE_WINDOW_COUNT = 3;
 
 export const EMBEDDING_DIMENSION_OPTIONS = [768, 1536, 3072] as const;
 export const EMBEDDING_RESOLUTION_OPTIONS = [512, 768, 1024, 1536, 2048] as const;

@@ -37,7 +37,8 @@ export {
   type EmbeddingResponse,
   type EmbeddingResult,
   type ImageEmbeddingRequest,
-  type ImageEmbeddingsRequest,
+  type MediaEmbeddingsRequest,
+  type EmbeddingMediaInput,
 } from "./types";
 export {
   estimateTokens,

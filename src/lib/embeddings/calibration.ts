@@ -26,7 +26,7 @@ import { prisma } from "@/lib/db";
 import { vectorType } from "@/lib/embeddings/store";
 import type { EmbeddingConfig } from "@/lib/embeddings/settings";
 import { updateSettings } from "@/lib/openrouter/settings";
-import { SETTINGS_KEYS } from "@/lib/openrouter/types";
+import { EMBEDDING_VIDEO_MAX_RESOLUTION, SETTINGS_KEYS } from "@/lib/openrouter/types";
 import { aiLog } from "@/lib/logger";
 
 /** Embeddings sampled for pairwise estimation (48 -> 1128 pairs). */
@@ -163,7 +163,7 @@ export async function estimateEmbeddingBaseline(
         WHERE pe."baseUrl" = ${config.baseUrl}
           AND pe.model = ${config.model}
           AND pe.dimensions = ${config.dimensions}
-          AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+          AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
           AND pe.status = 'COMPLETE'::"EmbeddingStatus"
           AND pe.embedding IS NOT NULL
         ORDER BY md5(pe.id::text)

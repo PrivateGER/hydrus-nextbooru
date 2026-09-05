@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
-import { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/image";
+import { EMBEDDING_SUPPORTED_IMAGE_MIMES } from "@/lib/embeddings/mimes";
+import { EMBEDDING_VIDEO_MAX_RESOLUTION } from "@/lib/openrouter/types";
 import {
   type EmbeddingConfig,
   isSupportedEmbeddingDimensions,
@@ -97,12 +98,29 @@ function normalizeEmbeddingMinScore(minScore: number | undefined): number | null
   return Math.min(1, Math.max(-1, minScore));
 }
 
+/** SQL predicate for posts the active config can embed (`p` is the Post alias). */
+function eligibleMimeSql(config: EmbeddingConfig): Prisma.Sql {
+  return Prisma.sql`(
+    p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_IMAGE_MIMES])})
+    OR (${config.videoEnabled} AND p."mimeType" LIKE 'video/%')
+  )`;
+}
+
 export async function getEmbeddingStats(config: EmbeddingConfig): Promise<EmbeddingStats> {
-  const [total, supported, embedded, failed, extensions] = await Promise.all([
+  // Completed videos remain searchable when video computation is disabled.
+  const [total, supported, embedded, failed, pending, extensions] = await Promise.all([
     prisma.post.count(),
-    prisma.post.count({ where: { mimeType: { in: [...EMBEDDING_SUPPORTED_MIMES] } } }),
+    prisma.post.count({
+      where: {
+        OR: [
+          { mimeType: { in: [...EMBEDDING_SUPPORTED_IMAGE_MIMES] } },
+          ...(config.videoEnabled ? [{ mimeType: { startsWith: "video/" } }] : []),
+        ],
+      },
+    }),
     countEmbeddingsByStatus(config, "COMPLETE"),
-    countEmbeddingsByStatus(config, "FAILED"),
+    countPendingEmbeddings(config, true),
+    countPendingEmbeddings(config, false),
     getVectorExtensionVersions(),
   ]);
 
@@ -111,7 +129,7 @@ export async function getEmbeddingStats(config: EmbeddingConfig): Promise<Embedd
     supported,
     embedded,
     failed,
-    pending: Math.max(0, supported - embedded - failed),
+    pending,
     unsupported: Math.max(0, total - supported),
     extensions,
   };
@@ -144,7 +162,7 @@ export async function clearEmbeddingsForConfig(config: EmbeddingConfig): Promise
     WHERE "baseUrl" = ${config.baseUrl}
       AND model = ${config.model}
       AND dimensions = ${config.dimensions}
-      AND "imageMaxResolution" = ${config.imageMaxResolution}
+      AND "imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
   `;
 
   return result;
@@ -156,7 +174,7 @@ export async function deleteFailedEmbeddingsForConfig(config: EmbeddingConfig): 
     WHERE "baseUrl" = ${config.baseUrl}
       AND model = ${config.model}
       AND dimensions = ${config.dimensions}
-      AND "imageMaxResolution" = ${config.imageMaxResolution}
+      AND "imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
       AND status = 'FAILED'::"EmbeddingStatus"
   `;
 
@@ -175,8 +193,8 @@ export async function countPendingEmbeddings(
       AND pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
+    WHERE ${eligibleMimeSql(config)}
       AND (
         (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
         OR (${!retryFailed} AND pe.id IS NULL)
@@ -202,8 +220,8 @@ export async function findEmbeddingPostsToProcess(options: {
       AND pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
-    WHERE p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
+    WHERE ${eligibleMimeSql(config)}
       AND (${lastId === undefined} OR p.id > ${lastId ?? 0})
       AND (
         (${retryFailed} AND pe.status = 'FAILED'::"EmbeddingStatus")
@@ -234,7 +252,9 @@ export async function upsertCompleteEmbedding(options: {
       embedding, status, "errorMessage", "computedAt", "updatedAt"
     )
     VALUES (
-      ${postId}, ${config.baseUrl}, ${config.model}, ${config.dimensions}, ${config.imageMaxResolution},
+      ${postId}, ${config.baseUrl}, ${config.model}, ${config.dimensions},
+      (SELECT CASE WHEN "mimeType" LIKE 'video/%' THEN ${EMBEDDING_VIDEO_MAX_RESOLUTION}::int
+        ELSE ${config.imageMaxResolution} END FROM "Post" WHERE id = ${postId}),
       ${sourceWidth}, ${sourceHeight}, ${processedWidth}, ${processedHeight},
       ${vector}::vector, 'COMPLETE'::"EmbeddingStatus", NULL, NOW(), NOW()
     )
@@ -270,7 +290,9 @@ export async function upsertFailedEmbedding(options: {
       embedding, status, "errorMessage", "computedAt", "updatedAt"
     )
     VALUES (
-      ${options.postId}, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions}, ${options.config.imageMaxResolution},
+      ${options.postId}, ${options.config.baseUrl}, ${options.config.model}, ${options.config.dimensions},
+      (SELECT CASE WHEN "mimeType" LIKE 'video/%' THEN ${EMBEDDING_VIDEO_MAX_RESOLUTION}::int
+        ELSE ${options.config.imageMaxResolution} END FROM "Post" WHERE id = ${options.postId}),
       ${options.sourceWidth ?? null}, ${options.sourceHeight ?? null}, ${options.processedWidth ?? null}, ${options.processedHeight ?? null},
       NULL, 'FAILED'::"EmbeddingStatus", ${message}, NOW(), NOW()
     )
@@ -344,7 +366,7 @@ export async function searchPostsByEmbedding(options: {
     WHERE pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
       AND pe.status = 'COMPLETE'::"EmbeddingStatus"
       AND pe.embedding IS NOT NULL
       AND (${excludePostId}::int IS NULL OR pe."postId" <> ${excludePostId}::int)
@@ -370,14 +392,7 @@ export async function searchPostsByEmbedding(options: {
   };
 }
 
-/**
- * Read an existing post's stored image embedding for the active config.
- *
- * Returns the post's numeric id (so the caller can exclude it from a neighbor
- * search) and its embedding vector, or `null` when the post has no COMPLETE
- * embedding under the current (baseUrl, model, dimensions, imageMaxResolution)
- * config — e.g. it was never embedded, or an admin switched models since.
- */
+/** Read a post's COMPLETE embedding under the active image/video configuration. */
 export async function getPostEmbeddingVector(options: {
   hash: string;
   config: EmbeddingConfig;
@@ -395,7 +410,7 @@ export async function getPostEmbeddingVector(options: {
       AND pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
       AND pe.status = 'COMPLETE'::"EmbeddingStatus"
       AND pe.embedding IS NOT NULL
     LIMIT 1
@@ -443,7 +458,7 @@ export async function getEmbeddingVectorsForPosts(options: {
           AND pe."baseUrl" = ${config.baseUrl}
           AND pe.model = ${config.model}
           AND pe.dimensions = ${config.dimensions}
-          AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+          AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
           AND pe.status = 'COMPLETE'::"EmbeddingStatus"
           AND pe.embedding IS NOT NULL
       `
@@ -492,7 +507,7 @@ export async function findNearestByVector(options: {
     WHERE pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
       AND pe.status = 'COMPLETE'::"EmbeddingStatus"
       AND pe.embedding IS NOT NULL
     ORDER BY pe.embedding::${vectorTypeSql} <=> ${vector}::${vectorTypeSql}
@@ -561,7 +576,7 @@ export async function getMaxSimilarityToReferences(options: {
            AND reference_embedding."baseUrl" = ${config.baseUrl}
            AND reference_embedding.model = ${config.model}
            AND reference_embedding.dimensions = ${config.dimensions}
-           AND reference_embedding."imageMaxResolution" = ${config.imageMaxResolution}
+           AND reference_embedding."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
            AND reference_embedding.status = 'COMPLETE'::"EmbeddingStatus"
            AND reference_embedding.embedding IS NOT NULL
           JOIN "PostEmbedding" candidate_embedding
@@ -569,7 +584,7 @@ export async function getMaxSimilarityToReferences(options: {
            AND candidate_embedding."baseUrl" = ${config.baseUrl}
            AND candidate_embedding.model = ${config.model}
            AND candidate_embedding.dimensions = ${config.dimensions}
-           AND candidate_embedding."imageMaxResolution" = ${config.imageMaxResolution}
+           AND candidate_embedding."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
            AND candidate_embedding.status = 'COMPLETE'::"EmbeddingStatus"
            AND candidate_embedding.embedding IS NOT NULL
           GROUP BY candidate.id
@@ -636,7 +651,7 @@ export async function getEmbeddingSimilarityForPairs(options: {
      AND se."baseUrl" = ${config.baseUrl}
      AND se.model = ${config.model}
      AND se.dimensions = ${config.dimensions}
-     AND se."imageMaxResolution" = ${config.imageMaxResolution}
+     AND se."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
      AND se.status = 'COMPLETE'::"EmbeddingStatus"
      AND se.embedding IS NOT NULL
     JOIN "PostEmbedding" ce
@@ -644,7 +659,7 @@ export async function getEmbeddingSimilarityForPairs(options: {
      AND ce."baseUrl" = ${config.baseUrl}
      AND ce.model = ${config.model}
      AND ce.dimensions = ${config.dimensions}
-     AND ce."imageMaxResolution" = ${config.imageMaxResolution}
+     AND ce."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
      AND ce.status = 'COMPLETE'::"EmbeddingStatus"
      AND ce.embedding IS NOT NULL
   `;
@@ -713,7 +728,7 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
               AND pe."baseUrl" = ${config.baseUrl}
               AND pe.model = ${config.model}
               AND pe.dimensions = ${config.dimensions}
-              AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+              AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
               AND pe.status = 'COMPLETE'::"EmbeddingStatus"
               AND pe.embedding IS NOT NULL
           )
@@ -735,7 +750,7 @@ export async function findRelatedPostsByEmbeddingForPosts(options: {
             WHERE pe."baseUrl" = ${config.baseUrl}
               AND pe.model = ${config.model}
               AND pe.dimensions = ${config.dimensions}
-              AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+              AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
               AND pe.status = 'COMPLETE'::"EmbeddingStatus"
               AND pe.embedding IS NOT NULL
               AND pe."postId" <> seed.source_id
@@ -832,7 +847,7 @@ export async function findRelatedPostsByEmbedding(options: {
         AND pe."baseUrl" = ${config.baseUrl}
         AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
-        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
       LIMIT 1
@@ -854,7 +869,7 @@ export async function findRelatedPostsByEmbedding(options: {
       WHERE pe."baseUrl" = ${config.baseUrl}
         AND pe.model = ${config.model}
         AND pe.dimensions = ${config.dimensions}
-        AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+        AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
         AND pe.status = 'COMPLETE'::"EmbeddingStatus"
         AND pe.embedding IS NOT NULL
         AND pe."postId" <> source.post_id
@@ -891,13 +906,11 @@ async function countEmbeddingsByStatus(
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*) AS count
     FROM "PostEmbedding" pe
-    JOIN "Post" p ON p.id = pe."postId"
     WHERE pe."baseUrl" = ${config.baseUrl}
       AND pe.model = ${config.model}
       AND pe.dimensions = ${config.dimensions}
-      AND pe."imageMaxResolution" = ${config.imageMaxResolution}
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
       AND pe.status = ${status}::"EmbeddingStatus"
-      AND p."mimeType" IN (${Prisma.join([...EMBEDDING_SUPPORTED_MIMES])})
   `;
 
   return Number(rows[0]?.count ?? 0n);

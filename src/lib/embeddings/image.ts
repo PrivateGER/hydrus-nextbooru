@@ -1,7 +1,7 @@
 import sharp, { type Sharp } from "sharp";
 
 // Re-exported from the sharp-free module for existing importers.
-export { EMBEDDING_SUPPORTED_MIMES } from "@/lib/embeddings/mimes";
+export { EMBEDDING_SUPPORTED_IMAGE_MIMES } from "@/lib/embeddings/mimes";
 
 export interface ProcessedEmbeddingImage {
   dataUrl: string;

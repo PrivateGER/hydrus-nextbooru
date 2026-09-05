@@ -181,7 +181,7 @@ describe("OpenRouterClient", () => {
     expect(body.input_type).toBe("search_document");
   });
 
-  it("should create multiple image embeddings in one multimodal request", async () => {
+  it("should create mixed image and video embeddings in one multimodal request", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       createResponse({
         object: "list",
@@ -199,8 +199,11 @@ describe("OpenRouterClient", () => {
       model: "google/gemini-embedding-2-preview",
     });
 
-    const results = await client.createImageEmbeddings({
-      imageUrls: ["data:image/webp;base64,abc", "data:image/webp;base64,def"],
+    const results = await client.createMediaEmbeddings({
+      media: [
+        { type: "image", dataUrl: "data:image/webp;base64,abc" },
+        { type: "video", dataUrl: "data:video/mp4;base64,def", format: "mp4" },
+      ],
       dimensions: 3,
     });
 
@@ -221,8 +224,8 @@ describe("OpenRouterClient", () => {
       {
         content: [
           {
-            type: "image_url",
-            image_url: { url: "data:image/webp;base64,def" },
+            type: "input_video",
+            input_video: { data: "data:video/mp4;base64,def", format: "mp4" },
           },
         ],
       },
@@ -252,8 +255,11 @@ describe("OpenRouterClient", () => {
       model: "google/gemini-embedding-2-preview",
     });
 
-    const results = await client.createImageEmbeddings({
-      imageUrls: ["data:image/webp;base64,abc", "data:image/webp;base64,def"],
+    const results = await client.createMediaEmbeddings({
+      media: [
+        { type: "image", dataUrl: "data:image/webp;base64,abc" },
+        { type: "image", dataUrl: "data:image/webp;base64,def" },
+      ],
       dimensions: 3,
     });
 

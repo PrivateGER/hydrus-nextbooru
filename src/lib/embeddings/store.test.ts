@@ -22,6 +22,7 @@ const config = {
   model: "google/gemini-embedding-2-preview",
   dimensions: 768,
   imageMaxResolution: 1024,
+  videoEnabled: false,
 };
 
 function getSqlText(query: unknown): string {
