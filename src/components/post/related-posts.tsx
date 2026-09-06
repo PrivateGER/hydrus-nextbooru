@@ -7,6 +7,7 @@ import {
   type EmbeddedRelatedPost,
 } from "@/lib/embeddings/store";
 import { RelatedPostsClient } from "./related-posts-client";
+import { getFavoritedPostIdSet } from "@/lib/favorites";
 
 interface RelatedPostsProps {
   hash: string;
@@ -33,14 +34,27 @@ async function getSemanticRelatedPosts(hash: string, limit: number): Promise<Emb
  * Uses RelatedPostsClient for the enhanced UI rendering.
  */
 export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
-  const [recommendations, semanticPosts] = await Promise.all([
+  const [rawRecommendations, rawSemanticPosts] = await Promise.all([
     getOrComputeRecommendationsByHash(hash, limit),
     getSemanticRelatedPosts(hash, limit),
   ]);
 
-  if (recommendations.length === 0 && semanticPosts.length === 0) {
+  if (rawRecommendations.length === 0 && rawSemanticPosts.length === 0) {
     return null;
   }
+
+  const favoritedIds = await getFavoritedPostIdSet([
+    ...rawRecommendations.map((post) => post.id),
+    ...rawSemanticPosts.map((post) => post.id),
+  ]);
+  const recommendations = rawRecommendations.map((post) => ({
+    ...post,
+    favorited: favoritedIds.has(post.id),
+  }));
+  const semanticPosts = rawSemanticPosts.map((post) => ({
+    ...post,
+    favorited: favoritedIds.has(post.id),
+  }));
 
   return (
     <RelatedPostsClient

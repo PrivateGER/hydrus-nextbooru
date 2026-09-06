@@ -54,6 +54,7 @@ async function getGroup(id: number) {
               height: true,
               blurhash: true,
               mimeType: true,
+              favorite: { select: { postId: true } },
             },
           },
         },
@@ -213,6 +214,7 @@ async function GroupPageContent({ params }: { params: Promise<{ id: string }> })
               blurhash={pg.post.blurhash}
               mimeType={pg.post.mimeType}
               layout="grid"
+              favorited={pg.post.favorite !== null}
               href={buildPostUrl(pg.post.hash, group.id)}
             />
             {/* Ordinal indicator (1-based reading order) */}

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, type ReactNode } from "react";
 import { BlurhashImage } from "@/components/blurhash-image";
+import { FavoriteOverlayButton } from "@/components/favorite-overlay-button";
 
 interface ThumbnailCardProps {
   hash: string;
@@ -9,6 +10,8 @@ interface ThumbnailCardProps {
   height: number | null;
   blurhash: string | null;
   mimeType: string;
+  /** Server-rendered state for the thumbnail favorite action. */
+  favorited: boolean;
   /** Tailwind height class (e.g., "h-24", "h-36") */
   heightClass?: string;
   /** Show VIDEO/GIF badge for media types */
@@ -29,6 +32,7 @@ export function ThumbnailCard({
   height,
   blurhash,
   mimeType,
+  favorited,
   heightClass = "h-24",
   showMediaBadge = true,
   children,
@@ -96,6 +100,8 @@ export function ThumbnailCard({
           {isVideo ? "VIDEO" : "GIF"}
         </div>
       )}
+
+      <FavoriteOverlayButton hash={hash} initialFavorited={favorited} />
 
       {/* Custom overlays from parent */}
       {children}

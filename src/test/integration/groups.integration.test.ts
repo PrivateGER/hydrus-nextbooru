@@ -168,6 +168,21 @@ describe('Groups Module (Integration)', () => {
       expect(result.groups[0].postCount).toBe(2);
     });
 
+    it('should return fresh favorite state for every preview thumbnail', async () => {
+      const prisma = getTestPrisma();
+      const group = await createGroup(prisma, SourceType.PIXIV, 'favorite-preview');
+      const favoritedPost = await createPostInGroup(prisma, group, 0);
+      const otherPost = await createPostInGroup(prisma, group, 1);
+      await prisma.favorite.create({ data: { postId: favoritedPost.id } });
+
+      const result = await searchGroups({}, prisma);
+      const previews = result.groups[0].posts.map(({ post }) => post);
+
+      expect(previews.find((post) => post.id === favoritedPost.id)?.favorited).toBe(true);
+      expect(previews.find((post) => post.id === otherPost.id)?.favorited).toBe(false);
+      expect(previews.every((post) => typeof post.mimeType === 'string')).toBe(true);
+    });
+
     it('should merge groups with identical posts', async () => {
       const prisma = getTestPrisma();
 

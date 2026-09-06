@@ -2,10 +2,9 @@
 
 import Link from "next/link";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { PhotoIcon, HeartIcon, XMarkIcon } from "@heroicons/react/24/outline";
-import { HeartIcon as HeartSolidIcon } from "@heroicons/react/24/solid";
+import { PhotoIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { BlurhashImage } from "./blurhash-image";
-import { useFavoriteToggle } from "@/hooks/use-favorite-toggle";
+import { FavoriteOverlayButton } from "./favorite-overlay-button";
 
 export type LayoutMode = "masonry" | "grid";
 
@@ -16,8 +15,8 @@ interface PostCardProps {
   blurhash: string | null;
   mimeType: string;
   layout?: LayoutMode;
-  /** Heart overlay state; omit to hide the overlay entirely (e.g. filmstrips). */
-  favorited?: boolean;
+  /** Server-rendered state for the thumbnail favorite action. */
+  favorited: boolean;
   /** Feed-only "not interested" control; fires only after the dismissal PUT succeeds. */
   onDismiss?: (hash: string) => void;
   /** Optional href override, e.g. to carry ?in= group navigation context. */
@@ -37,7 +36,6 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
   const mountedRef = useRef(true);
   const loadedRef = useRef(false); // Track loaded state for timeout callback
 
-  const { favorited: fav, pending: favPending, toggle: toggleFavorite } = useFavoriteToggle(hash, favorited ?? false);
   const [dismissPending, setDismissPending] = useState(false);
 
   const handleDismiss = async (event: React.MouseEvent) => {
@@ -301,21 +299,7 @@ export function PostCard({ hash, width, height, blurhash, mimeType, layout = "ma
         </div>
       )}
 
-      {/* Favorite heart overlay */}
-      {favorited !== undefined && (
-        <button
-          onClick={toggleFavorite}
-          disabled={favPending}
-          aria-pressed={fav}
-          title={fav ? "Remove from favorites" : "Add to favorites"}
-          aria-label={fav ? "Remove from favorites" : "Add to favorites"}
-          className={`absolute right-2 top-2 rounded-full bg-black/60 p-1.5 transition-opacity hover:bg-black/80 focus-visible:opacity-100 ${
-            fav ? "opacity-100 text-pink-400" : "text-white opacity-0 group-hover:opacity-100"
-          }`}
-        >
-          {fav ? <HeartSolidIcon className="h-4 w-4" /> : <HeartIcon className="h-4 w-4" />}
-        </button>
-      )}
+      <FavoriteOverlayButton hash={hash} initialFavorited={favorited} />
 
       {/* Feed "not interested" overlay */}
       {onDismiss && (

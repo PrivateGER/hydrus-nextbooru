@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 const mocks = vi.hoisted(() => ({
   searchSemanticPostsByPostHash: vi.fn(),
   checkApiRateLimit: vi.fn(),
+  mergeFavoritedState: vi.fn(),
 }));
 
 vi.mock("@/lib/search", () => ({
@@ -12,6 +13,10 @@ vi.mock("@/lib/search", () => ({
 
 vi.mock("@/lib/rate-limit", () => ({
   checkApiRateLimit: mocks.checkApiRateLimit,
+}));
+
+vi.mock("@/lib/favorites", () => ({
+  mergeFavoritedState: mocks.mergeFavoritedState,
 }));
 
 import { GET } from "./route";
@@ -27,6 +32,9 @@ function getRequest(params: Record<string, string>): NextRequest {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.checkApiRateLimit.mockReturnValue(null);
+  mocks.mergeFavoritedState.mockImplementation(async (posts: Array<Record<string, unknown>>) =>
+    posts.map((post: object) => ({ ...post, favorited: false }))
+  );
   mocks.searchSemanticPostsByPostHash.mockResolvedValue({
     posts: [],
     totalCount: 0,
@@ -48,6 +56,8 @@ describe("GET /api/posts/semantic-search/post", () => {
     const data = await res.json();
     expect(data.totalCount).toBe(1);
     expect(data.posts).toHaveLength(1);
+    expect(data.posts[0].favorited).toBe(false);
+    expect(mocks.mergeFavoritedState).toHaveBeenCalledTimes(1);
   });
 
   it("lowercases the hash and passes pagination through to the search helper", async () => {

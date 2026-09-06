@@ -146,6 +146,7 @@ async function findSimilarByPhash(
   blurhash: string | null;
   mimeType: string;
   distance: number;
+  favorited: boolean;
 }>> {
   type ResultRow = {
     id: number;
@@ -155,11 +156,13 @@ async function findSimilarByPhash(
     blurhash: string | null;
     mimeType: string;
     distance: bigint;
+    favorited: boolean;
   };
 
   const results = excludeHash
     ? await prisma.$queryRaw<ResultRow[]>`
         SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType",
+               EXISTS (SELECT 1 FROM "Favorite" f WHERE f."postId" = p.id) AS favorited,
                bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) AS distance
         FROM "PhashEntry" pe
         JOIN "Post" p ON p.hash = pe.hash
@@ -170,6 +173,7 @@ async function findSimilarByPhash(
       `
     : await prisma.$queryRaw<ResultRow[]>`
         SELECT p.id, p.hash, p.width, p.height, p.blurhash, p."mimeType",
+               EXISTS (SELECT 1 FROM "Favorite" f WHERE f."postId" = p.id) AS favorited,
                bit_count((pe.phash::BIT(64)) # (${targetPhash}::BIGINT::BIT(64))) AS distance
         FROM "PhashEntry" pe
         JOIN "Post" p ON p.hash = pe.hash

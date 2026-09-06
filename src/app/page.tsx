@@ -100,7 +100,7 @@ async function getHomeData() {
   const [stats, popularTags, randomPosts, recentImports] = await Promise.all([
     getHomeStats(),
     getPopularTags(8),
-    getRandomPosts(8),
+    getRandomPosts(8).then((posts) => mergeFavoritedState(posts)),
     getRecentImportCount(),
   ]);
 

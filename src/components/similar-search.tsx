@@ -8,6 +8,7 @@ import type { PostSummary } from "@/types/post";
 interface SimilarResult extends PostSummary {
   id: number;
   distance: number;
+  favorited: boolean;
 }
 
 interface SimilarSearchProps {
@@ -275,6 +276,7 @@ export function SimilarSearch({ initialHash, initialThreshold }: SimilarSearchPr
                   blurhash={result.blurhash}
                   mimeType={result.mimeType}
                   layout="grid"
+                  favorited={result.favorited}
                 />
                 <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white tabular-nums">
                   d={result.distance}

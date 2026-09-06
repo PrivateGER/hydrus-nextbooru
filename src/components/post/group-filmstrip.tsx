@@ -9,7 +9,7 @@ import { buildPostUrl } from "@/lib/post-navigation";
 import type { PostSummary } from "@/types/post";
 
 interface GroupPost {
-  post: PostSummary;
+  post: PostSummary & { favorite: { postId: number } | null };
   position: number | null;
 }
 
@@ -140,13 +140,14 @@ export function GroupFilmstrip({
                 height={pg.post.height}
                 blurhash={pg.post.blurhash}
                 mimeType={pg.post.mimeType}
+                favorited={pg.post.favorite !== null}
                 heightClass={heightClass}
                 showMediaBadge={true}
                 className="rounded-lg"
               >
                 {/* Ordinal badge (1-based reading order; raw Hydrus positions
                     can be sparse or duplicated, so show the ordinal) */}
-                <span className={`absolute bottom-1.5 right-1.5 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                <span className={`absolute bottom-1.5 left-1.5 rounded-md px-2 py-0.5 text-xs font-semibold ${
                   isCurrent
                     ? "bg-blue-500 text-white"
                     : "bg-black/70 text-white"
