@@ -580,16 +580,26 @@ export async function GET(request: NextRequest) {
         sample_size AS (
           SELECT COUNT(*)::numeric AS n FROM sampled_posts
         )
-        SELECT t.id, t.name, t.category,
-               ROUND(COUNT(*) * ${filteredTotal}::numeric / (SELECT n FROM sample_size))::bigint AS count,
-               COUNT(*) = (SELECT n FROM sample_size) AS on_every_sampled_post
-        FROM sampled_posts s
-        JOIN "PostTag" pt ON pt."postId" = s."postId"
-        JOIN "Tag" t ON t.id = pt."tagId"
-        WHERE ${suggestionTagFilter}
-        GROUP BY t.id, t.name, t.category
+        -- Candidates seen on every sampled post are ranked apart: when browsing,
+        -- the recount below may discard them, and they must not take the slots
+        -- of tags that can still narrow the selection.
+        SELECT id, name, category, count, on_every_sampled_post
+        FROM (
+          SELECT t.id, t.name, t.category,
+                 ROUND(COUNT(*) * ${filteredTotal}::numeric / (SELECT n FROM sample_size))::bigint AS count,
+                 COUNT(*) = (SELECT n FROM sample_size) AS on_every_sampled_post,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY COUNT(*) = (SELECT n FROM sample_size)
+                   ORDER BY COUNT(*) DESC
+                 ) AS rank_in_kind
+          FROM sampled_posts s
+          JOIN "PostTag" pt ON pt."postId" = s."postId"
+          JOIN "Tag" t ON t.id = pt."tagId"
+          WHERE ${suggestionTagFilter}
+          GROUP BY t.id, t.name, t.category
+        ) ranked
+        WHERE rank_in_kind <= ${limit * 2}
         ORDER BY count DESC
-        LIMIT ${limit * 2}
       `
     : await prisma.$queryRaw<Array<CoOccurrenceRow & { on_every_sampled_post?: undefined }>>`
         WITH filtered_posts AS MATERIALIZED (
@@ -641,6 +651,7 @@ export async function GET(request: NextRequest) {
     .filter((tag) => tag.count > 0)
     .filter((tag) => hasSearchQuery || tag.remainingCount > 0)
     .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
+    .sort((a, b) => b.count - a.count)
     .slice(0, limit);
 
   // Add matching meta tags (excluding already selected ones) with co-occurrence counts

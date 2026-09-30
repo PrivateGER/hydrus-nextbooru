@@ -1584,9 +1584,9 @@ describe('GET /api/tags/search (Integration)', () => {
   describe('large selections', () => {
     type Suggestion = { name: string; count: number; remainingCount: number; approximate?: boolean };
 
-    // 3,000 posts: every post has 'broad' and 'everywhere', every third has
-    // 'third', three have 'rare_specific', and each 'almost_<k>' is on every
-    // post except post k.
+    // 3,000 posts: every post has 'broad', 'everywhere' and 'everywhere_too',
+    // every third has 'third', three have 'rare_specific', and each
+    // 'almost_<k>' is on every post except post k.
     beforeEach(async () => {
       const prisma = getTestPrisma();
       await prisma.$executeRaw`
@@ -1596,13 +1596,13 @@ describe('GET /api/tags/search (Integration)', () => {
       `;
       await prisma.$executeRaw`
         INSERT INTO "Tag" (name, category)
-        SELECT name, 'GENERAL'::"TagCategory" FROM unnest(ARRAY['broad', 'everywhere', 'third', 'rare_specific']) AS name
+        SELECT name, 'GENERAL'::"TagCategory" FROM unnest(ARRAY['broad', 'everywhere', 'everywhere_too', 'third', 'rare_specific']) AS name
         UNION ALL
         SELECT 'almost_' || k, 'GENERAL'::"TagCategory" FROM generate_series(1, 4) k
       `;
       await prisma.$executeRaw`
         INSERT INTO "PostTag" ("postId", "tagId")
-        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name IN ('broad', 'everywhere')
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name IN ('broad', 'everywhere', 'everywhere_too')
         UNION ALL
         SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'third' WHERE p."hydrusFileId" % 3 = 0
         UNION ALL
@@ -1645,6 +1645,19 @@ describe('GET /api/tags/search (Integration)', () => {
         expect(tag.count + tag.remainingCount).toBe(3000);
       }
       expect(browse.map((t) => t.name)).not.toContain('everywhere');
+      expect(browse.map((t) => t.name)).not.toContain('everywhere_too');
+    });
+
+    it('does not let omnipresent tags crowd narrowing tags out of a small limit', async () => {
+      // Without the near-omnipresent tags, the two omnipresent ones are the
+      // highest-ranked candidates and 'third' is the best narrowing tag.
+      await getTestPrisma().$executeRaw`
+        DELETE FROM "PostTag" WHERE "tagId" IN (SELECT id FROM "Tag" WHERE name LIKE 'almost\\_%')
+      `;
+      const [top] = await suggestions('q=&selected=broad&limit=1');
+
+      expect(top).toBeDefined();
+      expect(top.remainingCount).toBeGreaterThanOrEqual(1);
     });
   });
 });
