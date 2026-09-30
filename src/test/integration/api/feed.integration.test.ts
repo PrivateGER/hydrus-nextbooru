@@ -9,7 +9,7 @@ import * as feedRoute from '@/app/api/feed/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import * as dismissalRoute from '@/app/api/posts/[hash]/dismissal/route';
 import * as viewRoute from '@/app/api/posts/[hash]/view/route';
-import { buildFeed, FEED_CONFIG, invalidateFeedCache, clearFeedCache, settleFeedRebuild, feedRebuildInFlight } from '@/lib/feed';
+import { buildFeed, FEED_CONFIG, invalidateFeedCache, clearFeedCache, settleFeedRebuild, feedRebuildInFlight, warmFeedCache } from '@/lib/feed';
 import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
 import { upsertCompleteEmbedding } from '@/lib/embeddings/store';
 
@@ -407,6 +407,18 @@ describe('GET /api/feed (Integration)', () => {
       const third = await captureFeedFetch('http://localhost/api/feed?page=1&limit=1');
       expect(third.count).toBe(0);
       expect(third.result).toEqual(first.result);
+    });
+
+    it('serves the first read after a warm-up from cache', async () => {
+      const { similar } = await seedCacheableFeed(['warmup cache taste', 'warmup cache style'], 2);
+      clearFeedCache();
+
+      warmFeedCache();
+      await settleFeedRebuild();
+
+      const first = await captureFeedFetch('http://localhost/api/feed?limit=10');
+      expect(first.count).toBe(0);
+      expect(feedHashes(first.result).sort()).toEqual(similar.map((post) => post.hash).sort());
     });
 
     it('serves the stale feed after a favorite and swaps in the rebuild', async () => {
