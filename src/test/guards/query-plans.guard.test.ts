@@ -65,7 +65,10 @@ describe('Query plan guards', () => {
 
   it('single-tag post search reaches PostTag and Post through indexes', async () => {
     const prisma = getTestPrisma();
-    const [tag] = await getRandomTagNames(prisma, 1, 10, 500);
+    // Capped at 100 of 20k posts: the listing filters by tag ID, so the planner
+    // sees the tag's true row count, and near 500 posts (2.5%) hashing all of
+    // Post is genuinely cheaper than per-row index probes at this dataset size.
+    const [tag] = await getRandomTagNames(prisma, 1, 10, 100);
 
     const captured = await captureQueries(() =>
       postsSearchGET(apiRequest(`http://localhost/api/posts/search?tags=${encodeURIComponent(tag)}`))

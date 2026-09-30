@@ -4,6 +4,7 @@ import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase }
 import { setTestPrisma } from '@/lib/db';
 import { createPostWithTags, createPost } from '../factories';
 import { invalidateAllCaches } from '@/lib/cache';
+import { TagCategory } from '@/generated/prisma/enums';
 
 let GET: typeof import('@/app/api/posts/search/route').GET;
 
@@ -70,6 +71,33 @@ describe('GET /api/posts/search (Integration)', () => {
       const data = await response.json();
 
       expect(data.posts).toHaveLength(1);
+    });
+
+    it('should match a tag name in every category it exists in', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, [{ name: 'saber', category: TagCategory.CHARACTER }]);
+      await createPostWithTags(prisma, [{ name: 'Saber', category: TagCategory.GENERAL }]);
+      await createPostWithTags(prisma, ['lancer']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=saber');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.totalCount).toBe(2);
+    });
+
+    it('should treat _ and % in a tag name literally', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['long_hair']);
+      await createPostWithTags(prisma, ['long hair']);
+      await createPostWithTags(prisma, ['100%']);
+      await createPostWithTags(prisma, ['1000']);
+
+      const underscore = await (await GET(new NextRequest('http://localhost/api/posts/search?tags=long_hair'))).json();
+      const percent = await (await GET(new NextRequest('http://localhost/api/posts/search?tags=100%25'))).json();
+
+      expect(underscore.totalCount).toBe(1);
+      expect(percent.totalCount).toBe(1);
     });
   });
 
@@ -231,6 +259,43 @@ describe('GET /api/posts/search (Integration)', () => {
       const data = await response.json();
 
       expect(data.posts).toHaveLength(1);
+    });
+
+    it('should exclude a tag name in every category it exists in', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['test', { name: 'saber', category: TagCategory.CHARACTER }]);
+      await createPostWithTags(prisma, ['test', { name: 'Saber', category: TagCategory.GENERAL }]);
+      await createPostWithTags(prisma, ['test', 'lancer']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=test,-saber');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should not exclude tags that only match a negated name as a LIKE pattern', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['test', 'long_hair']);
+      await createPostWithTags(prisma, ['test', 'long hair']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=test,-long_hair');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.totalCount).toBe(1);
+    });
+
+    it('should ignore a negated tag that does not exist', async () => {
+      const prisma = getTestPrisma();
+      await createPostWithTags(prisma, ['test']);
+      await createPostWithTags(prisma, ['test', 'other']);
+
+      const request = new NextRequest('http://localhost/api/posts/search?tags=test,-no such tag');
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(data.totalCount).toBe(2);
     });
 
     it('should return empty when all posts are excluded', async () => {

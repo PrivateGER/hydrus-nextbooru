@@ -56,11 +56,13 @@ import { GET as ocrAdminGET } from '@/app/api/admin/ocr/route';
  * justify it in the PR — that is the point of the guard.
  */
 const QUERY_BUDGETS = {
-  // +1 vs the pre-favorites baseline of 2: the posts-search route now merges
+  // Baseline 2 (listing + count), +1 for the posts-search route merging
   // favorite state (mergeFavoritedState -> getFavoritedPostIdSet, one indexed
-  // lookup) after the search itself.
-  postsSearchSingleTag: 3,
-  postsSearchTwoTags: 3,
+  // lookup), +1 for resolving tag names to IDs up front (findTagIdsByName, one
+  // statement for all names): a name join inside the listing hid the tag's
+  // selectivity from the planner, which then chose multi-second index walks.
+  postsSearchSingleTag: 4,
+  postsSearchTwoTags: 4,
   tagAutocomplete: 2,
   tagCoOccurrence: 2,
   // One findUnique whose nested include tree Prisma loads as constant queries
