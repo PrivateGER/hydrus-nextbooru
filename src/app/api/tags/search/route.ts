@@ -580,9 +580,11 @@ export async function GET(request: NextRequest) {
         sample_size AS (
           SELECT COUNT(*)::numeric AS n FROM sampled_posts
         )
-        -- Candidates seen on every sampled post are ranked apart: when browsing,
-        -- the recount below may discard them, and they must not take the slots
-        -- of tags that can still narrow the selection.
+        -- Candidates seen on every sampled post all tie here, so any cap would
+        -- keep an arbitrary subset before the recount below tells the truly
+        -- omnipresent ones from narrowing ones. They are all kept; their number
+        -- cannot exceed the tag count of the least-tagged sampled post. Only
+        -- the other candidates are capped.
         SELECT id, name, category, count, on_every_sampled_post
         FROM (
           SELECT t.id, t.name, t.category,
@@ -598,7 +600,7 @@ export async function GET(request: NextRequest) {
           WHERE ${suggestionTagFilter}
           GROUP BY t.id, t.name, t.category
         ) ranked
-        WHERE rank_in_kind <= ${limit * 2}
+        WHERE on_every_sampled_post OR rank_in_kind <= ${limit * 2}
         ORDER BY count DESC
       `
     : await prisma.$queryRaw<Array<CoOccurrenceRow & { on_every_sampled_post?: undefined }>>`

@@ -1678,5 +1678,21 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(top).toBeDefined();
       expect(top.remainingCount).toBeGreaterThanOrEqual(1);
     });
+
+    it('keeps near-omnipresent tags that tie with many omnipresent ones in the sample', async () => {
+      const prisma = getTestPrisma();
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category) SELECT 'omni_' || k, 'GENERAL'::"TagCategory" FROM generate_series(1, 40) k
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name LIKE 'omni\\_%'
+      `;
+
+      const browse = await suggestions('q=&selected=broad&limit=10');
+
+      expect(browse.filter((t) => t.name.startsWith('almost_'))).toHaveLength(4);
+      expect(browse.filter((t) => t.name.startsWith('omni_'))).toEqual([]);
+    });
   });
 });
