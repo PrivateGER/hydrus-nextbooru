@@ -1558,5 +1558,26 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(tagNames).toContain('portrait_art');
       expect(tagNames).not.toContain('landscape_art');
     });
+
+    it('should filter by favorite and -favorite, and count favorites within the selection', async () => {
+      const prisma = getTestPrisma();
+      const faved = await createPostWithTags(prisma, ['art', 'faved_art']);
+      await createPostWithTags(prisma, ['art', 'plain_art']);
+      const favedElsewhere = await createPostWithTags(prisma, ['other']);
+      await prisma.favorite.createMany({ data: [{ postId: faved.id }, { postId: favedElsewhere.id }] });
+
+      const namesFor = async (query: string) => {
+        const data = await (await GET(new NextRequest(`http://localhost/api/tags/search?${query}`))).json();
+        return filterRegularTags(data.tags).map((t: { name: string }) => t.name);
+      };
+      expect(await namesFor('q=art&selected=favorite')).toEqual(expect.arrayContaining(['faved_art']));
+      expect(await namesFor('q=art&selected=favorite')).not.toContain('plain_art');
+      expect(await namesFor('q=art&selected=-favorite')).toEqual(expect.arrayContaining(['plain_art']));
+      expect(await namesFor('q=art&selected=-favorite')).not.toContain('faved_art');
+
+      const data = await (await GET(new NextRequest('http://localhost/api/tags/search?q=fav&selected=art'))).json();
+      const favoriteMeta = data.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite');
+      expect(favoriteMeta?.count).toBe(1);
+    });
   });
 });

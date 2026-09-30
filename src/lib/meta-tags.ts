@@ -135,9 +135,12 @@ const META_TAG_DEFINITIONS: MetaTagDefinition[] = [
     description: "Posts you have favorited",
     category: "user",
     getCondition: () => ({ favorite: { isNot: null } }),
+    // IN, not a correlated EXISTS: inside COUNT(*) FILTER an EXISTS runs one
+    // Favorite probe per post, while IN hashes the favorite set once. NOT IN is
+    // safe here because Favorite.postId is a non-null primary key.
     getSqlCondition: (negated = false) => negated
-      ? Prisma.sql`NOT EXISTS (SELECT 1 FROM "Favorite" fav WHERE fav."postId" = "Post".id)`
-      : Prisma.sql`EXISTS (SELECT 1 FROM "Favorite" fav WHERE fav."postId" = "Post".id)`,
+      ? Prisma.sql`NOT ("Post".id IN (SELECT "postId" FROM "Favorite"))`
+      : Prisma.sql`"Post".id IN (SELECT "postId" FROM "Favorite")`,
   },
 ];
 

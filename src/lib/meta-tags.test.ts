@@ -315,17 +315,6 @@ describe("favorite meta tag", () => {
     expect(regularTags.include).toEqual(["blue_eyes"]);
   });
 
-  it("compiles to EXISTS / NOT EXISTS on Favorite", () => {
-    const positive = getMetaTagSqlCondition("favorite", false);
-    const negative = getMetaTagSqlCondition("favorite", true);
-    expect(positive).not.toBeNull();
-    expect(negative).not.toBeNull();
-    // Prisma.Sql exposes the raw SQL text via .sql (single fragment, no params)
-    expect(positive!.sql).toContain('EXISTS');
-    expect(positive!.sql).toContain('"Favorite"');
-    expect(negative!.sql).toContain('NOT EXISTS');
-  });
-
   it("provides a Prisma relation condition", () => {
     const def = getMetaTagDefinition("favorite")!;
     expect(def.getCondition).toBeDefined();
