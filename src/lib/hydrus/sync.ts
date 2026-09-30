@@ -6,6 +6,7 @@ import { parseSourceUrls } from "./url-parser";
 import { extractTitleGroups } from "./title-grouper";
 import { TagCategory, SourceType, Prisma, ThumbnailStatus } from "@/generated/prisma/client";
 import { invalidateAllCaches } from "@/lib/cache";
+import { warmFeedCache } from "@/lib/feed";
 import { updateHomeStatsCache } from "@/lib/stats";
 import {
   bumpTagStatsGeneration,
@@ -1366,6 +1367,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     await updateHomeStatsCache();
 
     invalidateAllCaches();
+    warmFeedCache();
     await updateSyncState({
       status: "completed",
       count: progress.processedFiles,

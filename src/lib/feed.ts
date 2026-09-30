@@ -1039,6 +1039,20 @@ async function getCachedFeed(): Promise<FeedPost[]> {
 }
 
 /**
+ * Start (or join) a feed build that no request waits on, so the first visit
+ * after process start or a sync's hard clear hits the cache instead of paying
+ * the multi-second cold build. A read arriving mid-build joins the same build.
+ */
+export function warmFeedCache(): void {
+  getCachedFeed().catch((error: unknown) => {
+    feedLog.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Feed: warm-up build failed; the next read will retry"
+    );
+  });
+}
+
+/**
  * Wait until every feed rebuild — in-flight or detached by an invalidation —
  * has settled (resolved or rejected).
  *

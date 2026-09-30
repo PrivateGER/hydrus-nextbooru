@@ -9,7 +9,7 @@
  */
 
 import DOMPurify from "isomorphic-dompurify";
-import { prisma } from "@/lib/db";
+import { escapeSqlLike, prisma } from "@/lib/db";
 import { searchLog } from "@/lib/logger";
 import { postCardSelect } from "@/lib/post-select";
 import type { PostSummary } from "@/types/post";
@@ -444,8 +444,8 @@ export async function searchNotes(query: string, page: number): Promise<NoteSear
  * Outcome of translating a tag query into a Prisma where clause.
  *
  * `empty` means the result set is provably empty (no criteria, invalid
- * wildcard, wildcard matching no tags, or notes filter matching no notes)
- * without running the main query.
+ * wildcard, a tag or wildcard matching no tags, or notes filter matching no
+ * notes) without running the main query.
  */
 type PostSearchWhere =
   | {
@@ -535,24 +535,23 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   // Build Prisma where clause
   const conditions: Prisma.PostWhereInput[] = [];
 
-  // Add regular tag conditions
-  for (const name of regular.include) {
-    conditions.push({ tags: { some: { tag: { name: { equals: name, mode: "insensitive" as const } } } } });
-  }
+  // Tag IDs, not a join on Tag.name: the planner has no row estimate for the
+  // name join and picked multi-second index walks for ordered LIMIT queries.
+  const tagIdsByName = await findTagIdsByName([...regular.include, ...regular.exclude]);
 
-  for (const ids of includeWildcardIds) {
+  for (const ids of [...regular.include.map((name) => tagIdsByName.get(name) ?? []), ...includeWildcardIds]) {
     if (ids.length === 0) {
       return { status: "empty", resolvedWildcards };
     }
     conditions.push({ tags: { some: { tagId: { in: ids } } } });
   }
 
-  for (const name of regular.exclude) {
-    conditions.push({ tags: { none: { tag: { name: { equals: name, mode: "insensitive" as const } } } } });
-  }
-
-  if (excludeWildcardIds.length > 0) {
-    conditions.push({ tags: { none: { tagId: { in: excludeWildcardIds } } } });
+  const excludedIds = [
+    ...regular.exclude.flatMap((name) => tagIdsByName.get(name) ?? []),
+    ...excludeWildcardIds,
+  ];
+  if (excludedIds.length > 0) {
+    conditions.push({ tags: { none: { tagId: { in: excludedIds } } } });
   }
 
   // Add meta tag conditions (including orientation via computed column)
@@ -600,6 +599,31 @@ async function buildPostSearchWhere(tags: string[], notesQuery: string): Promise
   };
 }
 
+async function findTagIdsByName(names: string[]): Promise<Map<string, number[]>> {
+  const idsByName = new Map<string, number[]>();
+  if (names.length === 0) {
+    return idsByName;
+  }
+
+  // Escaped ILIKE rather than lower(name) = lower(...): it is served by the
+  // trigram index, while lower() has no index and seq-scans the Tag table.
+  const uniqueNames = [...new Set(names)];
+  const rows = await prisma.$queryRaw<{ name: string; id: number }[]>`
+    SELECT q.name, t.id
+    FROM unnest(${uniqueNames}::text[], ${uniqueNames.map(escapeSqlLike)}::text[]) AS q(name, pattern)
+    JOIN "Tag" t ON t.name ILIKE q.pattern
+  `;
+  for (const row of rows) {
+    const ids = idsByName.get(row.name);
+    if (ids) {
+      ids.push(row.id);
+    } else {
+      idsByName.set(row.name, [row.id]);
+    }
+  }
+  return idsByName;
+}
+
 export async function searchPosts(
   tags: string[],
   page: number,
@@ -626,6 +650,7 @@ export async function searchPosts(
       totalCount: 0,
       queryTimeMs: 0,
       resolvedWildcards: built.resolvedWildcards,
+      ...(options?.includeRelatedTags && { relatedTags: [] }),
       ...(built.error !== undefined && { error: built.error }),
     };
   }
@@ -698,11 +723,15 @@ async function findKeysetNeighbors(
   const towardNext = direction === "desc" ? ("lt" as const) : ("gt" as const);
   const reverseOrder = direction === "desc" ? ("asc" as const) : ("desc" as const);
 
+  // The inclusive importedAt bound is implied by the OR but, unlike it, is
+  // usable as an index condition; without it the scan starts at the far end
+  // of the importedAt index and filters everything up to the anchor.
   const neighbor = (op: "gt" | "lt", order: ListingDirection) =>
     prisma.post.findFirst({
       where: {
         AND: [
           where,
+          { importedAt: { [op === "gt" ? "gte" : "lte"]: anchor.importedAt } },
           {
             OR: [
               { importedAt: { [op]: anchor.importedAt } },

@@ -13,6 +13,8 @@ export interface TagSuggestion {
   /** True for virtual/system tags (video, portrait, etc.) that aren't in the database */
   isMeta?: boolean;
   description?: string;
+  /** Count estimated from a sample of the selected posts (large selections) */
+  approximate?: boolean;
 }
 
 /**
@@ -88,7 +90,9 @@ export const SuggestionsDropdown = forwardRef<HTMLDivElement, SuggestionsDropdow
               )}
             </span>
             <span className={`text-xs ${isExcludeMode ? "text-red-600 dark:text-red-400" : "text-zinc-400 dark:text-zinc-500"}`}>
-              {isExcludeMode ? `-${suggestion.count ?? 0}` : (suggestion.count ?? 0)}
+              {isExcludeMode ? "-" : ""}
+              {suggestion.approximate ? "~" : ""}
+              {suggestion.count ?? 0}
             </span>
           </div>
         ))}

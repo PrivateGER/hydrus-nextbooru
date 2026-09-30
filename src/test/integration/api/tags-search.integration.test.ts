@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { createGroup, createPostInGroup, createPostWithTags, createPostsWithTag } from '../factories';
@@ -1557,6 +1557,156 @@ describe('GET /api/tags/search (Integration)', () => {
       const tagNames = regularTags.map((t: { name: string }) => t.name);
       expect(tagNames).toContain('portrait_art');
       expect(tagNames).not.toContain('landscape_art');
+    });
+
+    it('should filter by favorite and -favorite, and count favorites within the selection', async () => {
+      const prisma = getTestPrisma();
+      const faved = await createPostWithTags(prisma, ['art', 'faved_art']);
+      await createPostWithTags(prisma, ['art', 'plain_art']);
+      const favedElsewhere = await createPostWithTags(prisma, ['other']);
+      await prisma.favorite.createMany({ data: [{ postId: faved.id }, { postId: favedElsewhere.id }] });
+
+      const namesFor = async (query: string) => {
+        const data = await (await GET(new NextRequest(`http://localhost/api/tags/search?${query}`))).json();
+        return filterRegularTags(data.tags).map((t: { name: string }) => t.name);
+      };
+      expect(await namesFor('q=art&selected=favorite')).toEqual(expect.arrayContaining(['faved_art']));
+      expect(await namesFor('q=art&selected=favorite')).not.toContain('plain_art');
+      expect(await namesFor('q=art&selected=-favorite')).toEqual(expect.arrayContaining(['plain_art']));
+      expect(await namesFor('q=art&selected=-favorite')).not.toContain('faved_art');
+
+      const data = await (await GET(new NextRequest('http://localhost/api/tags/search?q=fav&selected=art'))).json();
+      const favoriteMeta = data.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite');
+      expect(favoriteMeta?.count).toBe(1);
+    });
+
+    it('counts a post matching several selected wildcard tags once', async () => {
+      const prisma = getTestPrisma();
+      const both = await createPostWithTags(prisma, ['blue_eyes', 'blue_hair', 'extra']);
+      await createPostWithTags(prisma, ['blue_hair']);
+      await prisma.favorite.create({ data: { postId: both.id } });
+
+      const regular = await (await GET(new NextRequest('http://localhost/api/tags/search?q=extra&selected=blue*'))).json();
+      const meta = await (await GET(new NextRequest('http://localhost/api/tags/search?q=fav&selected=blue*'))).json();
+
+      expect(filterRegularTags(regular.tags)).toMatchObject([{ name: 'extra', count: 1, remainingCount: 1 }]);
+      expect(meta.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite'))
+        .toMatchObject({ count: 1, remainingCount: 1 });
+    });
+  });
+
+  describe('large selections', () => {
+    type Suggestion = { name: string; count: number; remainingCount: number; approximate?: boolean };
+
+    // 3,000 posts: every post has 'broad', 'everywhere' and 'everywhere_too',
+    // every third has 'third', three have 'rare_specific', and each
+    // 'almost_<k>' is on every post except post k.
+    beforeEach(async () => {
+      const prisma = getTestPrisma();
+      await prisma.$executeRaw`
+        INSERT INTO "Post" ("hydrusFileId", hash, "mimeType", extension, "fileSize", "importedAt", "updatedAt", "sourceUrls")
+        SELECT g, lpad(to_hex(g), 64, '0'), 'image/png', '.png', 1, now(), now(), '{}'
+        FROM generate_series(1, 3000) g
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category)
+        SELECT name, 'GENERAL'::"TagCategory" FROM unnest(ARRAY['broad', 'everywhere', 'everywhere_too', 'third', 'rare_specific']) AS name
+        UNION ALL
+        SELECT 'almost_' || k, 'GENERAL'::"TagCategory" FROM generate_series(1, 4) k
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name IN ('broad', 'everywhere', 'everywhere_too')
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'third' WHERE p."hydrusFileId" % 3 = 0
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'rare_specific' WHERE p."hydrusFileId" <= 3
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name LIKE 'almost\\_%'
+        WHERE t.name <> 'almost_' || p."hydrusFileId"
+      `;
+      await recalculateTagStats();
+    });
+
+    async function suggestions(query: string): Promise<Suggestion[]> {
+      const data = await (await GET(new NextRequest(`http://localhost/api/tags/search?${query}`))).json();
+      return filterRegularTags(data.tags);
+    }
+
+    it('estimates counts for broad queries and marks them approximate', async () => {
+      const third = (await suggestions('q=t&selected=broad')).find((t) => t.name === 'third');
+
+      expect(third?.approximate).toBe(true);
+      expect(third?.count).toBeGreaterThan(850);
+      expect(third?.count).toBeLessThan(1150);
+      expect(third!.count + third!.remainingCount).toBe(3000);
+    });
+
+    it('keeps exact counts when the query names a specific tag', async () => {
+      const [rare] = await suggestions('q=rare_spec&selected=broad');
+
+      expect(rare).toMatchObject({ name: 'rare_specific', count: 3, remainingCount: 2997 });
+      expect(rare.approximate).toBeUndefined();
+    });
+
+    it('does not count the selected tags toward the exact-count workload', async () => {
+      const prisma = getTestPrisma();
+      // Library-scale postCount for the selected tag: past the exact-count
+      // workload bound on its own, so it must not decide the sizing.
+      await prisma.$executeRaw`UPDATE "Tag" SET "postCount" = 100000 WHERE name = 'broad'`;
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category, "postCount") VALUES ('broad_rare', 'GENERAL', 3)
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'broad_rare' WHERE p."hydrusFileId" <= 3
+      `;
+
+      const [rare] = await suggestions('q=broad&selected=broad');
+
+      expect(rare).toMatchObject({ name: 'broad_rare', count: 3, remainingCount: 2997 });
+      expect(rare.approximate).toBeUndefined();
+    });
+
+    it('offers tags missing from only a few selected posts, and hides omnipresent ones, when browsing', async () => {
+      const browse = await suggestions('q=&selected=broad');
+      const almost = browse.filter((t) => t.name.startsWith('almost_'));
+
+      expect(almost).toHaveLength(4);
+      for (const tag of almost) {
+        expect(tag.remainingCount).toBeGreaterThanOrEqual(1);
+        expect(tag.count + tag.remainingCount).toBe(3000);
+      }
+      expect(browse.map((t) => t.name)).not.toContain('everywhere');
+      expect(browse.map((t) => t.name)).not.toContain('everywhere_too');
+    });
+
+    it('does not let omnipresent tags crowd narrowing tags out of a small limit', async () => {
+      // Without the near-omnipresent tags, the two omnipresent ones are the
+      // highest-ranked candidates and 'third' is the best narrowing tag.
+      await getTestPrisma().$executeRaw`
+        DELETE FROM "PostTag" WHERE "tagId" IN (SELECT id FROM "Tag" WHERE name LIKE 'almost\\_%')
+      `;
+      const [top] = await suggestions('q=&selected=broad&limit=1');
+
+      expect(top).toBeDefined();
+      expect(top.remainingCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it('keeps near-omnipresent tags that tie with many omnipresent ones in the sample', async () => {
+      const prisma = getTestPrisma();
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category) SELECT 'omni_' || k, 'GENERAL'::"TagCategory" FROM generate_series(1, 40) k
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name LIKE 'omni\\_%'
+      `;
+
+      const browse = await suggestions('q=&selected=broad&limit=10');
+
+      expect(browse.filter((t) => t.name.startsWith('almost_'))).toHaveLength(4);
+      expect(browse.filter((t) => t.name.startsWith('omni_'))).toEqual([]);
     });
   });
 });
