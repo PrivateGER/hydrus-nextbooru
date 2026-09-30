@@ -1584,7 +1584,9 @@ describe('GET /api/tags/search (Integration)', () => {
   describe('large selections', () => {
     type Suggestion = { name: string; count: number; remainingCount: number; approximate?: boolean };
 
-    // 3,000 posts: every post has 'broad', every third has 'third', three have 'rare_specific'.
+    // 3,000 posts: every post has 'broad' and 'everywhere', every third has
+    // 'third', three have 'rare_specific', and each 'almost_<k>' is on every
+    // post except post k.
     beforeEach(async () => {
       const prisma = getTestPrisma();
       await prisma.$executeRaw`
@@ -1593,15 +1595,21 @@ describe('GET /api/tags/search (Integration)', () => {
         FROM generate_series(1, 3000) g
       `;
       await prisma.$executeRaw`
-        INSERT INTO "Tag" (name, category) VALUES ('broad', 'GENERAL'), ('third', 'GENERAL'), ('rare_specific', 'GENERAL')
+        INSERT INTO "Tag" (name, category)
+        SELECT name, 'GENERAL'::"TagCategory" FROM unnest(ARRAY['broad', 'everywhere', 'third', 'rare_specific']) AS name
+        UNION ALL
+        SELECT 'almost_' || k, 'GENERAL'::"TagCategory" FROM generate_series(1, 4) k
       `;
       await prisma.$executeRaw`
         INSERT INTO "PostTag" ("postId", "tagId")
-        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'broad'
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name IN ('broad', 'everywhere')
         UNION ALL
         SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'third' WHERE p."hydrusFileId" % 3 = 0
         UNION ALL
         SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'rare_specific' WHERE p."hydrusFileId" <= 3
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name LIKE 'almost\\_%'
+        WHERE t.name <> 'almost_' || p."hydrusFileId"
       `;
       await recalculateTagStats();
     });
@@ -1625,6 +1633,18 @@ describe('GET /api/tags/search (Integration)', () => {
 
       expect(rare).toMatchObject({ name: 'rare_specific', count: 3, remainingCount: 2997 });
       expect(rare.approximate).toBeUndefined();
+    });
+
+    it('offers tags missing from only a few selected posts, and hides omnipresent ones, when browsing', async () => {
+      const browse = await suggestions('q=&selected=broad');
+      const almost = browse.filter((t) => t.name.startsWith('almost_'));
+
+      expect(almost).toHaveLength(4);
+      for (const tag of almost) {
+        expect(tag.remainingCount).toBeGreaterThanOrEqual(1);
+        expect(tag.count + tag.remainingCount).toBe(3000);
+      }
+      expect(browse.map((t) => t.name)).not.toContain('everywhere');
     });
   });
 });

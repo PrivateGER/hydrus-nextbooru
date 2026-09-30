@@ -566,9 +566,11 @@ export async function GET(request: NextRequest) {
       : 1;
   const approximate = sampleStride > 1;
 
+  type CoOccurrenceRow = { id: number; name: string; category: string; count: bigint };
+
   // Browsing (no query) hides tags present on every selected post: they cannot narrow the selection.
   const coOccurringTags = approximate
-    ? await prisma.$queryRaw<Array<{ id: number; name: string; category: string; count: bigint }>>`
+    ? await prisma.$queryRaw<Array<CoOccurrenceRow & { on_every_sampled_post: boolean }>>`
         WITH sampled_posts AS MATERIALIZED (
           SELECT "postId" FROM (${postSubquery}) AS filtered
           -- Hashed rather than "postId" % stride: IDs follow import order, and
@@ -579,17 +581,17 @@ export async function GET(request: NextRequest) {
           SELECT COUNT(*)::numeric AS n FROM sampled_posts
         )
         SELECT t.id, t.name, t.category,
-               ROUND(COUNT(*) * ${filteredTotal}::numeric / (SELECT n FROM sample_size))::bigint AS count
+               ROUND(COUNT(*) * ${filteredTotal}::numeric / (SELECT n FROM sample_size))::bigint AS count,
+               COUNT(*) = (SELECT n FROM sample_size) AS on_every_sampled_post
         FROM sampled_posts s
         JOIN "PostTag" pt ON pt."postId" = s."postId"
         JOIN "Tag" t ON t.id = pt."tagId"
         WHERE ${suggestionTagFilter}
         GROUP BY t.id, t.name, t.category
-        ${hasSearchQuery ? Prisma.empty : Prisma.sql`HAVING COUNT(*) < (SELECT n FROM sample_size)`}
         ORDER BY count DESC
         LIMIT ${limit * 2}
       `
-    : await prisma.$queryRaw<Array<{ id: number; name: string; category: string; count: bigint }>>`
+    : await prisma.$queryRaw<Array<CoOccurrenceRow & { on_every_sampled_post?: undefined }>>`
         WITH filtered_posts AS MATERIALIZED (
           ${postSubquery}
         )
@@ -604,19 +606,40 @@ export async function GET(request: NextRequest) {
         LIMIT ${limit * 2}  -- Fetch extra rows for the creator-name filter done in-memory
       `;
 
+  // A sample cannot tell "on every selected post" from "missing from a few
+  // unsampled ones", and remainingCount 0 hides a suggestion client-side, so
+  // tags seen on every sampled post get an exact recount. Every other sampled
+  // tag provably misses at least one post.
+  const ambiguousTagIds = coOccurringTags.filter((tag) => tag.on_every_sampled_post).map((tag) => tag.id);
+  const exactCounts = new Map<number, number>();
+  if (ambiguousTagIds.length > 0) {
+    const rows = await prisma.$queryRaw<Array<{ id: number; count: bigint }>>`
+      SELECT pt."tagId" AS id, COUNT(*)::bigint AS count
+      FROM "PostTag" pt
+      WHERE pt."tagId" = ANY(${ambiguousTagIds}::int[])
+        AND pt."postId" IN (SELECT "postId" FROM (${postSubquery}) AS filtered)
+      GROUP BY pt."tagId"
+    `;
+    for (const row of rows) {
+      exactCounts.set(row.id, Number(row.count));
+    }
+  }
+
   const filteredTags = coOccurringTags
     .map((tag) => {
-      const count = Math.min(Number(tag.count), filteredTotal);
+      const exactCount = approximate ? exactCounts.get(tag.id) : Number(tag.count);
+      const count = exactCount ?? Math.min(Number(tag.count), filteredTotal - 1);
       return {
         id: tag.id,
         name: tag.name,
         category: tag.category,
         count,
         remainingCount: filteredTotal - count,
-        ...(approximate && { approximate: true }),
+        ...(exactCount === undefined && { approximate: true }),
       };
     })
     .filter((tag) => tag.count > 0)
+    .filter((tag) => hasSearchQuery || tag.remainingCount > 0)
     .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
     .slice(0, limit);
 
