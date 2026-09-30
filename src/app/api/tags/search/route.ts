@@ -554,7 +554,7 @@ export async function GET(request: NextRequest) {
     SELECT
       (SELECT COUNT(*) FROM (${postSubquery}) AS filtered)::bigint AS total,
       ${query.length >= TRIGRAM_MIN_QUERY_LENGTH
-        ? Prisma.sql`(SELECT COALESCE(SUM(t."postCount"), 0) FROM "Tag" t WHERE t.name ILIKE ${searchPattern} ${categorySqlFilter})`
+        ? Prisma.sql`(SELECT COALESCE(SUM(t."postCount"), 0) FROM "Tag" t WHERE ${suggestionTagFilter})`
         : Prisma.sql`NULL`}::bigint AS candidate_work
   `;
   const filteredTotal = Number(sizing.total);

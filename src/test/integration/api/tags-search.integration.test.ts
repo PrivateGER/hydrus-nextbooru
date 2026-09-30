@@ -1635,6 +1635,25 @@ describe('GET /api/tags/search (Integration)', () => {
       expect(rare.approximate).toBeUndefined();
     });
 
+    it('does not count the selected tags toward the exact-count workload', async () => {
+      const prisma = getTestPrisma();
+      // Library-scale postCount for the selected tag: past the exact-count
+      // workload bound on its own, so it must not decide the sizing.
+      await prisma.$executeRaw`UPDATE "Tag" SET "postCount" = 100000 WHERE name = 'broad'`;
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category, "postCount") VALUES ('broad_rare', 'GENERAL', 3)
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'broad_rare' WHERE p."hydrusFileId" <= 3
+      `;
+
+      const [rare] = await suggestions('q=broad&selected=broad');
+
+      expect(rare).toMatchObject({ name: 'broad_rare', count: 3, remainingCount: 2997 });
+      expect(rare.approximate).toBeUndefined();
+    });
+
     it('offers tags missing from only a few selected posts, and hides omnipresent ones, when browsing', async () => {
       const browse = await suggestions('q=&selected=broad');
       const almost = browse.filter((t) => t.name.startsWith('almost_'));
