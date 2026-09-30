@@ -28,6 +28,23 @@ const RATE_LIMIT_CONFIG = {
   windowMs: 60 * 1000,
 };
 
+/**
+ * Co-occurrence counting touches every (post, tag) pair of the selection whose
+ * tag matches the query: on the live 170k-post library `selected=hair&q=a` is
+ * 6.7M pairs and ~10s. Beyond this many selected posts, broad queries count a
+ * hash sample of about this many posts and scale up; measured against exact
+ * counts there, a ~2k sample kept all of the top 40 at ~3% mean error.
+ */
+const CO_OCCURRENCE_SAMPLE_POSTS = 2_000;
+/**
+ * Summed postCount of the name-matching tags below which exact counting stays
+ * cheap (driven from those tags' postings). Keeps specific queries exact, so a
+ * rare tag the user is typing cannot vanish from a sample.
+ */
+const EXACT_CO_OCCURRENCE_WORK = 50_000;
+/** Shorter patterns cannot use the trigram index, so their tag set is unbounded. */
+const TRIGRAM_MIN_QUERY_LENGTH = 3;
+
 interface RegularTagSuggestion {
   id: number;
   name: string;
@@ -523,57 +540,82 @@ export async function GET(request: NextRequest) {
   // Also exclude the excluded tag IDs and wildcard matched IDs from suggestions
   const allExcludedFromSuggestions = [...allTagIds, ...allExcludeTagIds, ...allWildcardTagIds];
 
-  // Use CTE to compute filtered posts once and reuse for both count and exclude_count
-  // Conditionally include ILIKE filter only when there's a search query
   const nameFilter = hasSearchQuery
     ? Prisma.sql`t.name ILIKE ${searchPattern} AND`
     : Prisma.sql``;
   const categorySqlFilter = categoryFilter
     ? Prisma.sql`AND t.category = ${categoryFilter}::"TagCategory"`
     : Prisma.empty;
-
-  // When browsing (no query), filter out omnipresent tags (remainingCount = 0)
-  const excludeOmnipresent = hasSearchQuery
-    ? Prisma.sql``
-    : Prisma.sql`HAVING (SELECT total FROM filtered_total) - COUNT(pt."postId") > 0`;
-
-  const coOccurringTags = await prisma.$queryRaw<Array<{
-    id: number;
-    name: string;
-    category: string;
-    count: bigint;
-    remaining_count: bigint;
-  }>>`
-    WITH filtered_posts AS (
-      ${postSubquery}
-    ),
-    filtered_total AS (
-      SELECT COUNT(*)::bigint as total FROM filtered_posts
-    )
-    SELECT t.id, t.name, t.category,
-           COUNT(pt."postId")::bigint as count,
-           (SELECT total FROM filtered_total) - COUNT(pt."postId")::bigint as remaining_count
-    FROM "Tag" t
-    JOIN "PostTag" pt ON t.id = pt."tagId"
-    WHERE ${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
+  const suggestionTagFilter = Prisma.sql`${nameFilter} t.id != ALL(${allExcludedFromSuggestions}::int[])
       ${categorySqlFilter}
-      ${validCreatorSqlFilter(validCreatorsOnly)}
-      AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
-    GROUP BY t.id, t.name, t.category
-    ${excludeOmnipresent}
-    ORDER BY count DESC
-    LIMIT ${limit * 2}  -- Fetch extra rows for count > 0 filtering done in-memory
+      ${validCreatorSqlFilter(validCreatorsOnly)}`;
+
+  const [sizing] = await prisma.$queryRaw<Array<{ total: bigint; candidate_work: bigint | null }>>`
+    SELECT
+      (SELECT COUNT(*) FROM (${postSubquery}) AS filtered)::bigint AS total,
+      ${query.length >= TRIGRAM_MIN_QUERY_LENGTH
+        ? Prisma.sql`(SELECT COALESCE(SUM(t."postCount"), 0) FROM "Tag" t WHERE t.name ILIKE ${searchPattern} ${categorySqlFilter})`
+        : Prisma.sql`NULL`}::bigint AS candidate_work
   `;
+  const filteredTotal = Number(sizing.total);
+  const candidateWork = sizing.candidate_work === null ? null : Number(sizing.candidate_work);
+  const sampleStride =
+    filteredTotal > CO_OCCURRENCE_SAMPLE_POSTS &&
+    (candidateWork === null || candidateWork > EXACT_CO_OCCURRENCE_WORK)
+      ? Math.ceil(filteredTotal / CO_OCCURRENCE_SAMPLE_POSTS)
+      : 1;
+  const approximate = sampleStride > 1;
 
-  const mappedTags = coOccurringTags.map((tag) => ({
-    id: tag.id,
-    name: tag.name,
-    category: tag.category,
-    count: Number(tag.count),
-    remainingCount: Math.max(0, Number(tag.remaining_count)),
-  }));
+  // Browsing (no query) hides tags present on every selected post: they cannot narrow the selection.
+  const coOccurringTags = approximate
+    ? await prisma.$queryRaw<Array<{ id: number; name: string; category: string; count: bigint }>>`
+        WITH sampled_posts AS MATERIALIZED (
+          SELECT "postId" FROM (${postSubquery}) AS filtered
+          -- Hashed rather than "postId" % stride: IDs follow import order, and
+          -- tags cluster by import batch.
+          WHERE (hashint4("postId") & 2147483647) % ${sampleStride} = 0
+        ),
+        sample_size AS (
+          SELECT COUNT(*)::numeric AS n FROM sampled_posts
+        )
+        SELECT t.id, t.name, t.category,
+               ROUND(COUNT(*) * ${filteredTotal}::numeric / (SELECT n FROM sample_size))::bigint AS count
+        FROM sampled_posts s
+        JOIN "PostTag" pt ON pt."postId" = s."postId"
+        JOIN "Tag" t ON t.id = pt."tagId"
+        WHERE ${suggestionTagFilter}
+        GROUP BY t.id, t.name, t.category
+        ${hasSearchQuery ? Prisma.empty : Prisma.sql`HAVING COUNT(*) < (SELECT n FROM sample_size)`}
+        ORDER BY count DESC
+        LIMIT ${limit * 2}
+      `
+    : await prisma.$queryRaw<Array<{ id: number; name: string; category: string; count: bigint }>>`
+        WITH filtered_posts AS MATERIALIZED (
+          ${postSubquery}
+        )
+        SELECT t.id, t.name, t.category, COUNT(pt."postId")::bigint AS count
+        FROM "Tag" t
+        JOIN "PostTag" pt ON t.id = pt."tagId"
+        WHERE ${suggestionTagFilter}
+          AND pt."postId" IN (SELECT "postId" FROM filtered_posts)
+        GROUP BY t.id, t.name, t.category
+        ${hasSearchQuery ? Prisma.empty : Prisma.sql`HAVING COUNT(pt."postId") < ${filteredTotal}`}
+        ORDER BY count DESC
+        LIMIT ${limit * 2}  -- Fetch extra rows for the creator-name filter done in-memory
+      `;
 
-  const filteredTags = mappedTags
+  const filteredTags = coOccurringTags
+    .map((tag) => {
+      const count = Math.min(Number(tag.count), filteredTotal);
+      return {
+        id: tag.id,
+        name: tag.name,
+        category: tag.category,
+        count,
+        remainingCount: filteredTotal - count,
+        ...(approximate && { approximate: true }),
+      };
+    })
     .filter((tag) => tag.count > 0)
     .filter((tag) => !validCreatorsOnly || isValidCreatorName(tag.name))
     .slice(0, limit);
@@ -590,13 +632,13 @@ export async function GET(request: NextRequest) {
 
   // Get meta tag counts within the filtered posts using optimized batched query
   // This uses a single SQL query with COUNT FILTER instead of N separate queries
-  const { counts: metaTagCounts, total: filteredTotal } = matchingMetas.length > 0
+  const { counts: metaTagCounts } = matchingMetas.length > 0
     ? await getMetaTagCountsBatched(
         matchingMetas.map((def) => def.name),
         prisma,
         postSubquery
       )
-    : { counts: new Map<string, number>(), total: 0 };
+    : { counts: new Map<string, number>() };
 
   const matchingMetaTags = matchingMetas.map((def, index) => ({
     id: -(index + 1),

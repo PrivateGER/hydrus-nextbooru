@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
+import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase, recalculateTagStats } from '../setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
 import { createGroup, createPostInGroup, createPostWithTags, createPostsWithTag } from '../factories';
@@ -1578,6 +1578,53 @@ describe('GET /api/tags/search (Integration)', () => {
       const data = await (await GET(new NextRequest('http://localhost/api/tags/search?q=fav&selected=art'))).json();
       const favoriteMeta = data.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite');
       expect(favoriteMeta?.count).toBe(1);
+    });
+  });
+
+  describe('large selections', () => {
+    type Suggestion = { name: string; count: number; remainingCount: number; approximate?: boolean };
+
+    // 3,000 posts: every post has 'broad', every third has 'third', three have 'rare_specific'.
+    beforeEach(async () => {
+      const prisma = getTestPrisma();
+      await prisma.$executeRaw`
+        INSERT INTO "Post" ("hydrusFileId", hash, "mimeType", extension, "fileSize", "importedAt", "updatedAt", "sourceUrls")
+        SELECT g, lpad(to_hex(g), 64, '0'), 'image/png', '.png', 1, now(), now(), '{}'
+        FROM generate_series(1, 3000) g
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "Tag" (name, category) VALUES ('broad', 'GENERAL'), ('third', 'GENERAL'), ('rare_specific', 'GENERAL')
+      `;
+      await prisma.$executeRaw`
+        INSERT INTO "PostTag" ("postId", "tagId")
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'broad'
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'third' WHERE p."hydrusFileId" % 3 = 0
+        UNION ALL
+        SELECT p.id, t.id FROM "Post" p JOIN "Tag" t ON t.name = 'rare_specific' WHERE p."hydrusFileId" <= 3
+      `;
+      await recalculateTagStats();
+    });
+
+    async function suggestions(query: string): Promise<Suggestion[]> {
+      const data = await (await GET(new NextRequest(`http://localhost/api/tags/search?${query}`))).json();
+      return filterRegularTags(data.tags);
+    }
+
+    it('estimates counts for broad queries and marks them approximate', async () => {
+      const third = (await suggestions('q=t&selected=broad')).find((t) => t.name === 'third');
+
+      expect(third?.approximate).toBe(true);
+      expect(third?.count).toBeGreaterThan(850);
+      expect(third?.count).toBeLessThan(1150);
+      expect(third!.count + third!.remainingCount).toBe(3000);
+    });
+
+    it('keeps exact counts when the query names a specific tag', async () => {
+      const [rare] = await suggestions('q=rare_spec&selected=broad');
+
+      expect(rare).toMatchObject({ name: 'rare_specific', count: 3, remainingCount: 2997 });
+      expect(rare.approximate).toBeUndefined();
     });
   });
 });

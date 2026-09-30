@@ -64,7 +64,9 @@ const QUERY_BUDGETS = {
   postsSearchSingleTag: 4,
   postsSearchTwoTags: 4,
   tagAutocomplete: 2,
-  tagCoOccurrence: 2,
+  // Sizing (selection total + name-matching postings) decides exact vs sampled
+  // counting, then the co-occurrence query and the meta-tag counts.
+  tagCoOccurrence: 3,
   // One findUnique whose nested include tree Prisma loads as constant queries
   // (post, tags->tag, notes->translation, groups->group->posts). Constant in
   // row count — not an N+1. NB: 12 is the observed count and is unrelated to
