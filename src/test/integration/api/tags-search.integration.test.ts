@@ -1579,6 +1579,20 @@ describe('GET /api/tags/search (Integration)', () => {
       const favoriteMeta = data.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite');
       expect(favoriteMeta?.count).toBe(1);
     });
+
+    it('counts a post matching several selected wildcard tags once', async () => {
+      const prisma = getTestPrisma();
+      const both = await createPostWithTags(prisma, ['blue_eyes', 'blue_hair', 'extra']);
+      await createPostWithTags(prisma, ['blue_hair']);
+      await prisma.favorite.create({ data: { postId: both.id } });
+
+      const regular = await (await GET(new NextRequest('http://localhost/api/tags/search?q=extra&selected=blue*'))).json();
+      const meta = await (await GET(new NextRequest('http://localhost/api/tags/search?q=fav&selected=blue*'))).json();
+
+      expect(filterRegularTags(regular.tags)).toMatchObject([{ name: 'extra', count: 1, remainingCount: 1 }]);
+      expect(meta.tags.find((t: { name: string; isMeta?: boolean }) => t.isMeta && t.name === 'favorite'))
+        .toMatchObject({ count: 1, remainingCount: 1 });
+    });
   });
 
   describe('large selections', () => {
