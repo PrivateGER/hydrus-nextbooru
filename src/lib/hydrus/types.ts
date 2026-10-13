@@ -73,6 +73,27 @@ export interface HydrusServicesResponse extends HydrusApiResponse {
   services: HydrusServicesObject;
 }
 
+/**
+ * Service `type` enum values for tag services (docs/client_api.md, "The
+ * Services Object"). Only these can carry tags in file metadata.
+ */
+export const HydrusTagServiceType = {
+  /** A remote tag repository such as the PTR. */
+  TagRepository: 0,
+  /** A local tag domain like "my tags". */
+  LocalTag: 5,
+  /** Virtual union of every tag service ("all known tags"). */
+  AllKnownTags: 10,
+} as const;
+
+export type HydrusTagServiceTypeValue = typeof HydrusTagServiceType[keyof typeof HydrusTagServiceType];
+
+/** Tag status keys inside storage_tags/display_tags (see "Current Deleted Pending Petitioned"). */
+export const HydrusTagStatus = {
+  Current: "0",
+  Pending: "1",
+} as const;
+
 export interface HydrusFilePathResponse extends HydrusApiResponse {
   path: string;
   filetype?: string;

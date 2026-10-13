@@ -100,6 +100,7 @@ Query logging outputs formatted SQL with execution duration via pino. Useful for
 - **File serving**: Hash-based paths (`f{hash[0:2]}/{hash}.{ext}`) with 1-year cache headers
 - **Sync concurrency**: Uses Promise.all with chunked batches to avoid overwhelming Hydrus
 - **Tag search**: Progressive filtering - only shows tags that co-occur with already-selected tags
+- **Tag services**: The admin tag service selection (`src/lib/hydrus/tag-services.ts`, Settings `hydrus.tagServiceKeys`) filters which Hydrus tag services sync imports; unset = all services, and a change only applies after a full sync (the admin page flags `pendingResync` until one succeeds)
 
 ## Deployment / Concurrency
 

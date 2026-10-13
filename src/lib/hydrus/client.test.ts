@@ -421,6 +421,37 @@ describe('HydrusClient', () => {
     });
   });
 
+  // ===========================================================================
+  // getServices
+  // ===========================================================================
+
+  describe('getServices', () => {
+    it('should GET /get_services without params and return the services object', async () => {
+      const services = {
+        '6c6f63616c2074616773': { name: 'my tags', type: 5, type_pretty: 'local tag service' },
+        '616c6c206b6e6f776e2074616773': { name: 'all known tags', type: 10, type_pretty: 'virtual combined tag service' },
+      };
+      mockFetch.mockResolvedValue(mockOkResponse({ version: 1, hydrus_version: 575, services }));
+
+      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
+      const result = await client.getServices();
+
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname).toBe('/get_services');
+      expect([...url.searchParams.keys()]).toEqual([]);
+      expect(result.services).toEqual(services);
+    });
+
+    it('should honour a lower maxRetries for interactive callers', async () => {
+      mockFetch.mockResolvedValue(mockErrorResponse(503, 'Service Unavailable'));
+
+      const client = new HydrusClient({ apiUrl: 'http://test', apiKey: 'key' });
+
+      await expect(client.getServices({ maxRetries: 0 })).rejects.toThrow(HydrusApiError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });
 
 // =============================================================================

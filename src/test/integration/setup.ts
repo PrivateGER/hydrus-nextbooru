@@ -197,12 +197,13 @@ export async function cleanDatabase(): Promise<void> {
   await p.tag.deleteMany();
   await p.group.deleteMany();
   await p.syncState.deleteMany();
-  // Clear settings for test isolation (stats and OpenRouter settings)
+  // Clear settings for test isolation (stats, OpenRouter, Hydrus tag services)
   await p.settings.deleteMany({
     where: {
       OR: [
         { key: { startsWith: 'stats.' } },
         { key: { startsWith: 'openrouter.' } },
+        { key: { startsWith: 'hydrus.' } },
       ],
     },
   });

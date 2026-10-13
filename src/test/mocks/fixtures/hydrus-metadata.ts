@@ -81,6 +81,38 @@ export function createMockFileWithTags(tags: string[], overrides: Partial<Hydrus
 }
 
 /**
+ * Create a mock file whose tags are split across tag services, keyed by
+ * service key. Each value is either a list of current tags or a
+ * status -> tags map (e.g. { '0': [...], '1': [...pending] }). Unless
+ * `includeAllKnownTags` is false, an "all known tags" entry holding the
+ * union is added under `allKnownTagsKey`, as real Hydrus metadata does.
+ */
+export function createMockFileWithServiceTags(
+  byService: Record<string, string[] | Record<string, string[]>>,
+  opts: Partial<HydrusFileMetadata> & {
+    allKnownTagsKey?: string;
+    includeAllKnownTags?: boolean;
+  } = {}
+): HydrusFileMetadata {
+  const { allKnownTagsKey = '616c6c206b6e6f776e2074616773', includeAllKnownTags = true, ...overrides } = opts;
+  const tags: HydrusFileMetadata['tags'] = {};
+  const union: Record<string, string[]> = {};
+
+  for (const [serviceKey, value] of Object.entries(byService)) {
+    const byStatus = Array.isArray(value) ? { '0': value } : value;
+    tags[serviceKey] = { storage_tags: byStatus, display_tags: byStatus };
+    for (const [status, list] of Object.entries(byStatus)) {
+      union[status] = [...new Set([...(union[status] ?? []), ...list])];
+    }
+  }
+  if (includeAllKnownTags) {
+    tags[allKnownTagsKey] = { storage_tags: union, display_tags: union };
+  }
+
+  return createMockFileMetadata({ ...overrides, tags });
+}
+
+/**
  * Create a mock file with specific URLs for testing URL parsing.
  */
 export function createMockFileWithUrls(urls: string[], overrides: Partial<HydrusFileMetadata> = {}): HydrusFileMetadata {

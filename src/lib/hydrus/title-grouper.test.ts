@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTitleSourceId, extractTitleGroups } from '@/lib/hydrus/title-grouper';
-import { createMockFileMetadata } from '@/test/mocks/fixtures/hydrus-metadata';
+import { deriveTitleSourceId, extractPageNumber, extractTitleGroups, extractTitleTags } from '@/lib/hydrus/title-grouper';
+import { createMockFileMetadata, createMockFileWithServiceTags } from '@/test/mocks/fixtures/hydrus-metadata';
 
 // The legacy 32-bit djb2 hash, kept here only to prove the new scheme avoids a
 // real collision it would have produced. Mirrors the removed implementation.
@@ -160,5 +160,38 @@ describe('deriveTitleSourceId', () => {
     expect(ga).toHaveLength(1);
     expect(gb).toHaveLength(1);
     expect(ga[0].sourceId).not.toBe(gb[0].sourceId);
+  });
+});
+
+describe('extractTitleGroups with a tag service filter', () => {
+  const MY_TAGS = '6c6f63616c2074616773';
+  const PTR = 'aa'.repeat(32);
+
+  it('ignores title: and page: tags from services filtered out', () => {
+    const metadata = createMockFileWithServiceTags({
+      [MY_TAGS]: ['title:Local Series Part 2'],
+      [PTR]: ['title:Ptr Series Part 1', 'page:7'],
+    });
+    const filter = { allowed: new Set([MY_TAGS]), includePending: false };
+
+    const result = extractTitleGroups(metadata, filter);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].normalizedTitle).toBe('Local Series');
+    expect(result[0].position).toBe(2); // PTR page:7 is not applied
+    expect(extractTitleTags(metadata, filter)).toEqual(['Local Series Part 2']);
+    expect(extractPageNumber(metadata, filter)).toBe(0);
+  });
+
+  it('reads every service by default', () => {
+    const metadata = createMockFileWithServiceTags({
+      [MY_TAGS]: ['title:Local Series Part 2'],
+      [PTR]: ['title:Ptr Series Part 1', 'page:7'],
+    });
+
+    const result = extractTitleGroups(metadata);
+
+    expect(result.map((g) => g.normalizedTitle).sort()).toEqual(['Local Series', 'Ptr Series']);
+    expect(result.every((g) => g.position === 7)).toBe(true);
   });
 });

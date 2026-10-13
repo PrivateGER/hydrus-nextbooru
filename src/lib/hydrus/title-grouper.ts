@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { SourceType } from "@/generated/prisma/client";
 import type { HydrusFileMetadata } from "./types";
+import { ALL_TAG_SERVICES_FILTER, forEachDisplayTag, type TagServiceFilter } from "./tag-services";
 
 const MAX_TITLE_SOURCE_ID_BYTES = 240;
 const HASHED_TITLE_SOURCE_ID_PREFIX = "title-sha256:";
@@ -46,68 +47,51 @@ const PAGE_NUMBER_EXTRACTORS: { pattern: RegExp; group: number }[] = [
 
 /**
  * Extract title tags from Hydrus metadata.
- * Returns all `title:` namespaced tags.
+ * Returns all `title:` namespaced tags from the services the filter admits.
  */
-function extractTitleTags(metadata: HydrusFileMetadata): string[] {
+export function extractTitleTags(
+  metadata: HydrusFileMetadata,
+  filter: TagServiceFilter = ALL_TAG_SERVICES_FILTER
+): string[] {
   const titles: string[] = [];
 
-  if (!metadata.tags || typeof metadata.tags !== "object") {
-    return titles;
-  }
-
-  for (const serviceTags of Object.values(metadata.tags)) {
-    if (!serviceTags?.display_tags) continue;
-
-    const currentTags = serviceTags.display_tags["0"];
-    if (!Array.isArray(currentTags)) continue;
-
-    for (const tag of currentTags) {
-      if (typeof tag !== "string") continue;
-
-      // Match title: namespace (case insensitive)
-      if (tag.toLowerCase().startsWith("title:")) {
-        const title = tag.substring(6).trim();
-        if (title) {
-          titles.push(title);
-        }
+  forEachDisplayTag(metadata, filter, (tag) => {
+    // Match title: namespace (case insensitive)
+    if (tag.toLowerCase().startsWith("title:")) {
+      const title = tag.substring(6).trim();
+      if (title) {
+        titles.push(title);
       }
     }
-  }
+  });
 
   return titles;
 }
 
 /**
  * Extract page number from Hydrus metadata.
- * Looks for `page:` namespaced tags.
+ * Looks for `page:` namespaced tags on the services the filter admits.
  * Returns the page number (1-indexed as tagged) or 0 if not found.
  */
-function extractPageNumber(metadata: HydrusFileMetadata): number {
-  if (!metadata.tags || typeof metadata.tags !== "object") {
-    return 0;
-  }
+export function extractPageNumber(
+  metadata: HydrusFileMetadata,
+  filter: TagServiceFilter = ALL_TAG_SERVICES_FILTER
+): number {
+  let pageNum = 0;
 
-  for (const serviceTags of Object.values(metadata.tags)) {
-    if (!serviceTags?.display_tags) continue;
-
-    const currentTags = serviceTags.display_tags["0"];
-    if (!Array.isArray(currentTags)) continue;
-
-    for (const tag of currentTags) {
-      if (typeof tag !== "string") continue;
-
-      // Match page: namespace (case insensitive)
-      if (tag.toLowerCase().startsWith("page:")) {
-        const pageStr = tag.substring(5).trim();
-        const pageNum = parseInt(pageStr, 10);
-        if (!isNaN(pageNum) && pageNum > 0) {
-          return pageNum; // Keep as 1-indexed (user's source of truth)
-        }
+  forEachDisplayTag(metadata, filter, (tag) => {
+    // First valid page: tag wins (1-indexed, the user's source of truth)
+    if (pageNum > 0) return;
+    // Match page: namespace (case insensitive)
+    if (tag.toLowerCase().startsWith("page:")) {
+      const parsed = parseInt(tag.substring(5).trim(), 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        pageNum = parsed;
       }
     }
-  }
+  });
 
-  return 0;
+  return pageNum;
 }
 
 /**
@@ -199,13 +183,16 @@ function parseTitleGroup(title: string): TitleGroup | null {
  * Returns all valid title groups found in title: tags.
  * Uses page: tag for position if available, otherwise parses from title.
  */
-export function extractTitleGroups(metadata: HydrusFileMetadata): TitleGroup[] {
-  const titles = extractTitleTags(metadata);
+export function extractTitleGroups(
+  metadata: HydrusFileMetadata,
+  filter: TagServiceFilter = ALL_TAG_SERVICES_FILTER
+): TitleGroup[] {
+  const titles = extractTitleTags(metadata, filter);
   const groups: TitleGroup[] = [];
   const seen = new Set<string>();
 
   // Get page number from page: tag (preferred, 1-indexed as source of truth)
-  const pageTagPosition = extractPageNumber(metadata);
+  const pageTagPosition = extractPageNumber(metadata, filter);
 
   for (const title of titles) {
     const group = parseTitleGroup(title);

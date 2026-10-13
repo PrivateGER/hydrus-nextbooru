@@ -1,6 +1,6 @@
 import { http, HttpResponse, type RequestHandler } from 'msw';
 import { setupServer, type SetupServer } from 'msw/node';
-import type { HydrusFileMetadata } from '@/lib/hydrus/types';
+import type { HydrusFileMetadata, HydrusServicesObject } from '@/lib/hydrus/types';
 import {
   createMockFileBatch,
   createMockSearchResponse,
@@ -8,6 +8,23 @@ import {
 } from './fixtures/hydrus-metadata';
 
 const HYDRUS_URL = 'http://localhost:45869';
+
+/** Service keys of the default mock services (hex, like real Hydrus keys). */
+export const MOCK_SERVICE_KEYS = {
+  myTags: '6c6f63616c2074616773',
+  ptr: 'aa'.repeat(32),
+  allKnownTags: '616c6c206b6e6f776e2074616773',
+} as const;
+
+/** Default /get_services payload: one local tag service, a PTR, and the union. */
+export function createDefaultMockServices(): HydrusServicesObject {
+  return {
+    [MOCK_SERVICE_KEYS.myTags]: { name: 'my tags', type: 5, type_pretty: 'local tag service' },
+    [MOCK_SERVICE_KEYS.ptr]: { name: 'public tag repository', type: 0, type_pretty: 'hydrus tag repository' },
+    [MOCK_SERVICE_KEYS.allKnownTags]: { name: 'all known tags', type: 10, type_pretty: 'virtual combined tag service' },
+    '6c6f63616c2066696c6573': { name: 'my files', type: 2, type_pretty: 'local file domain' },
+  };
+}
 
 /**
  * State for the mock Hydrus server.
@@ -22,6 +39,14 @@ export interface MockHydrusState {
   metadataErrorStatusCode?: number;
   metadataDelayMs?: number;
   metadataMalformedJsonResponses?: number;
+  /** Services reported by /get_services. */
+  services: HydrusServicesObject;
+  servicesError?: Error;
+  servicesErrorStatusCode?: number;
+  /** Count of /get_services requests served (for "no extra call" assertions). */
+  servicesRequestCount: number;
+  /** Query params of every search_files request, in order. */
+  searchRequests: URLSearchParams[];
 }
 
 export function createMockHydrusState(fileCount = 0): MockHydrusState {
@@ -32,6 +57,9 @@ export function createMockHydrusState(fileCount = 0): MockHydrusState {
   return {
     fileIds: files.map((f) => f.file_id),
     metadata,
+    services: createDefaultMockServices(),
+    servicesRequestCount: 0,
+    searchRequests: [],
   };
 }
 
@@ -48,8 +76,21 @@ export function createHydrusHandlers(state: MockHydrusState): RequestHandler[] {
       });
     }),
 
+    // get_services
+    http.get(`${HYDRUS_URL}/get_services`, () => {
+      state.servicesRequestCount++;
+      if (state.servicesError) {
+        return HttpResponse.json(
+          { error: state.servicesError.message },
+          { status: state.servicesErrorStatusCode ?? 500 }
+        );
+      }
+      return HttpResponse.json({ version: 1, hydrus_version: 575, services: state.services });
+    }),
+
     // get_files/search_files
-    http.get(`${HYDRUS_URL}/get_files/search_files`, () => {
+    http.get(`${HYDRUS_URL}/get_files/search_files`, ({ request }) => {
+      state.searchRequests.push(new URL(request.url).searchParams);
       if (state.searchError) {
         return HttpResponse.json(
           { error: state.searchError.message },

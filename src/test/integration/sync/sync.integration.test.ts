@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { setupTestDatabase, teardownTestDatabase, getTestPrisma, cleanDatabase } from '../setup';
 import { setTestPrisma } from '@/lib/db';
-import { createMockHydrusServer, createMockHydrusState, addFilesToState, removeFilesFromState, type MockHydrusState } from '@/test/mocks/hydrus-server';
-import { createMockFileMetadata, createMockFileWithTags, createMockFileWithUrls } from '@/test/mocks/fixtures/hydrus-metadata';
+import { createMockHydrusServer, createMockHydrusState, addFilesToState, removeFilesFromState, MOCK_SERVICE_KEYS, type MockHydrusState } from '@/test/mocks/hydrus-server';
+import { createMockFileMetadata, createMockFileWithServiceTags, createMockFileWithTags, createMockFileWithUrls } from '@/test/mocks/fixtures/hydrus-metadata';
+import { selectionFingerprint, TAG_SERVICE_SETTINGS_KEYS } from '@/lib/hydrus/tag-services';
 import { invalidateAllCaches } from '@/lib/cache';
 import type { SetupServer } from 'msw/node';
 
@@ -804,6 +805,163 @@ describe('syncFromHydrus (Integration)', () => {
         where: { key: 'phash.algorithmVersion' },
       });
       expect(setting?.value).toBe('outdated');
+    });
+  });
+
+  describe('tag service selection', () => {
+    const { myTags, ptr, allKnownTags } = MOCK_SERVICE_KEYS;
+
+    async function selectTagServices(keys: string[]) {
+      await getTestPrisma().settings.upsert({
+        where: { key: TAG_SERVICE_SETTINGS_KEYS.SERVICE_KEYS },
+        update: { value: JSON.stringify(keys) },
+        create: { key: TAG_SERVICE_SETTINGS_KEYS.SERVICE_KEYS, value: JSON.stringify(keys) },
+      });
+    }
+
+    async function tagNamesFor(hash: string) {
+      const post = await getTestPrisma().post.findUnique({
+        where: { hash },
+        include: { tags: { include: { tag: true } } },
+      });
+      return post!.tags.map((pt) => pt.tag.name).sort();
+    }
+
+    function addSplitFiles() {
+      addFilesToState(hydrusState, [
+        createMockFileWithServiceTags(
+          { [myTags]: ['shared', 'mine one'], [ptr]: ['ptr only', 'common'] },
+          { file_id: 1, hash: 'a'.repeat(64) }
+        ),
+        createMockFileWithServiceTags(
+          { [myTags]: ['shared', 'common'], [ptr]: ['ptr only'] },
+          { file_id: 2, hash: 'b'.repeat(64) }
+        ),
+      ]);
+    }
+
+    it('makes no /get_services call when no selection is set', async () => {
+      addSplitFiles();
+      await syncFromHydrus();
+
+      expect(hydrusState.servicesRequestCount).toBe(0);
+      expect(await tagNamesFor('a'.repeat(64))).toEqual(['common', 'mine one', 'ptr only', 'shared']);
+    });
+
+    it('imports only the tags of the selected service', { timeout: 30000 }, async () => {
+      addSplitFiles();
+      await selectTagServices([myTags]);
+
+      const result = await syncFromHydrus();
+
+      expect(result.errors).toHaveLength(0);
+      expect(hydrusState.servicesRequestCount).toBe(1);
+      expect(await tagNamesFor('a'.repeat(64))).toEqual(['mine one', 'shared']);
+      expect(await tagNamesFor('b'.repeat(64))).toEqual(['common', 'shared']);
+      expect(await getTestPrisma().tag.findFirst({ where: { name: 'ptr only' } })).toBeNull();
+    });
+
+    it('removes PTR-only tags, deletes orphans and updates postCount after switching', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      addSplitFiles();
+      await syncFromHydrus();
+
+      expect((await prisma.tag.findFirst({ where: { name: 'common' } }))?.postCount).toBe(2);
+      expect((await prisma.tag.findFirst({ where: { name: 'ptr only' } }))?.postCount).toBe(2);
+
+      await selectTagServices([myTags]);
+      const result = await syncFromHydrus();
+
+      expect(result.errors).toHaveLength(0);
+      expect(await prisma.tag.findFirst({ where: { name: 'ptr only' } })).toBeNull();
+      expect(result.deletedTags).toBe(1);
+      // "common" survives only through file 2's local tag
+      expect((await prisma.tag.findFirst({ where: { name: 'common' } }))?.postCount).toBe(1);
+      expect((await prisma.tag.findFirst({ where: { name: 'shared' } }))?.postCount).toBe(2);
+      expect(await tagNamesFor('a'.repeat(64))).toEqual(['mine one', 'shared']);
+    });
+
+    it('fails closed when a selected service is missing', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      addSplitFiles();
+      await syncFromHydrus();
+      const tagCountBefore = await prisma.tag.count();
+      const postTagCountBefore = await prisma.postTag.count();
+      const searchesBefore = hydrusState.searchRequests.length;
+
+      const gone = 'bb'.repeat(32);
+      await selectTagServices([myTags, gone]);
+
+      await expect(syncFromHydrus()).rejects.toThrow(gone);
+
+      const state = await getSyncState();
+      expect(state?.status).toBe('error');
+      expect(state?.errorMessage).toContain(gone);
+      expect(hydrusState.searchRequests.length).toBe(searchesBefore);
+      expect(await prisma.post.count()).toBe(2);
+      expect(await prisma.tag.count()).toBe(tagCountBefore);
+      expect(await prisma.postTag.count()).toBe(postTagCountBefore);
+
+      // Lock released: the next sync can run
+      await selectTagServices([myTags]);
+      const result = await syncFromHydrus();
+      expect(result.phase).toBe('complete');
+    });
+
+    it('sends tag_service_key on a filtered sync with one selected service', { timeout: 30000 }, async () => {
+      addSplitFiles();
+      await selectTagServices([myTags]);
+
+      await syncFromHydrus({ tags: ['shared'] });
+      expect(hydrusState.searchRequests.at(-1)?.get('tag_service_key')).toBe(myTags);
+
+      // Full syncs search everything regardless of the selection
+      await syncFromHydrus();
+      expect(hydrusState.searchRequests.at(-1)?.has('tag_service_key')).toBe(false);
+
+      // "all known tags" means everything, so it is never sent as a narrowing key
+      await syncFromHydrus({
+        tags: ['shared'],
+        tagServiceSelection: { serviceKeys: [allKnownTags], includePending: false },
+      });
+      expect(hydrusState.searchRequests.at(-1)?.has('tag_service_key')).toBe(false);
+    });
+
+    it('writes the applied fingerprint only after a successful full sync', { timeout: 30000 }, async () => {
+      const prisma = getTestPrisma();
+      const readFingerprint = async () =>
+        (await prisma.settings.findUnique({ where: { key: TAG_SERVICE_SETTINGS_KEYS.APPLIED_FINGERPRINT } }))?.value ?? null;
+
+      addSplitFiles();
+      await selectTagServices([myTags]);
+
+      await syncFromHydrus({ tags: ['shared'] });
+      expect(await readFingerprint()).toBeNull();
+
+      // A full sync whose batches fail skips cleanup and must not claim the
+      // selection is applied
+      hydrusState.metadataError = new Error('boom');
+      hydrusState.metadataErrorStatusCode = 400;
+      const failed = await syncFromHydrus();
+      expect(failed.failedBatches).toBeGreaterThan(0);
+      expect(await readFingerprint()).toBeNull();
+
+      hydrusState.metadataError = undefined;
+      await syncFromHydrus();
+      expect(await readFingerprint()).toBe(selectionFingerprint({ serviceKeys: [myTags], includePending: false }));
+    });
+
+    it('imports pending tags when includePending is set', { timeout: 30000 }, async () => {
+      addFilesToState(hydrusState, [
+        createMockFileWithServiceTags(
+          { [ptr]: { '0': ['current tag'], '1': ['pending tag'] } },
+          { file_id: 1, hash: 'a'.repeat(64) }
+        ),
+      ]);
+
+      await syncFromHydrus({ tagServiceSelection: { serviceKeys: [ptr], includePending: true } });
+
+      expect(await tagNamesFor('a'.repeat(64))).toEqual(['current tag', 'pending tag']);
     });
   });
 });

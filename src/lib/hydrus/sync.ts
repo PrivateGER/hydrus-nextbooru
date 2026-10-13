@@ -18,6 +18,16 @@ import { withSpan, addSpanEvent } from "@/lib/tracing";
 import { computePhash, PHASH_SUPPORTED_MIMES, PHASH_ALGORITHM_VERSION } from "@/lib/phash";
 import { buildFilePath } from "@/lib/hydrus/paths";
 import { IncompleteLookupError, assertLookupComplete } from "./lookup-validation";
+import {
+  ALL_TAG_SERVICES_FILTER,
+  forEachDisplayTag,
+  getTagServiceSelection,
+  listTagServices,
+  markTagServiceSelectionApplied,
+  resolveSelection,
+  type TagServiceFilter,
+  type TagServiceSelection,
+} from "./tag-services";
 
 export const BATCH_SIZE = 512;
 const CONCURRENT_FILES = 20; // Process this many files in parallel
@@ -74,6 +84,8 @@ export interface SyncOptions {
   // admin API route decided the 409 via acquireSyncLock). Skips re-acquisition
   // so the caller's lock is not mistaken for a concurrent sync.
   lockAlreadyHeld?: boolean;
+  // Use this tag service selection instead of the stored setting (for tests).
+  tagServiceSelection?: TagServiceSelection;
 }
 
 // =============================================================================
@@ -118,7 +130,7 @@ interface BatchParseResult {
  * pre-population, and record per-file key lists so the per-file processing
  * phase never has to re-parse metadata.
  */
-function parseBatch(files: HydrusFileMetadata[]): BatchParseResult {
+function parseBatch(files: HydrusFileMetadata[], tagFilter: TagServiceFilter): BatchParseResult {
   const uniqueTags = new Map<string, { name: string; category: TagCategory }>();
   const uniqueGroups = new Map<string, GroupData>();
   const fileRefs: ParsedFileRefs[] = new Array(files.length);
@@ -129,7 +141,7 @@ function parseBatch(files: HydrusFileMetadata[]): BatchParseResult {
     // Tags: dedupe per file by normalized key (insertion order preserved)
     const tagKeys: string[] = [];
     const seenKeys = new Set<string>();
-    for (const tag of extractTags(file)) {
+    for (const tag of extractTags(file, tagFilter)) {
       const normalized = normalizeTagForStorage(tag);
       const key = `${normalized.category}:${normalized.name.toLowerCase()}`;
       if (seenKeys.has(key)) continue;
@@ -152,7 +164,7 @@ function parseBatch(files: HydrusFileMetadata[]): BatchParseResult {
     }
 
     // Title-based groups (from title: tags)
-    for (const titleGroup of extractTitleGroups(file)) {
+    for (const titleGroup of extractTitleGroups(file, tagFilter)) {
       const key = `${titleGroup.sourceType}:${titleGroup.sourceId}`;
       if (!uniqueGroups.has(key)) {
         uniqueGroups.set(key, {
@@ -314,7 +326,8 @@ async function processBatchWithPrepopulation(
   progress: SyncProgress,
   onProgress: (progress: SyncProgress) => void,
   persistProgress: (progress: SyncProgress) => Promise<void>,
-  phashSkipEnabled: boolean
+  phashSkipEnabled: boolean,
+  tagFilter: TagServiceFilter
 ): Promise<void> {
   return withSpan("sync.processBatch", async (batchSpan) => {
     batchSpan.setAttributes({
@@ -323,7 +336,7 @@ async function processBatchWithPrepopulation(
     });
 
     // Phase 1: Parse every file once, then pre-populate all unique tags/groups
-    const { uniqueTags, uniqueGroups, fileRefs } = parseBatch(files);
+    const { uniqueTags, uniqueGroups, fileRefs } = parseBatch(files, tagFilter);
 
     const tagIds = await withSpan("sync.bulkEnsureTags", async () => {
       return bulkEnsureTags(uniqueTags);
@@ -1154,6 +1167,17 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     // disables skip-by-hash instead of clearing the global table.
     const phashSkipEnabled = await ensurePhashVersion(isFullSync);
 
+    // Snapshot the tag service selection once so every batch of this run
+    // applies the same filter. Fails closed (before any write) when a
+    // selected service no longer exists in Hydrus: syncing anyway would
+    // strip that service's tags from every post.
+    const tagServiceSelection = options.tagServiceSelection ?? await getTagServiceSelection();
+    const tagFilter = await resolveTagFilter(client, tagServiceSelection);
+    // Narrow a tag-filtered search to the one selected service, so "sync by
+    // tags" matches the tags that sync would actually import.
+    const searchTagServiceKey =
+      !isFullSync && tagFilter.allowed?.size === 1 ? [...tagFilter.allowed][0] : undefined;
+
     // Search for files
     progress.phase = "searching";
     onProgress(progress);
@@ -1163,6 +1187,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
     // raw hashes array is not retained for the whole sync on top of the Set.
     let searchResult: HydrusSearchResponse | null = await client.searchFiles({
       tags: searchTags,
+      tagServiceKey: searchTagServiceKey,
       returnHashes: true,
     });
 
@@ -1250,7 +1275,8 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
             progress,
             onProgress,
             persistProgress,
-            phashSkipEnabled
+            phashSkipEnabled,
+            tagFilter
           );
 
           progress.phase = "fetching";
@@ -1326,6 +1352,7 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
       onProgress(progress);
 
       try {
+        let cleanupCompleted = false;
         if (!(await isSyncCancelled())) {
           progress.deletedPosts = await deleteRemovedPosts(hydrusHashes);
         }
@@ -1334,6 +1361,13 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
         }
         if (!(await isSyncCancelled())) {
           progress.deletedGroups = await deleteOrphanedGroups();
+          cleanupCompleted = true;
+        }
+        // Every post was re-parsed under this selection and tags it no
+        // longer imports were dropped, so the selection is now applied.
+        // Per-file failures keep their old tags, so they block this too.
+        if (cleanupCompleted && progress.errors.length === 0) {
+          await markTagServiceSelectionApplied(tagServiceSelection);
         }
       } catch (err) {
         const errorMsg = `Cleanup error: ${err instanceof Error ? err.message : String(err)}`;
@@ -1411,50 +1445,61 @@ export async function syncFromHydrus(options: SyncOptions = {}): Promise<SyncPro
 }
 
 /**
- * Extract tags from Hydrus metadata.
- * Defensively handles missing or malformed data.
+ * Resolve the per-sync tag filter. With no selection this makes no Hydrus
+ * call at all and reads every service (the historical behaviour).
  */
-function extractTags(metadata: HydrusFileMetadata): ReturnType<typeof parseTag>[] {
+async function resolveTagFilter(
+  client: HydrusClient,
+  selection: TagServiceSelection
+): Promise<TagServiceFilter> {
+  if (!selection.serviceKeys || selection.serviceKeys.length === 0) {
+    return { ...ALL_TAG_SERVICES_FILTER, includePending: selection.includePending };
+  }
+
+  const available = await listTagServices(client);
+  const { allowed, missing } = resolveSelection(selection, available);
+  if (missing.length > 0) {
+    throw new Error(
+      `Selected Hydrus tag service(s) not found: ${missing.join(", ")}. ` +
+      "Update the tag service selection in the admin panel before syncing."
+    );
+  }
+
+  syncLog.info(
+    { tagServices: allowed ? [...allowed] : "all", includePending: selection.includePending },
+    'Applying tag service selection'
+  );
+  return { allowed, includePending: selection.includePending };
+}
+
+/**
+ * Extract tags from Hydrus metadata, reading only the services (and
+ * statuses) the filter admits. Defaults to every service, current tags only.
+ * Defensively handles missing or malformed data.
+ *
+ * Exported for tests.
+ */
+export function extractTags(
+  metadata: HydrusFileMetadata,
+  filter: TagServiceFilter = ALL_TAG_SERVICES_FILTER
+): ReturnType<typeof parseTag>[] {
   const tags: ReturnType<typeof parseTag>[] = [];
   const seenTags = new Set<string>();
 
-  // Guard against missing tags object
-  if (!metadata.tags || typeof metadata.tags !== 'object') {
-    return tags;
-  }
-
   try {
-    // Use "all known tags" service or iterate all services
-    for (const [, serviceTags] of Object.entries(metadata.tags)) {
-      // Guard against missing service tags
-      if (!serviceTags || typeof serviceTags !== 'object') continue;
+    // Union of the admitted services' display tags (after sibling/parent
+    // processing). Unfiltered, this includes "all known tags" itself.
+    forEachDisplayTag(metadata, filter, (tag) => {
+      // Skip system tags
+      if (tag.startsWith("system:")) return;
 
-      // Use display tags (after sibling/parent processing)
-      const displayTags = serviceTags.display_tags;
+      // Deduplicate
+      const lower = tag.toLowerCase();
+      if (seenTags.has(lower)) return;
+      seenTags.add(lower);
 
-      // Guard against missing display_tags
-      if (!displayTags || typeof displayTags !== 'object') continue;
-
-      // Status "0" is current tags
-      const currentTags = displayTags["0"];
-
-      // Guard against missing or invalid current tags
-      if (!Array.isArray(currentTags)) continue;
-
-      for (const tag of currentTags) {
-        // Guard against non-string tags
-        if (typeof tag !== 'string' || !tag) continue;
-
-        // Skip system tags
-        if (tag.startsWith("system:")) continue;
-
-        // Deduplicate
-        if (seenTags.has(tag.toLowerCase())) continue;
-        seenTags.add(tag.toLowerCase());
-
-        tags.push(parseTag(tag));
-      }
-    }
+      tags.push(parseTag(tag));
+    });
   } catch (error) {
     // Log error but return what we have so far - don't crash the entire sync
     syncLog.error({ hash: metadata.hash, error: error instanceof Error ? error.message : String(error) }, 'Error extracting tags from file metadata');

@@ -4,6 +4,7 @@ import type {
   HydrusFilePathResponse,
   HydrusThumbnailPathResponse,
   HydrusVerifyAccessKeyResponse,
+  HydrusServicesResponse,
   HydrusFileSortType,
 } from "./types";
 import { hydrusLog } from "@/lib/logger";
@@ -92,7 +93,16 @@ export class HydrusClient {
     }
   }
 
-  private async request<T>(endpoint: string, params?: Record<string, unknown>): Promise<T> {
+  /**
+   * `maxRetries` caps transient-failure retries for interactive callers (e.g.
+   * an admin page probing reachability) that should fail fast instead of
+   * backing off for ~25s against a Hydrus that is simply down.
+   */
+  private async request<T>(
+    endpoint: string,
+    params?: Record<string, unknown>,
+    options?: { maxRetries?: number }
+  ): Promise<T> {
     return withSpan(
       `hydrus.${endpoint.replace(/^\//, "").replace(/\//g, ".")}`,
       async (span) => {
@@ -152,9 +162,12 @@ export class HydrusClient {
             const retryable = isRetryableHydrusError(error);
             // Timeouts burn up to the full deadline per attempt, so they get
             // a much smaller retry budget than cheap transient failures.
-            const maxRetries = isHydrusTimeoutError(error)
+            const defaultMaxRetries = isHydrusTimeoutError(error)
               ? HYDRUS_TIMEOUT_MAX_RETRIES
               : HYDRUS_REQUEST_MAX_RETRIES;
+            const maxRetries = options?.maxRetries !== undefined
+              ? Math.min(options.maxRetries, defaultMaxRetries)
+              : defaultMaxRetries;
 
             if (retryable && attempt < maxRetries) {
               const delayMs = getRetryDelayMs(attempt);
@@ -200,6 +213,14 @@ export class HydrusClient {
    */
   async verifyAccessKey(): Promise<HydrusVerifyAccessKeyResponse> {
     return this.request<HydrusVerifyAccessKeyResponse>("/verify_access_key");
+  }
+
+  /**
+   * List the client's services (tag, file, rating, ...), keyed by service key.
+   * Identify services by key and type only: names are user-editable.
+   */
+  async getServices(options?: { maxRetries?: number }): Promise<HydrusServicesResponse> {
+    return this.request<HydrusServicesResponse>("/get_services", undefined, options);
   }
 
   /**
