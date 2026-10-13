@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { InfoBox } from "@/components/ui/info-box";
 import { StatusBadge } from "./status-badge";
+import { TagServicesCard } from "./tag-services-card";
 import type { SyncStatus } from "@/types/admin";
+import type { UseTagServicesReturn } from "@/hooks/admin/use-tag-services";
 
 export interface SyncSectionProps {
   syncStatus: SyncStatus | null;
@@ -18,6 +20,7 @@ export interface SyncSectionProps {
   onCustomSync: () => void;
   onCancelSync: () => void;
   formatDate: (dateString: string | null) => string;
+  tagServices: UseTagServicesReturn;
 }
 
 export function SyncSection({
@@ -29,6 +32,7 @@ export function SyncSection({
   onCustomSync,
   onCancelSync,
   formatDate,
+  tagServices,
 }: SyncSectionProps) {
   return (
     <div className="space-y-5">
@@ -80,6 +84,8 @@ export function SyncSection({
           </div>
         )}
       </Card>
+
+      <TagServicesCard tagServices={tagServices} isSyncing={isSyncing} onFullSync={onFullSync} />
 
       <Card>
         <h3 className="mb-3 font-medium text-zinc-800 dark:text-zinc-200">Sync by Tags</h3>

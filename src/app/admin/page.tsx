@@ -16,6 +16,7 @@ import { usePhash } from "@/hooks/admin/use-phash";
 import { useTranslation } from "@/hooks/admin/use-translation";
 import { useEmbeddings } from "@/hooks/admin/use-embeddings";
 import { useOcr } from "@/hooks/admin/use-ocr";
+import { useTagServices } from "@/hooks/admin/use-tag-services";
 
 // UI Components
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -84,6 +85,7 @@ export default function AdminPage() {
   const translation = useTranslation(setMessage, triggerSuccessAnimation);
   const embeddings = useEmbeddings(setMessage, triggerSuccessAnimation);
   const ocr = useOcr(setMessage, triggerSuccessAnimation);
+  const tagServices = useTagServices(setMessage, triggerSuccessAnimation, sync.syncStatus?.status);
 
   // Handlers
   const handleLogout = async () => {
@@ -187,6 +189,7 @@ export default function AdminPage() {
             }}
             onCancelSync={sync.cancelSync}
             formatDate={formatDate}
+            tagServices={tagServices}
           />
         );
       case "thumbnails":

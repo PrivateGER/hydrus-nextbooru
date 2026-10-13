@@ -11,6 +11,26 @@ export interface SyncStatus {
   totalBatches: number;
 }
 
+export interface TagServiceInfo {
+  serviceKey: string;
+  name: string;
+  type: number;
+  typePretty: string;
+}
+
+export interface TagServiceSelection {
+  serviceKeys: string[] | null;
+  includePending: boolean;
+}
+
+export interface TagServicesStatus {
+  services: TagServiceInfo[] | null;
+  hydrusError?: string;
+  selection: TagServiceSelection;
+  missingKeys: string[];
+  pendingResync: boolean;
+}
+
 export interface ThumbnailStats {
   total: number;
   pending: number;
