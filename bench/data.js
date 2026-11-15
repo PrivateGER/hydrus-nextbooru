@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794740831519,
+  "lastUpdate": 1794744789928,
   "repoUrl": "https://github.com/PrivateGER/hydrus-nextbooru",
   "entries": {
     "API benchmarks": [
@@ -69572,6 +69572,352 @@ window.BENCHMARK_DATA = {
           {
             "name": "Co-occurrence search (3 selected) (p95)",
             "value": 43.787261000004946,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Latte macchiato",
+            "username": "PrivateGER",
+            "email": "privateger@privateger.me"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e10cc9431b679377b43f4f9b9f76d8a36d445263",
+          "message": "[release] Merge pull request #178 from PrivateGER/perf/search-and-autocomplete\n\nEstimate result count from heavy autocomplete matches + warm for you on boot",
+          "timestamp": "2026-09-30T17:00:49Z",
+          "url": "https://github.com/PrivateGER/hydrus-nextbooru/commit/e10cc9431b679377b43f4f9b9f76d8a36d445263"
+        },
+        "date": 1794744788611,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Groups: unfiltered random page (p50)",
+            "value": 106.02949799999624,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: unfiltered random page (p95)",
+            "value": 124.04127799999696,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: unfiltered newest page (p50)",
+            "value": 147.79470000000583,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: unfiltered newest page (p95)",
+            "value": 166.78752299999906,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: title query, random order (p50)",
+            "value": 102.53225499999826,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: title query, random order (p95)",
+            "value": 122.07030300000042,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: title query, newest order (p50)",
+            "value": 44.53012499999022,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: title query, newest order (p95)",
+            "value": 52.807884000008926,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: creator filter, random order (p50)",
+            "value": 122.30787799999234,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: creator filter, random order (p95)",
+            "value": 144.78311499999836,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: type filter PIXIV, newest order (p50)",
+            "value": 50.166184999994584,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Groups: type filter PIXIV, newest order (p95)",
+            "value": 64.59066500001063,
+            "unit": "ms",
+            "extra": "100 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (common word) (p50)",
+            "value": 138.1959100000022,
+            "unit": "ms",
+            "extra": "50 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (common word) (p95)",
+            "value": 192.33853400000226,
+            "unit": "ms",
+            "extra": "50 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (two words) (p50)",
+            "value": 280.86215500000253,
+            "unit": "ms",
+            "extra": "50 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (two words) (p95)",
+            "value": 441.52954399999726,
+            "unit": "ms",
+            "extra": "50 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (page 5) (p50)",
+            "value": 666.8161229999969,
+            "unit": "ms",
+            "extra": "30 iterations; dataset=large"
+          },
+          {
+            "name": "Notes search (page 5) (p95)",
+            "value": 775.8741379999992,
+            "unit": "ms",
+            "extra": "30 iterations; dataset=large"
+          },
+          {
+            "name": "Single tag search (p50)",
+            "value": 31.92294299999776,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Single tag search (p95)",
+            "value": 44.46255799999926,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "2-tag AND search (p50)",
+            "value": 64.60695500000293,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "2-tag AND search (p95)",
+            "value": 76.4463870000036,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "3-tag AND search (p50)",
+            "value": 99.1810869999972,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "3-tag AND search (p95)",
+            "value": 123.96755900000426,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Random order (page 1) (p50)",
+            "value": 0.5690920000015467,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Random order (page 1) (p95)",
+            "value": 0.7689040000004752,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Random order (wrap-around page) (p50)",
+            "value": 91.55220499999996,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Random order (wrap-around page) (p95)",
+            "value": 106.8664809999973,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Recommendations (uncached compute) (p50)",
+            "value": 54.49888499999361,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Recommendations (uncached compute) (p95)",
+            "value": 117.88021000000299,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (capped KNN) (p50)",
+            "value": 52.02410300000338,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (capped KNN) (p95)",
+            "value": 56.275990999994974,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (page 5 of cap) (p50)",
+            "value": 51.794581000001926,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (page 5 of cap) (p95)",
+            "value": 58.41804899999988,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (min-score filtered) (p50)",
+            "value": 52.74266699999862,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Semantic search (min-score filtered) (p95)",
+            "value": 57.84288499999093,
+            "unit": "ms",
+            "extra": "200 iterations; dataset=large"
+          },
+          {
+            "name": "Phash similar search (threshold 10) (p50)",
+            "value": 7.152427000000898,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Phash similar search (threshold 10) (p95)",
+            "value": 8.700095999996847,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Phash similar search (threshold 24) (p50)",
+            "value": 17.323601000000053,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Phash similar search (threshold 24) (p95)",
+            "value": 21.046840000002703,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Sync ingest (2000 files) (p50)",
+            "value": 3535.091018,
+            "unit": "ms",
+            "extra": "3 iterations; dataset=large"
+          },
+          {
+            "name": "Sync ingest (2000 files) (p95)",
+            "value": 4289.817759,
+            "unit": "ms",
+            "extra": "3 iterations; dataset=large"
+          },
+          {
+            "name": "Sync re-sync unchanged (2000 files) (p50)",
+            "value": 482.85393399999884,
+            "unit": "ms",
+            "extra": "3 iterations; dataset=large"
+          },
+          {
+            "name": "Sync re-sync unchanged (2000 files) (p95)",
+            "value": 516.5012380000007,
+            "unit": "ms",
+            "extra": "3 iterations; dataset=large"
+          },
+          {
+            "name": "Simple tag search (q=general) (p50)",
+            "value": 6.89840600000025,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Simple tag search (q=general) (p95)",
+            "value": 9.110509999998612,
+            "unit": "ms",
+            "extra": "300 iterations; dataset=large"
+          },
+          {
+            "name": "Grouped creator autocomplete (q=artist) (p50)",
+            "value": 45.51717800000915,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Grouped creator autocomplete (q=artist) (p95)",
+            "value": 978.8715119999979,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (1 selected) (p50)",
+            "value": 41.66613500000676,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (1 selected) (p95)",
+            "value": 53.99330899999768,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (2 selected) (p50)",
+            "value": 47.2381549999991,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (2 selected) (p95)",
+            "value": 55.057256999993115,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (3 selected) (p50)",
+            "value": 60.19670899999619,
+            "unit": "ms",
+            "extra": "150 iterations; dataset=large"
+          },
+          {
+            "name": "Co-occurrence search (3 selected) (p95)",
+            "value": 74.30760999998893,
             "unit": "ms",
             "extra": "150 iterations; dataset=large"
           }
