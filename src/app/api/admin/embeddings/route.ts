@@ -12,7 +12,7 @@ import {
 } from "@/lib/embeddings";
 import { verifyAdminSession } from "@/lib/auth";
 import { apiLog, aiLog } from "@/lib/logger";
-import { clearTasteCaches, invalidateFeedCache } from "@/lib/feed";
+import { clearFeedNeighborCache, clearTasteCaches, invalidateFeedCache } from "@/lib/feed";
 import { invalidateEmbeddingCalibration } from "@/lib/embeddings/calibration";
 import { createBatchRunner } from "@/lib/batch-runner";
 
@@ -133,7 +133,12 @@ export async function POST(request: NextRequest) {
                 "Failed to invalidate embedding calibration after batch"
               );
             })
-            .finally(() => invalidateFeedCache());
+            .finally(() => {
+              // Newly embedded posts can only reach "favorites" retrieval
+              // once the members' cached neighbor lists are refetched.
+              clearFeedNeighborCache();
+              invalidateFeedCache();
+            });
         },
       }
     );

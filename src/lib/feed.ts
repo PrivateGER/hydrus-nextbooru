@@ -11,11 +11,18 @@
  * Group and perceptual duplicate removal happen before the final feed cap.
  * When embeddings are disabled or no signal is embedded, a small tag-only
  * fallback uses the newest collapsed favorites.
+ *
+ * `FeedConfig.retrieval` selects where candidates come from. "centroid" is
+ * the path described above. "favorites" keeps the clusters for page quotas
+ * but retrieves each taste member's own nearest neighbors, because the posts
+ * nearest an average of many favorites are generic and leave most individual
+ * favorites' closest matches unretrieved.
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
 import {
   findNearestByVector,
+  findRelatedPostsByEmbeddingForPosts,
   getEmbeddingVectorsForPosts,
   getMaxSimilarityToReferences,
 } from "@/lib/embeddings/store";
@@ -38,9 +45,32 @@ import {
   fitTasteModel,
   normalizeRows,
   type TasteMember,
+  type TasteModel,
 } from "@/lib/taste";
 
+export type FeedRetrieval = "centroid" | "favorites";
+
 export interface FeedConfig {
+  /**
+   * Candidate source. "centroid": fixed-LIMIT ANN around each cluster
+   * centroid, then the centroid floor and member gate. "favorites": every
+   * taste member's own nearest neighbors, gated by {@link memberGate} and
+   * ranked by {@link rankMemberNeighbors}; clusters still set page quotas.
+   * Overridable at process start with FEED_RETRIEVAL.
+   */
+  retrieval: FeedRetrieval;
+  /** Nearest neighbors kept per taste member in "favorites" retrieval (the store caps this at 20). */
+  neighborsPerMember: number;
+  /** Exponent on a member's recency weight when scoring its neighbors: 0 ignores recency, 1 is linear. */
+  memberWeightExponent: number;
+  /**
+   * Multiplier per step down a member's own neighbor list. Below 1, every
+   * member's best match outranks another member's distant ones, so a cluster's
+   * page slots spread across its favorites instead of a few recent ones.
+   */
+  neighborRankDecay: number;
+  /** Multiplier on each further member that retrieved the same candidate (0 = best member only). */
+  convergenceDecay: number;
   /** Number of spherical taste clusters fitted to embedded signals. */
   clusterCount: number;
   /** Clusters smaller than this are merged into their nearest survivor. */
@@ -88,6 +118,11 @@ export interface FeedConfig {
 }
 
 export const FEED_CONFIG: FeedConfig = {
+  retrieval: process.env.FEED_RETRIEVAL === "favorites" ? "favorites" : "centroid",
+  neighborsPerMember: 20,
+  memberWeightExponent: 0.5,
+  neighborRankDecay: 0.85,
+  convergenceDecay: 0.5,
   clusterCount: 16,
   minClusterSize: 3,
   clusterIterations: 30,
@@ -149,6 +184,14 @@ const SIGNAL_COLLAPSE_OVERFETCH = 4;
 const FALLBACK_FAVORITE_COUNT = 90;
 const FALLBACK_NEIGHBOR_COUNT = 20;
 const SEED_SAMPLE_BUCKET_MS = 3_600_000;
+/**
+ * Members whose neighbor lists are fetched per store call in "favorites"
+ * retrieval. The store runs every 16-seed chunk of a call in parallel, so 64
+ * keeps a cold fill at four concurrent ANN statements instead of one per
+ * chunk of the whole member set (measured on prod: 19 ms per member at two
+ * concurrent statements, about 21 s for 1,110 members).
+ */
+const MEMBER_NEIGHBOR_BATCH = 64;
 
 /** Deterministic 32-bit PRNG retained for taste-model reproducibility helpers. */
 export function mulberry32(seed: number): () => number {
@@ -245,6 +288,58 @@ export function mergeSeedCandidates(
     }
   }
   return [...byId.values()].sort((a, b) => b.score - a.score || a.id - b.id);
+}
+
+export interface MemberNeighborhood {
+  /** Recency weight of the taste member these neighbors were retrieved for. */
+  weight: number;
+  /** Eligible neighbors, nearest first, with calibrated similarity in [0, 1]. */
+  neighbors: readonly { id: number; score: number }[];
+}
+
+/**
+ * Rank one cluster's candidates in "favorites" retrieval.
+ *
+ * A member contributes `weight^memberWeightExponent * similarity *
+ * neighborRankDecay^rank` for the neighbor at `rank` in its own list. A
+ * candidate retrieved by several members takes its strongest contribution in
+ * full and each further one discounted by another factor of
+ * `convergenceDecay`, so agreement lifts a candidate without letting a dense
+ * knot of favorites drown everything else.
+ */
+export function rankMemberNeighbors(
+  neighborhoods: readonly MemberNeighborhood[],
+  config: Pick<
+    FeedConfig,
+    "memberWeightExponent" | "neighborRankDecay" | "convergenceDecay"
+  > = FEED_CONFIG
+): { id: number; score: number }[] {
+  const contributionsById = new Map<number, number[]>();
+  for (const { weight, neighbors } of neighborhoods) {
+    const strength = Math.pow(Math.max(0, weight), config.memberWeightExponent);
+    let rankFactor = 1;
+    for (const neighbor of neighbors) {
+      const contribution =
+        strength * Math.max(0, Math.min(1, neighbor.score)) * rankFactor;
+      rankFactor *= config.neighborRankDecay;
+      if (!(contribution > 0)) continue;
+      const existing = contributionsById.get(neighbor.id);
+      if (existing) existing.push(contribution);
+      else contributionsById.set(neighbor.id, [contribution]);
+    }
+  }
+  const ranked: { id: number; score: number }[] = [];
+  for (const [id, contributions] of contributionsById) {
+    contributions.sort((a, b) => b - a);
+    let score = 0;
+    let discount = 1;
+    for (const contribution of contributions) {
+      score += contribution * discount;
+      discount *= config.convergenceDecay;
+    }
+    ranked.push({ id, score });
+  }
+  return ranked.sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
 /** Give newly-imported candidates a small, time-decayed first-look window. */
@@ -364,10 +459,195 @@ interface FeedCentroidCache {
   centroids: Float32Array;
 }
 
+/**
+ * Per-member nearest-neighbor lists for "favorites" retrieval (raw cosine,
+ * nearest first). A member's neighbors only change when embeddings are added
+ * or removed, so lists are fetched once per member and reused across feed
+ * rebuilds: a favorite/dismissal rebuild issues no ANN statements beyond the
+ * members it has not seen. Dropped by {@link clearFeedNeighborCache} when the
+ * embedding store changes.
+ */
+interface FeedNeighborCache {
+  key: string;
+  neighbors: Map<number, { id: number; score: number }[]>;
+  /** Tail of the fill queue: fills run one at a time, so overlapping builds never fetch a member twice. */
+  pending: Promise<void>;
+}
+
 const globalForTaste = globalThis as unknown as {
   __feedVectors?: FeedVectorCache;
   __feedCentroids?: FeedCentroidCache;
+  __feedNeighbors?: FeedNeighborCache;
 };
+
+type CandidatesByCluster = Map<number, { id: number; score: number }[]>;
+
+/**
+ * "centroid" retrieval: one fixed-LIMIT ANN scan per cluster centroid, the
+ * calibrated centroid floor, then (for favorite-backed clusters) the member
+ * gate against the cluster's real favorites.
+ */
+async function retrieveFromCentroids(
+  model: TasteModel,
+  embeddingConfig: EmbeddingConfig,
+  excluded: ReadonlySet<number>,
+  config: FeedConfig
+): Promise<{ baseline: number; candidatesByCluster: CandidatesByCluster }> {
+  const [baseline, neighborhoods] = await Promise.all([
+    getEmbeddingBaseline(embeddingConfig),
+    Promise.all(
+      model.clusters.map((cluster) =>
+        findNearestByVector({
+          vector: cluster.centroid,
+          config: embeddingConfig,
+          limit: config.neighborsPerCluster,
+        })
+      )
+    ),
+  ]);
+  const candidatesByCluster: CandidatesByCluster = new Map();
+  for (let index = 0; index < model.clusters.length; index++) {
+    const cluster = model.clusters[index];
+    const candidates = neighborhoods[index]
+      .map((neighbor) => ({
+        id: neighbor.postId,
+        score: calibrateEmbeddingScore(neighbor.score, baseline),
+      }))
+      .filter(
+        (candidate) =>
+          candidate.score >= config.minEmbeddingScore &&
+          !excluded.has(candidate.id)
+      );
+    candidatesByCluster.set(cluster.index, candidates);
+  }
+
+  await Promise.all(
+    model.clusters.map(async (cluster) => {
+      const candidates = candidatesByCluster.get(cluster.index) ?? [];
+      if (cluster.favoritePostIds.length === 0 || candidates.length === 0) return;
+      const similarities = await getMaxSimilarityToReferences({
+        candidateIds: candidates.map((candidate) => candidate.id),
+        referenceIds: cluster.favoritePostIds,
+        config: embeddingConfig,
+      });
+      candidatesByCluster.set(
+        cluster.index,
+        candidates.filter((candidate) => {
+          const raw = similarities.get(candidate.id);
+          return (
+            raw !== undefined &&
+            calibrateEmbeddingScore(raw, baseline) >= config.memberGate
+          );
+        })
+      );
+    })
+  );
+  return { baseline, candidatesByCluster };
+}
+
+/**
+ * Make sure every listed member has a cached neighbor list, fetching the
+ * missing ones in sequential batches. Fills are serialized through
+ * `cache.pending`, and each fill recomputes what is still missing once it
+ * reaches the front, so a rebuild that overlaps a cold fill waits for it
+ * instead of repeating its statements. A member with no neighbors is cached
+ * as an empty list.
+ */
+async function ensureMemberNeighbors(
+  cache: FeedNeighborCache,
+  memberIds: readonly number[],
+  embeddingConfig: EmbeddingConfig,
+  limit: number
+): Promise<void> {
+  const fill = cache.pending
+    .catch(() => undefined)
+    .then(async () => {
+      const missing = memberIds.filter((postId) => !cache.neighbors.has(postId));
+      for (let offset = 0; offset < missing.length; offset += MEMBER_NEIGHBOR_BATCH) {
+        const batch = missing.slice(offset, offset + MEMBER_NEIGHBOR_BATCH);
+        const related = await findRelatedPostsByEmbeddingForPosts({
+          postIds: batch,
+          config: embeddingConfig,
+          limit,
+        });
+        for (const postId of batch) {
+          cache.neighbors.set(
+            postId,
+            (related.get(postId) ?? []).map((post) => ({
+              id: post.id,
+              score: post.score,
+            }))
+          );
+        }
+      }
+    });
+  cache.pending = fill;
+  await fill;
+}
+
+/**
+ * "favorites" retrieval: each cluster's candidates are its members' own
+ * nearest neighbors. A neighbor is eligible when it is not excluded and its
+ * calibrated similarity to that member clears the member gate; eligible
+ * neighbors are then merged per cluster by {@link rankMemberNeighbors}.
+ * There is no centroid floor: a candidate is close to a real signal by
+ * construction.
+ */
+async function retrieveFromMembers(
+  model: TasteModel,
+  members: readonly TasteMember[],
+  currentMemberIds: ReadonlySet<number>,
+  embeddingConfig: EmbeddingConfig,
+  cacheKey: string,
+  excluded: ReadonlySet<number>,
+  config: FeedConfig
+): Promise<{ baseline: number; candidatesByCluster: CandidatesByCluster }> {
+  const limit = Math.max(1, Math.floor(config.neighborsPerMember));
+  const neighborKey = `${cacheKey}|${limit}`;
+  let cache = globalForTaste.__feedNeighbors;
+  if (!cache || cache.key !== neighborKey) {
+    cache = { key: neighborKey, neighbors: new Map(), pending: Promise.resolve() };
+    globalForTaste.__feedNeighbors = cache;
+  }
+  const [baseline] = await Promise.all([
+    getEmbeddingBaseline(embeddingConfig),
+    ensureMemberNeighbors(
+      cache,
+      members.map((member) => member.postId),
+      embeddingConfig,
+      limit
+    ),
+  ]);
+  for (const postId of cache.neighbors.keys()) {
+    if (!currentMemberIds.has(postId)) cache.neighbors.delete(postId);
+  }
+
+  const weightByPostId = new Map(
+    members.map((member) => [member.postId, member.weight])
+  );
+  const candidatesByCluster: CandidatesByCluster = new Map();
+  for (const cluster of model.clusters) {
+    const neighborhoods: MemberNeighborhood[] = cluster.memberPostIds.map(
+      (postId) => ({
+        weight: weightByPostId.get(postId) ?? 0,
+        neighbors: (cache.neighbors.get(postId) ?? [])
+          .map((neighbor) => ({
+            id: neighbor.id,
+            score: calibrateEmbeddingScore(neighbor.score, baseline),
+          }))
+          .filter(
+            (neighbor) =>
+              neighbor.score >= config.memberGate && !excluded.has(neighbor.id)
+          ),
+      })
+    );
+    candidatesByCluster.set(
+      cluster.index,
+      rankMemberNeighbors(neighborhoods, config)
+    );
+  }
+  return { baseline, candidatesByCluster };
+}
 
 function embeddingConfigKey(config: EmbeddingConfig): string {
   return [
@@ -682,60 +962,18 @@ async function buildFeedUnsafe(
       return { feed: [], degraded: true };
     }
 
-    const baselinePromise = getEmbeddingBaseline(embeddingConfig);
-    const annPromise = Promise.all(
-      model.clusters.map((cluster) =>
-        findNearestByVector({
-          vector: cluster.centroid,
-          config: embeddingConfig,
-          limit: config.neighborsPerCluster,
-        })
-      )
-    );
-    const [baseline, neighborhoods] = await Promise.all([
-      baselinePromise,
-      annPromise,
-    ]);
-    const candidatesByCluster = new Map<
-      number,
-      { id: number; score: number }[]
-    >();
-    for (let index = 0; index < model.clusters.length; index++) {
-      const cluster = model.clusters[index];
-      const candidates = neighborhoods[index]
-        .map((neighbor) => ({
-          id: neighbor.postId,
-          score: calibrateEmbeddingScore(neighbor.score, baseline),
-        }))
-        .filter(
-          (candidate) =>
-            candidate.score >= config.minEmbeddingScore &&
-            !excluded.has(candidate.id)
-        );
-      candidatesByCluster.set(cluster.index, candidates);
-    }
-
-    await Promise.all(
-      model.clusters.map(async (cluster) => {
-        const candidates = candidatesByCluster.get(cluster.index) ?? [];
-        if (cluster.favoritePostIds.length === 0 || candidates.length === 0) return;
-        const similarities = await getMaxSimilarityToReferences({
-          candidateIds: candidates.map((candidate) => candidate.id),
-          referenceIds: cluster.favoritePostIds,
-          config: embeddingConfig,
-        });
-        candidatesByCluster.set(
-          cluster.index,
-          candidates.filter((candidate) => {
-            const raw = similarities.get(candidate.id);
-            return (
-              raw !== undefined &&
-              calibrateEmbeddingScore(raw, baseline) >= config.memberGate
-            );
-          })
-        );
-      })
-    );
+    const { baseline, candidatesByCluster } =
+      config.retrieval === "favorites"
+        ? await retrieveFromMembers(
+            model,
+            embeddedMembers,
+            currentMemberIds,
+            embeddingConfig,
+            cacheKey,
+            excluded,
+            config
+          )
+        : await retrieveFromCentroids(model, embeddingConfig, excluded, config);
 
     if (dismissedIds.length > 0) {
       const allCandidateIds = [
@@ -965,6 +1203,18 @@ export function clearFeedCache(): void {
 export function clearTasteCaches(): void {
   globalForTaste.__feedVectors = undefined;
   globalForTaste.__feedCentroids = undefined;
+  clearFeedNeighborCache();
+}
+
+/**
+ * Drop the cached per-member neighbor lists used by "favorites" retrieval.
+ * Required whenever embeddings are ADDED as well as removed: a cached list
+ * is a member's top neighbors at fetch time, so a newly embedded post can
+ * only enter the feed once the lists are refetched. Vectors and centroids
+ * are unaffected by additions and are left alone.
+ */
+export function clearFeedNeighborCache(): void {
+  globalForTaste.__feedNeighbors = undefined;
 }
 
 /**

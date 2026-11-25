@@ -4,6 +4,7 @@ import type { EmbeddingConfig } from "@/lib/embeddings/settings";
 const mocks = vi.hoisted(() => ({
   vectors: vi.fn(),
   nearest: vi.fn(),
+  related: vi.fn(),
   maxSimilarity: vi.fn(),
   tagNeighborhoods: vi.fn(),
   favoriteFindMany: vi.fn(),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/embeddings/store", () => ({
   getEmbeddingVectorsForPosts: mocks.vectors,
   findNearestByVector: mocks.nearest,
+  findRelatedPostsByEmbeddingForPosts: mocks.related,
   getMaxSimilarityToReferences: mocks.maxSimilarity,
 }));
 vi.mock("@/lib/recommendations", () => ({
@@ -61,6 +63,7 @@ import {
   getFeedPage,
   invalidateFeedCache,
   mergeSeedCandidates,
+  rankMemberNeighbors,
   seedWeight,
   selectViewSeeds,
   settleFeedRebuild,
@@ -162,6 +165,9 @@ beforeEach(async () => {
     )
   );
   mocks.nearest.mockResolvedValue([{ postId: 10, score: 0.9 }]);
+  mocks.related.mockImplementation(({ postIds }: { postIds: number[] }) =>
+    Promise.resolve(new Map(postIds.map((postId) => [postId, []])))
+  );
   mocks.maxSimilarity.mockImplementation(
     ({ candidateIds }: { candidateIds: number[] }) =>
       Promise.resolve(new Map(candidateIds.map((id) => [id, 0.9])))
@@ -790,6 +796,159 @@ describe("member and retrieval pipeline behavior", () => {
       (call) => call[0].referenceIds as number[]
     );
     expect(referenceLists.every((ids) => ids.length > 0 && !ids.includes(9))).toBe(true);
+  });
+});
+
+describe("favorites retrieval", () => {
+  const FAVORITES_CONFIG: FeedConfig = { ...TEST_CONFIG, retrieval: "favorites" };
+  /** Store-shaped neighbor lists: member id -> [neighbor id, raw cosine][]. */
+  function relatedFrom(lists: Record<number, [number, number][]>) {
+    return ({ postIds }: { postIds: number[] }) =>
+      Promise.resolve(
+        new Map(
+          postIds.map((postId) => [
+            postId,
+            (lists[postId] ?? []).map(([id, score]) => ({ ...card(id), score })),
+          ])
+        )
+      );
+  }
+
+  it("ranks each member's best match above another member's distant ones", () => {
+    const ranked = rankMemberNeighbors(
+      [
+        { weight: 1, neighbors: [{ id: 1, score: 0.9 }, { id: 2, score: 0.9 }, { id: 3, score: 0.9 }] },
+        { weight: 1, neighbors: [{ id: 4, score: 0.8 }] },
+      ],
+      { memberWeightExponent: 0.5, neighborRankDecay: 0.5, convergenceDecay: 0.5 }
+    );
+
+    expect(ranked.map((entry) => entry.id)).toEqual([1, 4, 2, 3]);
+    expect(ranked[2].score).toBeCloseTo(0.45);
+  });
+
+  it("applies the recency exponent and a diminishing convergence bonus", () => {
+    const config = { memberWeightExponent: 0.5, neighborRankDecay: 1, convergenceDecay: 0.5 };
+    const ranked = rankMemberNeighbors(
+      [
+        { weight: 1, neighbors: [{ id: 1, score: 0.6 }, { id: 2, score: 0.7 }] },
+        { weight: 0.25, neighbors: [{ id: 1, score: 0.8 }, { id: 3, score: 1 }] },
+        { weight: 0, neighbors: [{ id: 9, score: 1 }] },
+      ],
+      config
+    );
+
+    // id 1: 0.6 in full plus half of sqrt(0.25) * 0.8; a zero-weight member adds nothing.
+    expect(ranked.map((entry) => entry.id)).toEqual([1, 2, 3]);
+    expect(ranked[0].score).toBeCloseTo(0.8);
+    expect(ranked[1].score).toBeCloseTo(0.7);
+    expect(ranked[2].score).toBeCloseTo(0.5);
+    expect(
+      rankMemberNeighbors(
+        [{ weight: 0.25, neighbors: [{ id: 3, score: 1 }] }],
+        { ...config, memberWeightExponent: 0 }
+      )[0].score
+    ).toBeCloseTo(1);
+  });
+
+  it("retrieves from members instead of centroids and applies the gate, exclusions and dismissals", async () => {
+    // Pin the clock so both favorites carry weight 1.
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.baseline.mockResolvedValue(0.5);
+    mocks.dismissalFindMany.mockResolvedValue([{ postId: 9 }]);
+    mocks.postGroupFindMany.mockImplementation(
+      (args: { where?: { group?: unknown } }) =>
+        Promise.resolve(args.where?.group ? [{ postId: 99 }] : [])
+    );
+    mocks.related.mockImplementation(
+      relatedFrom({
+        // 2 is a favorite, 9 dismissed, 99 a favorite's sibling, 103 below the gate.
+        1: [[2, 0.99], [9, 0.99], [99, 0.99], [101, 0.9], [102, 0.8], [103, 0.6]],
+        2: [[201, 0.9], [202, 0.8]],
+      })
+    );
+    mocks.maxSimilarity.mockImplementation(
+      ({ candidateIds }: { candidateIds: number[] }) =>
+        Promise.resolve(new Map(candidateIds.map((id) => [id, id === 202 ? 0.95 : 0.1])))
+    );
+
+    const feed = await buildFeed({ ...FAVORITES_CONFIG, memberGate: 0.5 });
+
+    expect(feed.map((post) => post.id).sort()).toEqual([101, 102, 201]);
+    // Calibrated at baseline 0.5: raw 0.9 -> 0.8 for the member's first neighbor.
+    expect(feed.find((post) => post.id === 101)?.score).toBeCloseTo(0.8);
+    expect(mocks.nearest).not.toHaveBeenCalled();
+    // Only the dismissal-radius check runs; there is no centroid member gate.
+    expect(mocks.maxSimilarity).toHaveBeenCalledTimes(1);
+    expect(mocks.maxSimilarity.mock.calls[0][0].referenceIds).toEqual([9]);
+    expect(mocks.related.mock.calls[0][0].limit).toBe(FAVORITES_CONFIG.neighborsPerMember);
+  });
+
+  it("reaches a favorite's own neighbors that the centroid scan misses", async () => {
+    // One cluster of three: two favorites near each other and one apart.
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1), favorite(3), favorite(2)]);
+    const oneCluster = { ...TEST_CONFIG, clusterCount: 1 };
+    mocks.nearest.mockResolvedValue([{ postId: 101, score: 0.9 }]);
+    mocks.related.mockImplementation(
+      relatedFrom({ 1: [[101, 0.9]], 3: [[101, 0.9]], 2: [[201, 0.9]] })
+    );
+
+    const centroid = await buildFeed(oneCluster);
+    clearFeedCache();
+    const favorites = await buildFeed({ ...oneCluster, retrieval: "favorites" });
+
+    expect(centroid.map((post) => post.id)).toEqual([101]);
+    expect(favorites.map((post) => post.id)).toEqual([101, 201]);
+  });
+
+  it("fetches each member's neighbors once and only new members on later builds", async () => {
+    mocks.related.mockImplementation(relatedFrom({ 1: [[101, 0.9]], 2: [[201, 0.9]], 3: [[301, 0.9]] }));
+
+    await buildFeed(FAVORITES_CONFIG);
+    await buildFeed(FAVORITES_CONFIG);
+    expect(mocks.related).toHaveBeenCalledTimes(1);
+    expect(mocks.related.mock.calls[0][0].postIds).toEqual([1, 2]);
+
+    mocks.favoriteFindMany.mockResolvedValue([favorite(3), favorite(1), favorite(2)]);
+    const feed = await buildFeed(FAVORITES_CONFIG);
+    expect(mocks.related).toHaveBeenCalledTimes(2);
+    expect(mocks.related.mock.calls[1][0].postIds).toEqual([3]);
+    expect(feed.map((post) => post.id).sort()).toEqual([101, 201, 301]);
+
+    clearFeedCache();
+    await buildFeed(FAVORITES_CONFIG);
+    expect(mocks.related).toHaveBeenCalledTimes(3);
+    expect(mocks.related.mock.calls[2][0].postIds).toHaveLength(3);
+  });
+
+  it("does not refetch a member when overlapping builds share a cold fill", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.related.mockImplementation(async (args: { postIds: number[] }) => {
+      await gate;
+      return relatedFrom({ 1: [[101, 0.9]], 2: [[201, 0.9]] })(args);
+    });
+
+    const first = buildFeed(FAVORITES_CONFIG);
+    const second = buildFeed(FAVORITES_CONFIG);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(mocks.related).toHaveBeenCalledTimes(1);
+    expect(a.map((post) => post.id)).toEqual(b.map((post) => post.id));
+  });
+
+  it("reports a degraded build when the neighbor lookup rejects", async () => {
+    mocks.related.mockRejectedValue(new Error("vector store down"));
+
+    await expect(buildFeed(FAVORITES_CONFIG)).resolves.toEqual([]);
+
+    mocks.related.mockImplementation(relatedFrom({ 1: [[101, 0.9]] }));
+    const feed = await buildFeed(FAVORITES_CONFIG);
+    expect(feed.map((post) => post.id)).toEqual([101]);
   });
 });
 
