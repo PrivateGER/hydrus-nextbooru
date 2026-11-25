@@ -14,6 +14,9 @@
  *     [--seeds 6]            hourly seeds compared in the stability section
  *     [--k 8,16,24,32,48]    cluster counts compared in the sweep
  *     [--no-funnel]          skip the ANN retrieval funnel (in-memory only)
+ *     [--neighbors 10]       also look up each favorite's own nearest posts
+ *                            (one ANN lookup per favorite, in small batches)
+ *                            and check how many reach the candidate pool
  *
  * Every session is opened with default_transaction_read_only=on and the
  * script aborts unless Postgres confirms it, so it cannot write. It also
@@ -30,14 +33,17 @@ interface Args {
   seeds: number;
   ks: number[];
   funnel: boolean;
+  neighbors: number;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { seeds: 6, ks: [8, 16, 24, 32, 48], funnel: true };
+  const args: Args = { seeds: 6, ks: [8, 16, 24, 32, 48], funnel: true, neighbors: 0 };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (flag === "--no-funnel") {
       args.funnel = false;
+    } else if (flag === "--neighbors") {
+      args.neighbors = Math.min(20, Math.max(1, Number.parseInt(argv[++index] ?? "", 10) || 10));
     } else if (flag === "--seeds") {
       args.seeds = Math.max(2, Number.parseInt(argv[++index] ?? "", 10) || args.seeds);
     } else if (flag === "--k") {
@@ -49,6 +55,9 @@ function parseArgs(argv: string[]): Args {
     } else {
       throw new Error(`Unknown argument: ${flag}`);
     }
+  }
+  if (args.neighbors > 0 && !args.funnel) {
+    throw new Error("--neighbors needs the retrieval funnel; drop --no-funnel");
   }
   return args;
 }
@@ -89,8 +98,12 @@ async function main(): Promise<void> {
   const { FEED_CONFIG, collapseSignalsByGroup, seedWeight, selectViewSeeds } =
     await import("@/lib/feed");
   const { fitTasteModel, normalizeRows } = await import("@/lib/taste");
-  const { findNearestByVector, getEmbeddingVectorsForPosts, getMaxSimilarityToReferences } =
-    await import("@/lib/embeddings/store");
+  const {
+    findNearestByVector,
+    findRelatedPostsByEmbeddingForPosts,
+    getEmbeddingVectorsForPosts,
+    getMaxSimilarityToReferences,
+  } = await import("@/lib/embeddings/store");
   const { calibrateEmbeddingScore, estimateEmbeddingBaseline } = await import(
     "@/lib/embeddings/calibration"
   );
@@ -396,6 +409,7 @@ async function main(): Promise<void> {
       survivors: number[];
     }
     const funnels = new Map<number, Funnel>();
+    const excluded = new Set<number>();
     if (args.funnel) {
       progress("running the retrieval funnel (one ANN query per cluster)");
       const siblingRows = await prisma.postGroup.findMany({
@@ -413,11 +427,13 @@ async function main(): Promise<void> {
         },
         select: { postId: true },
       });
-      const excluded = new Set<number>([
+      for (const postId of [
         ...favorites.map((favorite) => favorite.postId),
         ...dismissedIds,
         ...siblingRows.map((row) => row.postId),
-      ]);
+      ]) {
+        excluded.add(postId);
+      }
       for (const cluster of model.clusters) {
         const neighbors = await findNearestByVector({
           vector: cluster.centroid,
@@ -475,6 +491,7 @@ async function main(): Promise<void> {
     );
     const order = [...model.clusters].sort((a, b) => b.mass - a.mass);
     let totalOutOfReach = 0;
+    const outOfReachFavorites = new Set<number>();
     printTable(
       [
         "cluster",
@@ -498,9 +515,11 @@ async function main(): Promise<void> {
           (row) => calibrated(sims[row]) < config.minEmbeddingScore
         ).length;
         const funnel = funnels.get(cluster.index);
-        const outOfReach = funnel
-          ? favoriteRows.filter((row) => sims[row] < funnel.radius).length
-          : 0;
+        const outOfReachRows = funnel
+          ? favoriteRows.filter((row) => sims[row] < funnel.radius)
+          : [];
+        for (const row of outOfReachRows) outOfReachFavorites.add(embedded[row].postId);
+        const outOfReach = outOfReachRows.length;
         totalOutOfReach += outOfReach;
         return [
           cluster.index,
@@ -548,11 +567,96 @@ async function main(): Promise<void> {
       );
       console.log(
         `${totalOutOfReach} of ${embeddedFavorites} favorites lie outside their cluster's ` +
-          `${config.neighborsPerCluster}-neighbor reach, so their neighborhoods are not retrieved at all.`
+          `${config.neighborsPerCluster}-neighbor reach (a proxy: --neighbors measures their neighborhoods directly).`
       );
       console.log(
         `${uniqueSurvivors.size} unique candidates survive every gate ` +
           `(feed cap ${config.maxFeedSize}; group and duplicate collapse can only lower this).`
+      );
+    }
+
+    // ---- 3b. Direct check: each favorite's own nearest posts vs the pool ----
+    if (args.neighbors > 0) {
+      const pool = new Set([...funnels.values()].flatMap((funnel) => funnel.survivors));
+      const favoriteIds = embedded
+        .filter((member) => member.kind === "favorite")
+        .map((member) => member.postId);
+      // Small sequential batches: the store runs every 16-seed chunk of a call
+      // in parallel, so one call per 32 favorites keeps this at two concurrent
+      // queries against a database that is also serving the app.
+      const BATCH = 32;
+      const lookupStarted = Date.now();
+      const eligibleByFavorite = new Map<number, { id: number; score: number }[]>();
+      for (let offset = 0; offset < favoriteIds.length; offset += BATCH) {
+        if (offset % (BATCH * 8) === 0) {
+          progress(`neighbors: ${offset}/${favoriteIds.length} favorites`);
+        }
+        const batch = favoriteIds.slice(offset, offset + BATCH);
+        const related = await findRelatedPostsByEmbeddingForPosts({
+          postIds: batch,
+          config: embeddingConfig,
+          limit: args.neighbors,
+        });
+        for (const postId of batch) {
+          eligibleByFavorite.set(
+            postId,
+            (related.get(postId) ?? [])
+              .filter((post) => !excluded.has(post.id))
+              .map((post) => ({ id: post.id, score: post.score }))
+          );
+        }
+      }
+      const lookupSeconds = (Date.now() - lookupStarted) / 1000;
+
+      const tally = { in: { total: 0, represented: 0 }, out: { total: 0, represented: 0 } };
+      const uniqueNeighbors = new Set<number>();
+      const neighborScores: number[] = [];
+      let pairs = 0;
+      let pairsInPool = 0;
+      let withoutEligible = 0;
+      for (const postId of favoriteIds) {
+        const eligible = eligibleByFavorite.get(postId) ?? [];
+        if (eligible.length === 0) withoutEligible += 1;
+        const bucketTally = outOfReachFavorites.has(postId) ? tally.out : tally.in;
+        bucketTally.total += 1;
+        if (eligible.some((neighbor) => pool.has(neighbor.id))) bucketTally.represented += 1;
+        for (const neighbor of eligible) {
+          uniqueNeighbors.add(neighbor.id);
+          neighborScores.push(neighbor.score);
+          pairs += 1;
+          if (pool.has(neighbor.id)) pairsInPool += 1;
+        }
+      }
+      neighborScores.sort((a, b) => a - b);
+      const uniqueInPool = [...uniqueNeighbors].filter((id) => pool.has(id)).length;
+      const share = (part: number, whole: number) =>
+        whole === 0 ? "n/a" : `${((part / whole) * 100).toFixed(0)} %`;
+
+      section(`Each favorite's own top-${args.neighbors} neighbors vs the candidate pool`);
+      console.log(
+        `${favoriteIds.length} ANN lookups in ${lookupSeconds.toFixed(1)} s ` +
+          `(${((lookupSeconds * 1000) / favoriteIds.length).toFixed(0)} ms per favorite, two queries at a time).`
+      );
+      console.log(
+        `eligible neighbors (not a favorite, sibling or dismissal): ${(pairs / favoriteIds.length).toFixed(1)} per favorite, ` +
+          `raw cosine p10 ${quantile(neighborScores, 0.1).toFixed(3)}, median ${quantile(neighborScores, 0.5).toFixed(3)}; ` +
+          `${withoutEligible} favorites have none.`
+      );
+      const represented = tally.in.represented + tally.out.represented;
+      console.log(
+        `favorites with at least one of those neighbors in the pool: ${represented} of ${favoriteIds.length} ` +
+          `(${share(represented, favoriteIds.length)}); within reach ${tally.in.represented}/${tally.in.total} ` +
+          `(${share(tally.in.represented, tally.in.total)}), out of reach ${tally.out.represented}/${tally.out.total} ` +
+          `(${share(tally.out.represented, tally.out.total)}).`
+      );
+      console.log(
+        `favorite-neighbor pairs in the pool: ${pairsInPool} of ${pairs} (${share(pairsInPool, pairs)}). ` +
+          `Unique neighbors: ${uniqueNeighbors.size}, of which ${uniqueInPool} are in the pool and ` +
+          `${uniqueNeighbors.size - uniqueInPool} are never retrieved by a centroid.`
+      );
+      console.log(
+        `The pool holds ${pool.size} candidates and the feed serves at most ${config.maxFeedSize} of them, ` +
+          `so these are upper bounds on what the feed shows.`
       );
     }
 
