@@ -103,6 +103,8 @@ export function SwipeDeck() {
   /** The in-flight deck request, if any. Aborted requests no longer count as in flight. */
   const abortRef = useRef<AbortController | null>(null);
   const pendingByHash = useRef(new Map<string, Promise<unknown>>());
+  /** Swipe reports queue separately: they must never delay a favorite write. */
+  const pendingReportsByHash = useRef(new Map<string, Promise<unknown>>());
   /**
    * The newest swipe per post. A like's failure handler rolls back only if
    * its swipe is still the newest: after an undo (or undo + re-swipe) while
@@ -251,16 +253,25 @@ export function SwipeDeck() {
     image.src = next.mimeType.startsWith("video/") ? thumbnailUrl(next.hash) : fileUrl(next);
   }, [queue]);
 
-  /** Serialize requests per post so an undo never overtakes its like. */
-  const chain = useCallback((hash: string, task: () => Promise<boolean>): Promise<boolean> => {
-    const previous = pendingByHash.current.get(hash) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(task);
-    pendingByHash.current.set(hash, next);
-    void next.finally(() => {
-      if (pendingByHash.current.get(hash) === next) pendingByHash.current.delete(hash);
-    });
-    return next;
-  }, []);
+  /** Run `task` after the previous one queued for the same post in `queue`. */
+  const enqueue = useCallback(
+    (queue: Map<string, Promise<unknown>>, hash: string, task: () => Promise<boolean>): Promise<boolean> => {
+      const previous = queue.get(hash) ?? Promise.resolve();
+      const next = previous.catch(() => {}).then(task);
+      queue.set(hash, next);
+      void next.finally(() => {
+        if (queue.get(hash) === next) queue.delete(hash);
+      });
+      return next;
+    },
+    []
+  );
+
+  /** Serialize favorite requests per post so an undo never overtakes its like. */
+  const chain = useCallback(
+    (hash: string, task: () => Promise<boolean>) => enqueue(pendingByHash.current, hash, task),
+    [enqueue]
+  );
 
   const setFavorite = useCallback(
     (hash: string, favorited: boolean) =>
@@ -282,7 +293,7 @@ export function SwipeDeck() {
    */
   const reportSwipe = useCallback(
     (post: DeckPost, action: SwipeAction | null) =>
-      chain(post.hash, async () => {
+      enqueue(pendingReportsByHash.current, post.hash, async () => {
         try {
           const response = await fetch(
             `/api/posts/${post.hash}/swipe`,
@@ -299,7 +310,7 @@ export function SwipeDeck() {
           return false;
         }
       }),
-    [chain]
+    [enqueue]
   );
 
   const dismissHint = useCallback(() => {

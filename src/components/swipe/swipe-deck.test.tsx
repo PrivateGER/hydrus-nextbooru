@@ -55,6 +55,8 @@ let favoriteCalls: string[];
 let favoriteStatus: number;
 /** Swipe outcome reports as `METHOD hash-number body`. */
 let swipeCalls: string[];
+/** When set, swipe reports hang until released. */
+let swipeGate: Promise<void> | null;
 
 function cardLabels(): string[] {
   return [...container.querySelectorAll('[aria-roledescription="card"]')]
@@ -107,6 +109,7 @@ describe('SwipeDeck exhaustion after likes', () => {
     favoriteCalls = [];
     favoriteStatus = 200;
     swipeCalls = [];
+    swipeGate = null;
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -118,6 +121,7 @@ describe('SwipeDeck exhaustion after likes', () => {
         if (url.endsWith('/swipe')) {
           const postNumber = parseInt(url.split('/').at(-2) ?? '', 16);
           swipeCalls.push([init?.method, postNumber, init?.body].filter((part) => part !== undefined).join(' '));
+          if (swipeGate) await swipeGate;
           return new Response('{}', { status: 200 });
         }
         if (url.includes('/api/feed/deck')) {
@@ -255,5 +259,30 @@ describe('SwipeDeck exhaustion after likes', () => {
     expect(swipeCalls).toEqual([]);
     // The card is back on top for another try.
     expect(topCardLabel()).toBe('Post by artist 1');
+  });
+
+  it('undoes a like even while its report is stuck', async () => {
+    deckReplies.push(deckResponse([deckPost(1), deckPost(2)]), deckResponse([]), deckResponse([]));
+    let release!: () => void;
+    swipeGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await act(async () => root.render(<SwipeDeck />));
+    await flush();
+    await press('Like');
+    await advance(150);
+    expect(favoriteCalls).toEqual(['PUT']);
+    expect(swipeCalls).toEqual(['PUT 1 {"action":"like","explore":false}']); // sent, never answered
+
+    await press('Undo');
+    await flush();
+    // The favorite is removed without waiting for the report.
+    expect(favoriteCalls).toEqual(['PUT', 'DELETE']);
+
+    release();
+    await flush();
+    // Reports keep their own order: the withdrawal follows the stuck report.
+    expect(swipeCalls).toEqual(['PUT 1 {"action":"like","explore":false}', 'DELETE 1']);
   });
 });
