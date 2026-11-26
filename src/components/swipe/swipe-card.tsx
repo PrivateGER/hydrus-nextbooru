@@ -91,6 +91,8 @@ export function SwipeCard({
   const mediaRef = useRef<SwipeMediaHandle>(null);
   const busyRef = useRef(false);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** The commit a running fly-out will make when its animation ends. */
+  const pendingCommit = useRef<(() => void) | null>(null);
   const drag = useRef<DragState>({
     pointerId: null,
     startX: 0,
@@ -109,7 +111,14 @@ export function SwipeCard({
 
   useEffect(
     () => () => {
+      // Hidden mid-fly-out (e.g. arrow key then Enter opens the post; with
+      // cacheComponents the page stays mounted in a hidden <Activity>, so
+      // refs survive). Cancelling the timer would strand the card off-screen
+      // and busy; finish the swipe the user already made instead.
       clearTimeout(commitTimer.current);
+      const commit = pendingCommit.current;
+      pendingCommit.current = null;
+      commit?.();
       cancelAnimationFrame(inertiaFrame.current);
     },
     []
@@ -190,7 +199,12 @@ export function SwipeCard({
     setStamps(direction, 1, "opacity 120ms ease-out");
     onProgress(1, false);
     haptic(12);
-    commitTimer.current = setTimeout(() => onCommit(action), duration);
+    pendingCommit.current = () => onCommit(action);
+    commitTimer.current = setTimeout(() => {
+      const commit = pendingCommit.current;
+      pendingCommit.current = null;
+      commit?.();
+    }, duration);
   };
 
   useImperativeHandle(
