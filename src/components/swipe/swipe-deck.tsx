@@ -36,6 +36,8 @@ const HINT_KEY = "swipe-feed-hint-seen-v1";
 type LoadState = "loading" | "ready" | "error";
 
 interface UndoEntry {
+  /** Identifies this swipe; see `latestSwipeByHash`. */
+  id: number;
   post: DeckPost;
   action: SwipeAction;
 }
@@ -95,6 +97,13 @@ export function SwipeDeck() {
   /** The in-flight deck request, if any. Aborted requests no longer count as in flight. */
   const abortRef = useRef<AbortController | null>(null);
   const pendingByHash = useRef(new Map<string, Promise<unknown>>());
+  /**
+   * The newest swipe per post. A like's failure handler rolls back only if
+   * its swipe is still the newest: after an undo (or undo + re-swipe) while
+   * the request was in flight, the newer action owns the state.
+   */
+  const latestSwipeByHash = useRef(new Map<string, number>());
+  const nextSwipeId = useRef(1);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hintCheckedRef = useRef(false);
 
@@ -243,21 +252,26 @@ export function SwipeDeck() {
 
   const commit = useCallback(
     (post: DeckPost, action: SwipeAction) => {
+      const id = nextSwipeId.current++;
+      latestSwipeByHash.current.set(post.hash, id);
       setProgress(0, false);
       setEntering(null);
       setQueue((current) => current.filter((p) => p.hash !== post.hash));
       historyRef.current = recordSwipe(historyRef.current, { hash: post.hash, action, at: Date.now() }, Date.now());
       writeHistory(historyRef.current);
-      setUndoStack((stack) => [...stack.slice(-(UNDO_DEPTH - 1)), { post, action }]);
+      setUndoStack((stack) => [...stack.slice(-(UNDO_DEPTH - 1)), { id, post, action }]);
       setAnnouncement(action === "like" ? "Liked" : "Skipped");
 
       if (action === "like") {
         void setFavorite(post.hash, true).then((ok) => {
           if (ok) return;
+          // Superseded by a later undo or swipe of this post: leave its state alone.
+          if (latestSwipeByHash.current.get(post.hash) !== id) return;
+          latestSwipeByHash.current.delete(post.hash);
           // Put the card back so the like is not silently lost.
           historyRef.current = removeSwipe(historyRef.current, post.hash);
           writeHistory(historyRef.current);
-          setUndoStack((stack) => stack.filter((entry) => entry.post.hash !== post.hash));
+          setUndoStack((stack) => stack.filter((entry) => entry.id !== id));
           setQueue((current) => [post, ...current.filter((p) => p.hash !== post.hash)]);
           revive(post.hash, "right");
           showToast("Couldn't save that like. Try again.");
@@ -272,6 +286,7 @@ export function SwipeDeck() {
     const last = undoStack[undoStack.length - 1];
     if (!last) return;
     setUndoStack((stack) => stack.slice(0, -1));
+    latestSwipeByHash.current.delete(last.post.hash);
     historyRef.current = removeSwipe(historyRef.current, last.post.hash);
     writeHistory(historyRef.current);
     setQueue((current) => [last.post, ...current.filter((p) => p.hash !== last.post.hash)]);
