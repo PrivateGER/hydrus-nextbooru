@@ -34,6 +34,7 @@ import { GET as tagsSearchGET } from '@/app/api/tags/search/route';
 import { GET as postDetailGET } from '@/app/api/posts/[hash]/route';
 import { GET as recommendationsGET } from '@/app/api/recommendations/[hash]/route';
 import { GET as feedGET } from '@/app/api/feed/route';
+import { POST as feedDeckPOST } from '@/app/api/feed/deck/route';
 import { PUT as favoritePUT, DELETE as favoriteDELETE } from '@/app/api/posts/[hash]/favorite/route';
 import { PUT as dismissalPUT, DELETE as dismissalDELETE } from '@/app/api/posts/[hash]/dismissal/route';
 import { GET as ocrAdminGET } from '@/app/api/admin/ocr/route';
@@ -85,6 +86,11 @@ const QUERY_BUDGETS = {
   // non-empty fallback adds 3 candidate batches (importedAt, groups, views).
   // Total: 5 + 2 + 1 + 8 + 3 = 19, constant in the favorite count.
   feed: 19,
+  // Swipe deck over the same cold fallback feed: the feed build above plus
+  // ONE enrichment statement for the dealt batch (extension, video metadata
+  // and headline tags aggregated in a single GROUP BY), constant in batch
+  // size. A warm deck (feed cached) is that single statement.
+  feedDeck: 20,
   // Cold configured cluster fixture with 17 embedded favorites. Enumeration:
   // 5 signal statements + 2 group reads + 1 settings read + 1 vector fetch;
   // calibration's 3 reads (generation, cached baseline, sample) + 1 upsert;
@@ -267,6 +273,36 @@ describe('Query count guards', () => {
 
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feed);
+  });
+
+  it('swipe deck stays within budget: cold feed plus one enrichment statement', async () => {
+    const prisma = getTestPrisma();
+    const seeds = await prisma.post.findMany({
+      orderBy: { id: 'asc' },
+      take: FEED_GUARD_SEEDS,
+      select: { id: true },
+    });
+    const seedIds = seeds.map((s) => s.id);
+    await prisma.favorite.deleteMany();
+    await prisma.feedDismissal.deleteMany();
+    await prisma.postRecommendation.deleteMany({ where: { postId: { in: seedIds } } });
+    await prisma.favorite.createMany({ data: seedIds.map((postId) => ({ postId })) });
+
+    let dealt = 0;
+    const count = await countQueries('feed deck (cold)', async () => {
+      const response = await feedDeckPOST(
+        new NextRequest('http://localhost/api/feed/deck', {
+          method: 'POST',
+          body: JSON.stringify({ limit: 30 }),
+        })
+      );
+      dealt = (await response.json()).posts.length;
+    });
+
+    // A full batch must actually be enriched, or an N+1 could hide.
+    expect(dealt).toBeGreaterThan(1);
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedDeck);
   });
 
   it('feed build with embeddings stays within the taste-cluster budget', async () => {
