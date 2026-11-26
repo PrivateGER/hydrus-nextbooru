@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { HeartIcon, SparklesIcon } from "@heroicons/react/24/outline";
+import { HeartIcon, RectangleStackIcon, SparklesIcon } from "@heroicons/react/24/outline";
 import { getFeedPage } from "@/lib/feed";
 import { sanitizePositiveInt, MAX_PAGE } from "@/lib/search";
 import { FeedGrid } from "@/components/feed-grid";
@@ -47,11 +47,20 @@ async function RecommendedContent({ searchParams }: RecommendedPageProps) {
   return (
     <div className="space-y-6">
       <header className="flex items-center gap-2">
-        <SparklesIcon className="h-6 w-6 text-zinc-500 dark:text-zinc-400" />
-        <h1 className="text-2xl font-bold">For You</h1>
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">
-          {totalCount} recommendation{totalCount === 1 ? "" : "s"}
-        </span>
+        <SparklesIcon className="h-6 w-6 shrink-0 text-zinc-500 dark:text-zinc-400" />
+        <div className="min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-2">
+          <h1 className="text-2xl font-bold">For You</h1>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {totalCount} recommendation{totalCount === 1 ? "" : "s"}
+          </p>
+        </div>
+        <Link
+          href="/recommended/swipe"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-pink-500 active:scale-95"
+        >
+          <RectangleStackIcon className="h-4 w-4" />
+          Swipe
+        </Link>
       </header>
       <FeedGrid key={page} posts={posts} />
       <Pagination currentPage={page} totalPages={totalPages} />
