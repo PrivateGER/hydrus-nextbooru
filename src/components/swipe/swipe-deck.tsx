@@ -210,11 +210,18 @@ export function SwipeDeck() {
     const previousOverscroll = html.style.overscrollBehavior;
     document.body.style.overflow = "hidden";
     html.style.overscrollBehavior = "none"; // no pull-to-refresh mid-swipe
+    // The deck covers the shared site header; keep its links out of the Tab
+    // order and accessibility tree so keyboard users cannot act on links
+    // they cannot see.
+    const siteHeader = document.querySelector<HTMLElement>("[data-site-header]");
+    const headerWasInert = siteHeader?.inert ?? false;
+    if (siteHeader) siteHeader.inert = true;
     return () => {
       abortRef.current?.abort();
       clearTimeout(rebuildRetryTimer.current);
       document.body.style.overflow = previousOverflow;
       html.style.overscrollBehavior = previousOverscroll;
+      if (siteHeader) siteHeader.inert = headerWasInert;
     };
   }, [refill]);
 
