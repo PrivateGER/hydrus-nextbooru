@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allocateAcrossClusters,
+  diversifyRanked,
   fitTasteModel,
   normalizeRows,
   type TasteMember,
@@ -503,5 +504,80 @@ describe("allocateAcrossClusters", () => {
     expect(
       allocated.slice(4, 8).filter((entry) => entry.cluster === 1),
     ).toHaveLength(4);
+  });
+});
+
+describe("diversifyRanked", () => {
+  const unit = (values: number[]) => normalizeRows(new Float32Array(values), values.length);
+  const vectorById = new Map([
+    [1, unit([1, 0])],
+    [2, unit([0.999, 0.04])],
+    [3, unit([0, 1])],
+    [4, unit([0.998, 0.06])],
+  ]);
+  const ranked = [
+    { id: 1, score: 0.9 },
+    { id: 2, score: 0.89 },
+    { id: 4, score: 0.88 },
+    { id: 3, score: 0.6 },
+  ];
+
+  it("moves a distinct item ahead of near-twins of an earlier pick", () => {
+    const before = structuredClone(ranked);
+    const result = diversifyRanked(ranked, vectorById, { lambda: 0.7, depth: 10 });
+
+    expect(result.map((item) => item.id)).toEqual([1, 3, 2, 4]);
+    expect(ranked).toEqual(before);
+  });
+
+  it("keeps relevance order at lambda 1 and beyond the configured depth", () => {
+    expect(
+      diversifyRanked(ranked, vectorById, { lambda: 1, depth: 10 }).map((item) => item.id),
+    ).toEqual([1, 2, 4, 3]);
+    // Depth 2 reorders two picks; the remainder stays relevance-ordered.
+    expect(
+      diversifyRanked(ranked, vectorById, { lambda: 0.7, depth: 2 }).map((item) => item.id),
+    ).toEqual([1, 3, 2, 4]);
+    expect(
+      diversifyRanked(
+        [...ranked, { id: 5, score: 0.5 }, { id: 6, score: 0.4 }],
+        new Map([...vectorById, [5, unit([1, 0])], [6, unit([0, 1])]]),
+        { lambda: 0.7, depth: 2 },
+      ).map((item) => item.id),
+    ).toEqual([1, 3, 2, 4, 5, 6]);
+  });
+
+  it("applies the similarity mapping and never penalizes an item without a vector", () => {
+    // With similarity rescaled to zero nothing is penalized: relevance order.
+    expect(
+      diversifyRanked(ranked, vectorById, {
+        lambda: 0.7,
+        depth: 10,
+        similarity: () => 0,
+      }).map((item) => item.id),
+    ).toEqual([1, 2, 4, 3]);
+    // Post 2 has no vector: it keeps its relevance value and stays second.
+    const withoutTwo = new Map(vectorById);
+    withoutTwo.delete(2);
+    expect(
+      diversifyRanked(ranked, withoutTwo, { lambda: 0.7, depth: 10 }).map((item) => item.id),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  it("is unaffected by the scale of the scores", () => {
+    const scaled = ranked.map((item) => ({ ...item, score: item.score * 40 }));
+    expect(
+      diversifyRanked(scaled, vectorById, { lambda: 0.7, depth: 10 }).map((item) => item.id),
+    ).toEqual([1, 3, 2, 4]);
+  });
+
+  it("returns every item exactly once", () => {
+    const many = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, score: 1 - index / 100 }));
+    const vectors = new Map(
+      many.map((item) => [item.id, unit([Math.cos(item.id), Math.sin(item.id), item.id % 3])]),
+    );
+    const result = diversifyRanked(many, vectors, { lambda: 0.5, depth: 25 });
+    expect(result).toHaveLength(40);
+    expect(new Set(result.map((item) => item.id)).size).toBe(40);
   });
 });

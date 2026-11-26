@@ -111,6 +111,22 @@ describe("getFeedDeck", () => {
     expect(result.posts[0]).not.toHaveProperty("score");
   });
 
+  it("passes the exploration flag through as a boolean on every card", async () => {
+    mockGetFeedPage.mockResolvedValue({
+      posts: [feedPost(1), { ...feedPost(2), explore: true }],
+      totalCount: 2,
+      totalPages: 1,
+    });
+    mockQueryRaw.mockResolvedValue([detailRow(1), detailRow(2)]);
+
+    const result = await getFeedDeck(new Set(), 5);
+
+    expect(result.posts.map((post) => [post.id, post.explore])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
+  });
+
   it("skips posts deleted since the ranking was cached", async () => {
     mockGetFeedPage.mockResolvedValue({ posts: [1, 2].map(feedPost), totalCount: 2, totalPages: 1 });
     mockQueryRaw.mockResolvedValue([detailRow(2)]);

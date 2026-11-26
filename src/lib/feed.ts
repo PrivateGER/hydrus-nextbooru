@@ -17,16 +17,27 @@
  * but retrieves each taste member's own nearest neighbors, because the posts
  * nearest an average of many favorites are generic and leave most individual
  * favorites' closest matches unretrieved.
+ *
+ * Three options apply to either mode after ranking, all off by default.
+ * `diversityLambda` < 1 reorders each cluster's candidates so a near-twin of
+ * an earlier pick no longer follows it (MMR). `exploreShare` > 0 gives up to
+ * that share of every page to exploration: unseen posts that are unlike
+ * every taste member and that the retrieval above did not return.
+ * `quotaExponent` < 1 flattens page quotas so the heaviest cluster does not
+ * crowd out the rest.
  */
 
 import type { RecommendedPost } from "@/lib/recommendations";
 import {
   findNearestByVector,
   findRelatedPostsByEmbeddingForPosts,
+  getEmbeddingPrefixesForPosts,
   getEmbeddingVectorsForPosts,
+  sampleUnseenEmbeddedPostIds,
   getMaxSimilarityToReferences,
 } from "@/lib/embeddings/store";
 import { prisma } from "@/lib/db";
+import { FEED_SETTING_DEFAULTS, getStoredFeedSettings } from "@/lib/feed-settings";
 import { feedLog } from "@/lib/logger";
 import { postCardSelect } from "@/lib/post-select";
 import { getTagNeighborhoodsForSeeds } from "@/lib/recommendations";
@@ -42,6 +53,7 @@ import {
 } from "@/lib/embeddings/settings";
 import {
   allocateAcrossClusters,
+  diversifyRanked,
   fitTasteModel,
   normalizeRows,
   type TasteMember,
@@ -56,7 +68,7 @@ export interface FeedConfig {
    * centroid, then the centroid floor and member gate. "favorites": every
    * taste member's own nearest neighbors, gated by {@link memberGate} and
    * ranked by {@link rankMemberNeighbors}; clusters still set page quotas.
-   * Overridable at process start with FEED_RETRIEVAL.
+   * Set at runtime in the admin panel (see @/lib/feed-settings).
    */
   retrieval: FeedRetrieval;
   /** Nearest neighbors kept per taste member in "favorites" retrieval (the store caps this at 20). */
@@ -71,6 +83,43 @@ export interface FeedConfig {
   neighborRankDecay: number;
   /** Multiplier on each further member that retrieved the same candidate (0 = best member only). */
   convergenceDecay: number;
+  /**
+   * Variety pass (MMR) over each cluster's ranked candidates, in either
+   * retrieval mode: 1 keeps pure relevance order (off); lower values push a
+   * near-twin of an earlier pick further down its cluster's list. Costs one
+   * prefix read per 2,000 surviving candidates. Set at runtime in the admin
+   * panel (see @/lib/feed-settings).
+   */
+  diversityLambda: number;
+  /** Candidates per cluster ordered by the variety pass; the rest keep relevance order. */
+  diversityDepth: number;
+  /** Leading embedding dimensions used to compare candidates with each other. */
+  diversityDimensions: number;
+  /**
+   * Largest share of a page given to exploration (see {@link selectExploration};
+   * less when the taste model has too few candidates to fill the rest):
+   * posts never favorited, dismissed, viewed or swiped whose similarity to
+   * every taste member stays below {@link exploreMaxSimilarity}, spread over
+   * different areas of the library. They carry `explore: true`. The sample is
+   * redrawn every seed bucket. 0 disables it. Set at runtime in the admin
+   * panel (see @/lib/feed-settings).
+   */
+  exploreShare: number;
+  /** Unseen posts sampled per build as exploration candidates (one sequential pass over the embedding rows). */
+  exploreSampleSize: number;
+  /**
+   * Calibrated similarity to the nearest taste member an exploration post
+   * must stay under. On prod the centroid feed's posts sit at 0.40-0.73
+   * (10th-90th percentile) and 73% of unseen posts are below 0.35.
+   */
+  exploreMaxSimilarity: number;
+  /**
+   * Exponent on cluster mass when dividing a page: 1 is proportional, 0.5
+   * gives a cluster with four times the mass twice the slots instead of
+   * four times, 0 is equal shares. Set at runtime in the admin panel (see
+   * @/lib/feed-settings).
+   */
+  quotaExponent: number;
   /** Number of spherical taste clusters fitted to embedded signals. */
   clusterCount: number;
   /** Clusters smaller than this are merged into their nearest survivor. */
@@ -118,11 +167,18 @@ export interface FeedConfig {
 }
 
 export const FEED_CONFIG: FeedConfig = {
-  retrieval: process.env.FEED_RETRIEVAL === "favorites" ? "favorites" : "centroid",
+  retrieval: FEED_SETTING_DEFAULTS.retrieval,
   neighborsPerMember: 20,
   memberWeightExponent: 0.5,
   neighborRankDecay: 0.85,
   convergenceDecay: 0.5,
+  diversityLambda: FEED_SETTING_DEFAULTS.diversityLambda,
+  diversityDepth: 96,
+  diversityDimensions: 256,
+  exploreShare: FEED_SETTING_DEFAULTS.exploreShare,
+  exploreSampleSize: 400,
+  exploreMaxSimilarity: 0.35,
+  quotaExponent: FEED_SETTING_DEFAULTS.quotaExponent,
   clusterCount: 16,
   minClusterSize: 3,
   clusterIterations: 30,
@@ -172,6 +228,8 @@ export interface FeedPost {
   blurhash: string | null;
   mimeType: string;
   score: number;
+  /** Present on exploration posts: unseen and unlike every taste member. */
+  explore?: true;
 }
 
 export interface SeedContribution {
@@ -192,6 +250,15 @@ const SEED_SAMPLE_BUCKET_MS = 3_600_000;
  * concurrent statements, about 21 s for 1,110 members).
  */
 const MEMBER_NEIGHBOR_BATCH = 64;
+/**
+ * The variety pass reorders `diversityDepth` posts per cluster, choosing them
+ * from this many times as many of the cluster's most relevant candidates.
+ * Bounding the pool bounds the prefix read and the synchronous comparison
+ * work by clusters, not by candidates: favorites retrieval can rank over
+ * 20,000 candidates, and comparing all of them measured ~0.6 s of blocked
+ * event loop for an order that only matters near the top.
+ */
+const DIVERSITY_POOL_FACTOR = 3;
 
 /** Deterministic 32-bit PRNG retained for taste-model reproducibility helpers. */
 export function mulberry32(seed: number): () => number {
@@ -340,6 +407,99 @@ export function rankMemberNeighbors(
     ranked.push({ id, score });
   }
   return ranked.sort((a, b) => b.score - a.score || a.id - b.id);
+}
+
+/** Allocation key of the exploration list; real cluster indices are >= 0. */
+const EXPLORE_CLUSTER = -1;
+
+/**
+ * Choose exploration posts from a sample of unseen posts.
+ *
+ * A candidate qualifies when it is unlike EVERY taste member: its highest
+ * similarity to any of them (mapped by `similarity` onto the scale of
+ * `maxSimilarity`) stays below `maxSimilarity`. That is the part of the
+ * library the taste model cannot reach by construction, since every other
+ * candidate has to sit near a favorite. Qualifying posts are then ordered
+ * farthest-first, each as unlike the earlier picks as possible, so a handful
+ * of exploration slots covers several different areas instead of one.
+ *
+ * `prefixById` and the rows of `memberPrefixes` are unit vectors over the
+ * same leading dimensions. Scores only encode the order (1 for the first
+ * pick, falling towards 0). A candidate without a prefix is dropped.
+ */
+export function selectExploration(
+  candidateIds: readonly number[],
+  prefixById: ReadonlyMap<number, Float32Array>,
+  memberPrefixes: Float32Array,
+  prefixDimensions: number,
+  options: { maxSimilarity: number; similarity?: (cosine: number) => number }
+): { id: number; score: number }[] {
+  const similarity = options.similarity ?? ((cosine: number) => cosine);
+  const memberCount =
+    prefixDimensions > 0 ? Math.floor(memberPrefixes.length / prefixDimensions) : 0;
+  const qualifying: { id: number; score: number }[] = [];
+  for (const id of candidateIds) {
+    const prefix = prefixById.get(id);
+    if (!prefix || prefix.length !== prefixDimensions) continue;
+    let nearest = -Infinity;
+    for (let member = 0; member < memberCount; member++) {
+      const offset = member * prefixDimensions;
+      let cosine = 0;
+      for (let dimension = 0; dimension < prefixDimensions; dimension++) {
+        cosine += prefix[dimension] * memberPrefixes[offset + dimension];
+      }
+      if (cosine > nearest) nearest = cosine;
+    }
+    if (memberCount > 0 && similarity(nearest) >= options.maxSimilarity) continue;
+    qualifying.push({ id, score: 1 });
+  }
+  // Equal relevance turns MMR into farthest-first traversal.
+  const spread = diversifyRanked(qualifying, prefixById, {
+    lambda: 0.5,
+    depth: qualifying.length,
+    similarity,
+  });
+  return spread.map((candidate, rank) => ({
+    id: candidate.id,
+    score: 1 - rank / spread.length,
+  }));
+}
+
+/**
+ * Place each page's exploration posts at even intervals among its other
+ * posts. Allocation emits clusters heaviest first in every round, and the
+ * exploration list outweighs any single cluster, so it would otherwise open
+ * every page; spaced out, a page (or a swipe deck walking the ranking) meets
+ * one every `pageSize / count` posts. Which posts are on which page, and the
+ * order within each kind, are unchanged.
+ */
+export function spaceExploration<T extends { explore?: true }>(
+  items: readonly T[],
+  pageSize: number
+): T[] {
+  const size = Math.floor(pageSize);
+  if (size <= 0) return [...items];
+  const result: T[] = [];
+  for (let start = 0; start < items.length; start += size) {
+    const page = items.slice(start, start + size);
+    const explore = page.filter((item) => item.explore);
+    const others = page.filter((item) => !item.explore);
+    if (explore.length === 0 || others.length === 0) {
+      result.push(...page);
+      continue;
+    }
+    const slots = new Set(
+      explore.map((_, index) => Math.floor(((index + 0.5) * page.length) / explore.length))
+    );
+    let nextExplore = 0;
+    let nextOther = 0;
+    for (let slot = 0; slot < page.length; slot++) {
+      const takeExplore =
+        nextOther >= others.length || (slots.has(slot) && nextExplore < explore.length);
+      result.push(takeExplore ? explore[nextExplore++] : others[nextOther++]);
+    }
+  }
+  return result;
 }
 
 /** Give newly-imported candidates a small, time-decayed first-look window. */
@@ -546,43 +706,151 @@ async function retrieveFromCentroids(
 }
 
 /**
- * Make sure every listed member has a cached neighbor list, fetching the
- * missing ones in sequential batches. Fills are serialized through
- * `cache.pending`, and each fill recomputes what is still missing once it
- * reaches the front, so a rebuild that overlaps a cold fill waits for it
- * instead of repeating its statements. A member with no neighbors is cached
- * as an empty list.
+ * Exploration candidates for one build: a seeded sample of unseen posts,
+ * reduced by {@link selectExploration} to those unlike every taste member.
+ * `vectors` holds one unit row per member; its leading dimensions are
+ * compared with the sample's embedding prefixes, which is accurate enough to
+ * tell "nowhere near any favorite" from "near one" without moving full
+ * vectors for the sample. Two statements: the sample and its prefixes.
  */
-async function ensureMemberNeighbors(
+async function retrieveExploration(
+  vectors: Float32Array,
+  dimensions: number,
+  baseline: number,
+  embeddingConfig: EmbeddingConfig,
+  excluded: ReadonlySet<number>,
+  config: FeedConfig,
+  seed: number
+): Promise<{ id: number; score: number }[]> {
+  const sampled = await sampleUnseenEmbeddedPostIds({
+    config: embeddingConfig,
+    limit: config.exploreSampleSize,
+    seed,
+  });
+  const candidateIds = sampled.filter((postId) => !excluded.has(postId));
+  if (candidateIds.length === 0) return [];
+  const prefixDimensions = Math.min(
+    dimensions,
+    Math.max(1, Math.floor(config.diversityDimensions))
+  );
+  const prefixById = await getEmbeddingPrefixesForPosts({
+    postIds: candidateIds,
+    config: embeddingConfig,
+    prefixDimensions,
+  });
+  const memberCount = vectors.length / dimensions;
+  const memberPrefixes = new Float32Array(memberCount * prefixDimensions);
+  for (let member = 0; member < memberCount; member++) {
+    memberPrefixes.set(
+      vectors.subarray(member * dimensions, member * dimensions + prefixDimensions),
+      member * prefixDimensions
+    );
+  }
+  normalizeRows(memberPrefixes, prefixDimensions);
+  return selectExploration(candidateIds, prefixById, memberPrefixes, prefixDimensions, {
+    maxSimilarity: config.exploreMaxSimilarity,
+    similarity: (cosine) => calibrateEmbeddingScore(cosine, baseline),
+  });
+}
+
+/**
+ * Variety pass: reorder every cluster's ranked candidates with
+ * {@link diversifyRanked}, using the leading embedding dimensions as the
+ * similarity between two candidates (rescaled like every other similarity,
+ * so it is comparable with a score).
+ */
+async function diversifyClusters(
+  rankedByCluster: Map<number, FeedPost[]>,
+  baseline: number,
+  embeddingConfig: EmbeddingConfig,
+  config: FeedConfig
+): Promise<void> {
+  const poolSize = Math.max(2, Math.floor(config.diversityDepth)) * DIVERSITY_POOL_FACTOR;
+  const postIds = [
+    ...new Set(
+      [...rankedByCluster.values()]
+        .filter((ranked) => ranked.length > 2)
+        .flatMap((ranked) => ranked.slice(0, poolSize).map((post) => post.id))
+    ),
+  ];
+  if (postIds.length === 0) return;
+  const prefixes = await getEmbeddingPrefixesForPosts({
+    postIds,
+    config: embeddingConfig,
+    prefixDimensions: config.diversityDimensions,
+  });
+  for (const [cluster, ranked] of rankedByCluster) {
+    // Posts past the pool keep their relevance order behind the reordered head.
+    const head = diversifyRanked(ranked.slice(0, poolSize), prefixes, {
+      lambda: config.diversityLambda,
+      depth: config.diversityDepth,
+      similarity: (cosine) => calibrateEmbeddingScore(cosine, baseline),
+    });
+    rankedByCluster.set(cluster, [...head, ...ranked.slice(poolSize)]);
+  }
+}
+
+type MemberNeighbors = readonly { id: number; score: number }[];
+
+/**
+ * Each listed member's neighbor list, fetching the missing ones in
+ * sequential batches. Fills are serialized through `cache.pending`, and each
+ * fill recomputes what is still missing once it reaches the front, so a
+ * rebuild that overlaps a cold fill waits for it instead of repeating its
+ * statements. A member with no neighbors is cached as an empty list.
+ *
+ * Fetching, evicting and reading all happen in the fill's own turn of the
+ * queue, and the caller gets its lists as a snapshot. A build therefore
+ * always sees the lists of exactly its own members, whatever other builds do
+ * to the cache afterwards. Eviction (lists of posts that are not among this
+ * build's members) used to run after the fill, outside the queue: a build
+ * that had waited on something slower could then delete the list a newer
+ * build had just fetched for a freshly added favorite, and that newer build
+ * (the one whose result is cached) ranked without it. An eviction by a build
+ * with a stale member set still costs the next build one refetch, never a
+ * wrong feed.
+ */
+async function loadMemberNeighbors(
   cache: FeedNeighborCache,
   memberIds: readonly number[],
   embeddingConfig: EmbeddingConfig,
   limit: number
-): Promise<void> {
-  const fill = cache.pending
-    .catch(() => undefined)
-    .then(async () => {
-      const missing = memberIds.filter((postId) => !cache.neighbors.has(postId));
-      for (let offset = 0; offset < missing.length; offset += MEMBER_NEIGHBOR_BATCH) {
-        const batch = missing.slice(offset, offset + MEMBER_NEIGHBOR_BATCH);
-        const related = await findRelatedPostsByEmbeddingForPosts({
-          postIds: batch,
-          config: embeddingConfig,
-          limit,
-        });
-        for (const postId of batch) {
-          cache.neighbors.set(
-            postId,
-            (related.get(postId) ?? []).map((post) => ({
-              id: post.id,
-              score: post.score,
-            }))
-          );
-        }
+): Promise<Map<number, MemberNeighbors>> {
+  const fill = cache.pending.then(async () => {
+    const missing = memberIds.filter((postId) => !cache.neighbors.has(postId));
+    for (let offset = 0; offset < missing.length; offset += MEMBER_NEIGHBOR_BATCH) {
+      const batch = missing.slice(offset, offset + MEMBER_NEIGHBOR_BATCH);
+      const related = await findRelatedPostsByEmbeddingForPosts({
+        postIds: batch,
+        config: embeddingConfig,
+        limit,
+      });
+      for (const postId of batch) {
+        cache.neighbors.set(
+          postId,
+          (related.get(postId) ?? []).map((post) => ({
+            id: post.id,
+            score: post.score,
+          }))
+        );
       }
-    });
-  cache.pending = fill;
-  await fill;
+    }
+    const wanted = new Set(memberIds);
+    for (const postId of cache.neighbors.keys()) {
+      if (!wanted.has(postId)) cache.neighbors.delete(postId);
+    }
+    const snapshot = new Map<number, MemberNeighbors>();
+    for (const postId of memberIds) {
+      snapshot.set(postId, cache.neighbors.get(postId) ?? []);
+    }
+    return snapshot;
+  });
+  // The queue only orders fills; a failed fill must not fail the next one.
+  cache.pending = fill.then(
+    () => undefined,
+    () => undefined
+  );
+  return fill;
 }
 
 /**
@@ -596,7 +864,6 @@ async function ensureMemberNeighbors(
 async function retrieveFromMembers(
   model: TasteModel,
   members: readonly TasteMember[],
-  currentMemberIds: ReadonlySet<number>,
   embeddingConfig: EmbeddingConfig,
   cacheKey: string,
   excluded: ReadonlySet<number>,
@@ -609,18 +876,15 @@ async function retrieveFromMembers(
     cache = { key: neighborKey, neighbors: new Map(), pending: Promise.resolve() };
     globalForTaste.__feedNeighbors = cache;
   }
-  const [baseline] = await Promise.all([
+  const [baseline, neighborsByMember] = await Promise.all([
     getEmbeddingBaseline(embeddingConfig),
-    ensureMemberNeighbors(
+    loadMemberNeighbors(
       cache,
       members.map((member) => member.postId),
       embeddingConfig,
       limit
     ),
   ]);
-  for (const postId of cache.neighbors.keys()) {
-    if (!currentMemberIds.has(postId)) cache.neighbors.delete(postId);
-  }
 
   const weightByPostId = new Map(
     members.map((member) => [member.postId, member.weight])
@@ -630,7 +894,7 @@ async function retrieveFromMembers(
     const neighborhoods: MemberNeighborhood[] = cluster.memberPostIds.map(
       (postId) => ({
         weight: weightByPostId.get(postId) ?? 0,
-        neighbors: (cache.neighbors.get(postId) ?? [])
+        neighbors: (neighborsByMember.get(postId) ?? [])
           .map((neighbor) => ({
             id: neighbor.id,
             score: calibrateEmbeddingScore(neighbor.score, baseline),
@@ -760,11 +1024,9 @@ async function rankFallback(
  * tag fallback, so transient settings or cluster failures never replace a
  * healthy cached feed with a tag-only ranking.
  */
-async function buildFeedDetailed(
-  config: FeedConfig = FEED_CONFIG
-): Promise<FeedBuildResult> {
+async function buildFeedDetailed(config?: FeedConfig): Promise<FeedBuildResult> {
   try {
-    return await buildFeedUnsafe(config);
+    return await buildFeedUnsafe(config ?? FEED_CONFIG, config === undefined);
   } catch (error) {
     feedLog.error(
       { error: error instanceof Error ? error.message : String(error) },
@@ -774,11 +1036,18 @@ async function buildFeedDetailed(
   }
 }
 
+/**
+ * `useStoredSettings`: overlay the options set in the admin panel (see
+ * @/lib/feed-settings) on `baseConfig`. They are read alongside the signals,
+ * in the build's first round of statements, so the read adds no wait; a
+ * failed read fails the build like any other store failure.
+ */
 async function buildFeedUnsafe(
-  config: FeedConfig = FEED_CONFIG
+  baseConfig: FeedConfig,
+  useStoredSettings: boolean
 ): Promise<FeedBuildResult> {
   const now = new Date();
-  const [favorites, dismissedRows, views] = await Promise.all([
+  const [favorites, dismissedRows, views, storedSettings] = await Promise.all([
     prisma.favorite.findMany({
       orderBy: { favoritedAt: "desc" },
       select: {
@@ -791,7 +1060,7 @@ async function buildFeedUnsafe(
     prisma.postView.findMany({
       where: { post: { favorite: { is: null }, feedDismissal: { is: null } } },
       orderBy: { lastViewedAt: "desc" },
-      take: config.viewSeedCount * SIGNAL_COLLAPSE_OVERFETCH,
+      take: baseConfig.viewSeedCount * SIGNAL_COLLAPSE_OVERFETCH,
       select: {
         postId: true,
         viewCount: true,
@@ -799,7 +1068,9 @@ async function buildFeedUnsafe(
         post: { select: { hash: true } },
       },
     }),
+    useStoredSettings ? getStoredFeedSettings() : Promise.resolve({}),
   ]);
+  const config: FeedConfig = { ...baseConfig, ...storedSettings };
   if (favorites.length === 0) return { feed: [], degraded: false };
 
   const favoriteInputs: FavoriteSeedInput[] = favorites.map((favorite) => ({
@@ -967,13 +1238,27 @@ async function buildFeedUnsafe(
         ? await retrieveFromMembers(
             model,
             embeddedMembers,
-            currentMemberIds,
             embeddingConfig,
             cacheKey,
             excluded,
             config
           )
         : await retrieveFromCentroids(model, embeddingConfig, excluded, config);
+    const exploreShare = Math.min(0.5, Math.max(0, config.exploreShare));
+    if (exploreShare > 0) {
+      candidatesByCluster.set(
+        EXPLORE_CLUSTER,
+        await retrieveExploration(
+          vectors,
+          embeddingConfig.dimensions,
+          baseline,
+          embeddingConfig,
+          excluded,
+          config,
+          currentSeedBucket()
+        )
+      );
+    }
 
     if (dismissedIds.length > 0) {
       const allCandidateIds = [
@@ -1068,7 +1353,54 @@ async function buildFeedUnsafe(
         cluster.index,
         applyViewedPenalty(freshened, lastViewedByPostId, now, config)
       );
-      massByCluster.set(cluster.index, cluster.mass);
+      const quotaExponent = Math.min(1, Math.max(0, config.quotaExponent));
+      massByCluster.set(
+        cluster.index,
+        cluster.mass > 0 ? Math.pow(cluster.mass, quotaExponent) : 0
+      );
+    }
+    if (config.diversityLambda < 1 && config.diversityDepth > 1) {
+      await diversifyClusters(rankedByCluster, baseline, embeddingConfig, config);
+    }
+    // Exploration keeps the order selectExploration gave it (already spread
+    // farthest-first), so it takes no freshness, viewed or variety pass.
+    // Two limits. A post the taste model also retrieved is a taste post: the
+    // exploration cutoff sits above the taste floor, so the two can overlap,
+    // and it must not be shown or counted as exploration. And exploration is
+    // capped at its share of what taste can fill: allocation backfills empty
+    // slots from any list, so an uncapped list would take over whole pages
+    // once a small library's taste candidates ran out.
+    const tasteIds = new Set<number>();
+    for (const ranked of rankedByCluster.values()) {
+      for (const post of ranked) tasteIds.add(post.id);
+    }
+    const exploreCap = Math.ceil((tasteIds.size * exploreShare) / (1 - exploreShare));
+    const explore: FeedPost[] = [];
+    for (const candidate of candidatesByCluster.get(EXPLORE_CLUSTER) ?? []) {
+      if (explore.length >= exploreCap) break;
+      if (tasteIds.has(candidate.id)) continue;
+      const post = postsById.get(candidate.id);
+      if (!post) continue;
+      explore.push({
+        id: post.id,
+        hash: post.hash,
+        width: post.width,
+        height: post.height,
+        blurhash: post.blurhash,
+        mimeType: post.mimeType,
+        score: candidate.score,
+        explore: true,
+      });
+    }
+    if (explore.length > 0) {
+      let totalMass = 0;
+      for (const mass of massByCluster.values()) totalMass += mass;
+      // Sized so the list holds exploreShare of the mass a page is divided by.
+      rankedByCluster.set(EXPLORE_CLUSTER, explore);
+      massByCluster.set(
+        EXPLORE_CLUSTER,
+        (totalMass * exploreShare) / (1 - exploreShare)
+      );
     }
     const allocated = allocateAcrossClusters(
       rankedByCluster,
@@ -1082,12 +1414,20 @@ async function buildFeedUnsafe(
       perceptualKeyByPostId(postRows)
     );
     return {
-      feed: allocated.map(({ item }) => item).slice(0, config.maxFeedSize),
+      feed: spaceExploration(
+        allocated.map(({ item }) => item),
+        config.pageSize
+      ).slice(0, config.maxFeedSize),
       degraded: false,
     };
 }
 
-export async function buildFeed(config: FeedConfig = FEED_CONFIG): Promise<FeedPost[]> {
+/**
+ * Build the full ranked feed. Without `config` it is built the way the app
+ * builds it: FEED_CONFIG with the admin panel's stored options on top. An
+ * explicit `config` is used as given, without reading stored options.
+ */
+export async function buildFeed(config?: FeedConfig): Promise<FeedPost[]> {
   return (await buildFeedDetailed(config)).feed;
 }
 

@@ -338,6 +338,93 @@ describe('GET /api/feed (Integration)', () => {
     expect(count).toBeGreaterThan(0);
   });
 
+  it('the variety pass moves a distinct candidate ahead of near-twins of an earlier pick', async () => {
+    const prisma = getTestPrisma();
+    const dimensions = 768;
+    const embeddingConfig = {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'google/gemini-embedding-2-preview',
+      dimensions,
+      imageMaxResolution: 1024,
+      videoEnabled: false,
+    };
+    const tail = Array.from({ length: dimensions - 3 }, () => 0);
+    const degrees = (value: number) => (value * Math.PI) / 180;
+    const embed = async (name: string, head: [number, number, number]) => {
+      const post = await createPostWithTags(prisma, [name]);
+      await upsertCompleteEmbedding({
+        postId: post.id,
+        config: embeddingConfig,
+        embedding: [...head, ...tail],
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+      return post;
+    };
+    // Three favorites around the x axis...
+    const favorites = [
+      await embed('favorite a', [1, 0, 0]),
+      await embed('favorite b', [1, 0.04, 0]),
+      await embed('favorite c', [1, -0.04, 0]),
+    ];
+    // ...three near-identical candidates 20 degrees off towards y, and a
+    // slightly further one (22 degrees) off towards z instead.
+    const twins = [
+      await embed('twin 1', [Math.cos(degrees(20)), Math.sin(degrees(20)), 0]),
+      await embed('twin 2', [Math.cos(degrees(20.2)), Math.sin(degrees(20.2)), 0]),
+      await embed('twin 3', [Math.cos(degrees(20.4)), Math.sin(degrees(20.4)), 0]),
+    ];
+    const distinct = await embed('distinct', [Math.cos(degrees(22)), 0, Math.sin(degrees(22))]);
+    await prisma.settings.createMany({
+      data: [
+        { key: 'openrouter.apiKey', value: 'sk-or-v1-test' },
+        { key: 'openrouter.embedding.model', value: embeddingConfig.model },
+        { key: 'openrouter.embedding.dimensions', value: String(dimensions) },
+        {
+          key: 'openrouter.embedding.imageMaxResolution',
+          value: String(embeddingConfig.imageMaxResolution),
+        },
+      ],
+    });
+    for (const post of favorites) await favorite(post.hash);
+
+    const oneCluster = {
+      ...FEED_CONFIG,
+      clusterCount: 1,
+      minClusterSize: 1,
+      freshnessBoost: 0,
+      pageSize: 8,
+      pageCount: 1,
+      maxFeedSize: 8,
+    };
+    // Without the pass the distinct candidate ranks last by similarity to the
+    // centroid; "favorites" already lifts it one place, because the favorite
+    // furthest from the twins has it as its nearest neighbor.
+    const relevanceOrder = {
+      centroid: [twins[0].hash, twins[1].hash, twins[2].hash, distinct.hash],
+      favorites: [twins[0].hash, twins[1].hash, distinct.hash, twins[2].hash],
+    };
+    const varietyOrder = [twins[0].hash, distinct.hash, twins[1].hash, twins[2].hash];
+
+    for (const retrieval of ['centroid', 'favorites'] as const) {
+      clearFeedCache();
+      const plain = await buildFeed({ ...oneCluster, retrieval, diversityLambda: 1 });
+      expect(plain.map((post) => post.hash)).toEqual(relevanceOrder[retrieval]);
+
+      // With the pass the distinct candidate follows the first twin in both
+      // modes: the other two are near-copies of a post already picked.
+      // The prefix read (pgvector subvector) is one extra statement.
+      clearFeedCache();
+      const { result: diversified, count } = await captureCountedStatements(() =>
+        buildFeed({ ...oneCluster, retrieval, diversityLambda: 0.7 })
+      );
+      expect(diversified.map((post) => post.hash)).toEqual(varietyOrder);
+      expect(count).toBeGreaterThan(0);
+    }
+  });
+
   it('reflects a new favorite after revalidation, serving the stale feed meanwhile', async () => {
     const prisma = getTestPrisma();
     const seed = await createPostWithTags(prisma, TASTE_TAGS);

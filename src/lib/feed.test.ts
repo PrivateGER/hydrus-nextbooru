@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   vectors: vi.fn(),
   nearest: vi.fn(),
   related: vi.fn(),
+  prefixes: vi.fn(),
+  sampleUnseen: vi.fn(),
   maxSimilarity: vi.fn(),
   tagNeighborhoods: vi.fn(),
   favoriteFindMany: vi.fn(),
@@ -12,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   viewFindMany: vi.fn(),
   postGroupFindMany: vi.fn(),
   postFindMany: vi.fn(),
+  settingsFindMany: vi.fn(),
   settings: vi.fn(),
   providerConfigured: vi.fn(),
   toConfig: vi.fn(),
@@ -25,6 +28,8 @@ vi.mock("@/lib/embeddings/store", () => ({
   getEmbeddingVectorsForPosts: mocks.vectors,
   findNearestByVector: mocks.nearest,
   findRelatedPostsByEmbeddingForPosts: mocks.related,
+  getEmbeddingPrefixesForPosts: mocks.prefixes,
+  sampleUnseenEmbeddedPostIds: mocks.sampleUnseen,
   getMaxSimilarityToReferences: mocks.maxSimilarity,
 }));
 vi.mock("@/lib/recommendations", () => ({
@@ -46,6 +51,7 @@ vi.mock("@/lib/db", () => ({
     postView: { findMany: mocks.viewFindMany },
     postGroup: { findMany: mocks.postGroupFindMany },
     post: { findMany: mocks.postFindMany },
+    settings: { findMany: mocks.settingsFindMany },
   },
 }));
 
@@ -65,7 +71,9 @@ import {
   mergeSeedCandidates,
   rankMemberNeighbors,
   seedWeight,
+  selectExploration,
   selectViewSeeds,
+  spaceExploration,
   settleFeedRebuild,
   type FeedConfig,
   type FeedPost,
@@ -168,6 +176,9 @@ beforeEach(async () => {
   mocks.related.mockImplementation(({ postIds }: { postIds: number[] }) =>
     Promise.resolve(new Map(postIds.map((postId) => [postId, []])))
   );
+  mocks.prefixes.mockResolvedValue(new Map());
+  mocks.sampleUnseen.mockResolvedValue([]);
+  mocks.settingsFindMany.mockResolvedValue([]);
   mocks.maxSimilarity.mockImplementation(
     ({ candidateIds }: { candidateIds: number[] }) =>
       Promise.resolve(new Map(candidateIds.map((id) => [id, 0.9])))
@@ -941,6 +952,78 @@ describe("favorites retrieval", () => {
     expect(a.map((post) => post.id)).toEqual(b.map((post) => post.id));
   });
 
+  it("keeps a just-added favorite's neighbors when an older overlapping build finishes later", async () => {
+    // The older build is held at the calibration baseline, after its own
+    // neighbor lists are fetched and before it reads them.
+    let releaseBaseline!: (baseline: number) => void;
+    mocks.baseline.mockReturnValue(
+      new Promise<number>((resolve) => {
+        releaseBaseline = resolve;
+      })
+    );
+    mocks.related.mockImplementation(relatedFrom({ 1: [[101, 0.9]], 2: [[201, 0.9]], 3: [[301, 0.9]] }));
+
+    const older = buildFeed(FAVORITES_CONFIG);
+    await vi.waitFor(() => expect(mocks.related).toHaveBeenCalledTimes(1));
+    // A favorite lands; the build it triggers fetches the new member's list
+    // while the older build is still waiting.
+    mocks.favoriteFindMany.mockResolvedValue([favorite(3), favorite(1), favorite(2)]);
+    const newer = buildFeed(FAVORITES_CONFIG);
+    await vi.waitFor(() => expect(mocks.related).toHaveBeenCalledTimes(2));
+    expect(mocks.related.mock.calls[1][0].postIds).toEqual([3]);
+
+    releaseBaseline(0);
+    const [olderFeed, newerFeed] = await Promise.all([older, newer]);
+
+    // The older build does not know post 3 and must not take its list away.
+    expect(olderFeed.map((post) => post.id).sort()).toEqual([101, 201]);
+    expect(newerFeed.map((post) => post.id).sort()).toEqual([101, 201, 301]);
+  });
+
+  it("keeps a build's neighbor lists when a build with fewer members is queued behind it", async () => {
+    mocks.favoriteFindMany.mockResolvedValue([favorite(3), favorite(1), favorite(2)]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.related.mockImplementation(async (args: { postIds: number[] }) => {
+      await gate;
+      return relatedFrom({ 1: [[101, 0.9]], 2: [[201, 0.9]], 3: [[301, 0.9]] })(args);
+    });
+
+    // The first build's fill is in flight when a build without post 3 queues
+    // behind it; that build evicts post 3's list once its turn comes.
+    const larger = buildFeed(FAVORITES_CONFIG);
+    await vi.waitFor(() => expect(mocks.related).toHaveBeenCalledTimes(1));
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1), favorite(2)]);
+    const smaller = buildFeed(FAVORITES_CONFIG);
+    release();
+    const [largerFeed, smallerFeed] = await Promise.all([larger, smaller]);
+
+    expect(largerFeed.map((post) => post.id).sort()).toEqual([101, 201, 301]);
+    expect(smallerFeed.map((post) => post.id).sort()).toEqual([101, 201]);
+    // Nothing was fetched twice.
+    expect(mocks.related).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts a removed favorite's neighbor list and refetches it if the favorite returns", async () => {
+    mocks.favoriteFindMany.mockResolvedValue([favorite(3), favorite(1), favorite(2)]);
+    mocks.related.mockImplementation(relatedFrom({ 1: [[101, 0.9]], 2: [[201, 0.9]], 3: [[301, 0.9]] }));
+    await buildFeed(FAVORITES_CONFIG);
+    expect(mocks.related).toHaveBeenCalledTimes(1);
+
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1), favorite(2)]);
+    const without = await buildFeed(FAVORITES_CONFIG);
+    expect(without.map((post) => post.id).sort()).toEqual([101, 201]);
+    expect(mocks.related).toHaveBeenCalledTimes(1);
+
+    mocks.favoriteFindMany.mockResolvedValue([favorite(3), favorite(1), favorite(2)]);
+    const back = await buildFeed(FAVORITES_CONFIG);
+    expect(back.map((post) => post.id).sort()).toEqual([101, 201, 301]);
+    expect(mocks.related).toHaveBeenCalledTimes(2);
+    expect(mocks.related.mock.calls[1][0].postIds).toEqual([3]);
+  });
+
   it("reports a degraded build when the neighbor lookup rejects", async () => {
     mocks.related.mockRejectedValue(new Error("vector store down"));
 
@@ -949,6 +1032,397 @@ describe("favorites retrieval", () => {
     mocks.related.mockImplementation(relatedFrom({ 1: [[101, 0.9]] }));
     const feed = await buildFeed(FAVORITES_CONFIG);
     expect(feed.map((post) => post.id)).toEqual([101]);
+  });
+});
+
+describe("variety pass and exploration", () => {
+  const unit = (values: number[]) => {
+    const norm = Math.hypot(...values);
+    return new Float32Array(values.map((value) => value / norm));
+  };
+  // 11 and 12 are near-twins of 10; 13 is unlike all of them.
+  const TWIN_PREFIXES = new Map([
+    [10, unit([1, 0])],
+    [11, unit([0.999, 0.04])],
+    [12, unit([0.998, 0.06])],
+    [13, unit([0, 1])],
+  ]);
+  /** ANN stub: a query along axis k returns posts k*100+1.. with falling scores. */
+  function useAxisNeighbors(perAxis: number) {
+    mocks.nearest.mockImplementation(({ vector }: { vector: ArrayLike<number> }) => {
+      const axis = Array.from(vector).findIndex((value) => value > 0.9) + 1;
+      return Promise.resolve(
+        Array.from({ length: perAxis }, (_, index) => ({
+          postId: axis * 100 + index + 1,
+          score: 0.95 - index * 0.05,
+        }))
+      );
+    });
+  }
+
+  it("leaves both passes off by default", async () => {
+    // Pinned clock: with equal-mass clusters the hourly seed decides which leads.
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    expect(FEED_CONFIG.diversityLambda).toBe(1);
+    expect(FEED_CONFIG.exploreShare).toBe(0);
+    useAxisNeighbors(8);
+
+    const feed = await buildFeed(TEST_CONFIG);
+
+    // Pure relevance order per cluster, interleaved; no prefix read.
+    expect(feed.map((post) => post.id)).toEqual([101, 201, 102, 202, 103, 203, 104, 204]);
+    expect(mocks.prefixes).not.toHaveBeenCalled();
+  });
+
+  it("orders a centroid cluster's candidates for variety using embedding prefixes", async () => {
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    mocks.nearest.mockResolvedValue([
+      { postId: 10, score: 0.9 },
+      { postId: 11, score: 0.89 },
+      { postId: 12, score: 0.88 },
+      { postId: 13, score: 0.6 },
+    ]);
+    mocks.prefixes.mockResolvedValue(TWIN_PREFIXES);
+
+    const feed = await buildFeed({ ...TEST_CONFIG, diversityLambda: 0.7 });
+
+    expect(feed.map((post) => post.id)).toEqual([10, 13, 11, 12]);
+    expect(mocks.prefixes).toHaveBeenCalledTimes(1);
+    expect(mocks.prefixes.mock.calls[0][0]).toMatchObject({
+      prefixDimensions: TEST_CONFIG.diversityDimensions,
+    });
+    expect([...mocks.prefixes.mock.calls[0][0].postIds].sort()).toEqual([10, 11, 12, 13]);
+    // Relevance scores are untouched; only the order changes.
+    expect(feed.find((post) => post.id === 13)?.score).toBeCloseTo(0.6);
+  });
+
+  it("applies the variety pass to favorites retrieval too", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    mocks.related.mockImplementation(({ postIds }: { postIds: number[] }) =>
+      Promise.resolve(
+        new Map(
+          postIds.map((postId) => [
+            postId,
+            [
+              [10, 0.9],
+              [11, 0.89],
+              [12, 0.88],
+              [13, 0.87],
+            ].map(([id, score]) => ({ ...card(id), score })),
+          ])
+        )
+      )
+    );
+    mocks.prefixes.mockResolvedValue(TWIN_PREFIXES);
+    const favorites: FeedConfig = { ...TEST_CONFIG, retrieval: "favorites" };
+
+    const plain = await buildFeed(favorites);
+    expect(plain.map((post) => post.id)).toEqual([10, 11, 12, 13]);
+
+    const diversified = await buildFeed({ ...favorites, diversityLambda: 0.7 });
+    expect(diversified.map((post) => post.id)).toEqual([10, 13, 11, 12]);
+  });
+
+  it("selects exploration posts unlike every taste member and spreads them apart", () => {
+    const members = new Float32Array([...unit([1, 0]), ...unit([0, 1])]);
+    const prefixes = new Map([
+      [10, unit([1, 0.05])], // next to the first member
+      [11, unit([-1, 0])],
+      [12, unit([-1, -0.05])], // near-twin of 11
+      [13, unit([0, -1])],
+      // 14 has no prefix
+    ]);
+
+    const picked = selectExploration([10, 11, 12, 13, 14], prefixes, members, 2, {
+      maxSimilarity: 0.5,
+    });
+
+    // 10 is too close to a favorite and 14 cannot be compared. 13 follows 11
+    // because 12 is nearly the same post as 11.
+    expect(picked.map((candidate) => candidate.id)).toEqual([11, 13, 12]);
+    expect(picked.map((candidate) => candidate.score)).toEqual([1, 2 / 3, 1 / 3].map((score) => expect.closeTo(score, 6)));
+
+    // The similarity mapping decides what counts as close...
+    expect(
+      selectExploration([10], prefixes, members, 2, {
+        maxSimilarity: 0.5,
+        similarity: (cosine) => cosine * 0.4,
+      }).map((candidate) => candidate.id)
+    ).toEqual([10]);
+    // ...and with no taste members everything comparable qualifies.
+    expect(
+      selectExploration([10, 14], prefixes, new Float32Array(0), 2, { maxSimilarity: 0.5 }).map(
+        (candidate) => candidate.id
+      )
+    ).toEqual([10]);
+  });
+
+  it("spaces exploration posts evenly within each page without moving posts between pages", () => {
+    type Item = { id: number; explore?: true };
+    const taste = (id: number): Item => ({ id });
+    const explore = (id: number): Item => ({ id, explore: true });
+    // Page one opens with its two exploration posts; page two has one at the end.
+    const items = [
+      explore(91), explore(92), taste(1), taste(2), taste(3), taste(4), taste(5), taste(6), taste(7), taste(8),
+      taste(9), taste(10), taste(11), explore(93),
+    ];
+
+    const spaced = spaceExploration(items, 10);
+
+    expect(spaced.map((item) => item.id)).toEqual([
+      1, 2, 91, 3, 4, 5, 6, 92, 7, 8,
+      9, 10, 93, 11,
+    ]);
+    // Nothing to space, or nothing to space it among: unchanged.
+    expect(spaceExploration([taste(1), taste(2)], 10).map((item) => item.id)).toEqual([1, 2]);
+    expect(spaceExploration([explore(91), explore(92)], 10).map((item) => item.id)).toEqual([91, 92]);
+    expect(spaceExploration(items, 0)).toEqual(items);
+  });
+
+  /** Sampled unseen posts 301-304; 303 sits right next to favorite 1. */
+  function useExploreSample() {
+    mocks.sampleUnseen.mockResolvedValue([301, 302, 303, 304, 1]);
+    mocks.prefixes.mockImplementation(({ postIds }: { postIds: number[] }) => {
+      const all = new Map([
+        [301, unit([0, 0, 1, 0])],
+        [302, unit([0, 0, 0, 1])],
+        [303, unit([1, 0.02, 0, 0])],
+        [304, unit([-1, 0, 0, 0])],
+      ]);
+      return Promise.resolve(new Map(postIds.flatMap((id) => (all.has(id) ? [[id, all.get(id)!] as const] : []))));
+    });
+  }
+
+  it("gives exploration its page share from unseen posts outside the taste model's reach", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    useAxisNeighbors(8);
+    useExploreSample();
+
+    const feed = await buildFeed({ ...TEST_CONFIG, exploreShare: 0.25 });
+
+    // A quarter of each four-post page is exploration, farthest-first; 303
+    // is too close to a favorite and the sampled favorite (1) is excluded.
+    const explored = feed.filter((post) => post.explore);
+    expect(explored.map((post) => post.id)).toEqual([301, 302]);
+    for (const page of [feed.slice(0, 4), feed.slice(4, 8)]) {
+      expect(page.filter((post) => post.explore)).toHaveLength(1);
+      // Mid-page, not leading it.
+      expect(page.findIndex((post) => post.explore)).toBe(2);
+    }
+    expect(feed.filter((post) => !post.explore).every((post) => post.id < 300)).toBe(true);
+    expect(mocks.sampleUnseen).toHaveBeenCalledTimes(1);
+    expect(mocks.sampleUnseen.mock.calls[0][0]).toMatchObject({
+      limit: TEST_CONFIG.exploreSampleSize,
+      seed: Math.floor(NOW.getTime() / 3_600_000),
+    });
+    expect(mocks.prefixes.mock.calls[0][0].postIds).toEqual([301, 302, 303, 304]);
+
+    // At half the page the exploration list outweighs both clusters and
+    // allocation alone would put it first; it is spaced out instead.
+    const half = await buildFeed({ ...TEST_CONFIG, exploreShare: 0.5 });
+    expect(half.slice(0, 4).map((post) => Boolean(post.explore))).toEqual([false, true, false, true]);
+  });
+
+  it("does not sample when exploration is off, and drops exploration posts near a dismissal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    useAxisNeighbors(8);
+    useExploreSample();
+
+    await buildFeed(TEST_CONFIG);
+    expect(mocks.sampleUnseen).not.toHaveBeenCalled();
+
+    mocks.dismissalFindMany.mockResolvedValue([{ postId: 9 }]);
+    mocks.maxSimilarity.mockImplementation(
+      ({ candidateIds, referenceIds }: { candidateIds: number[]; referenceIds: number[] }) => {
+        const nearDismissal = referenceIds.length === 1 && referenceIds[0] === 9;
+        return Promise.resolve(
+          new Map(candidateIds.map((id) => [id, nearDismissal ? (id === 301 ? 0.95 : 0.1) : 0.9]))
+        );
+      }
+    );
+    const feed = await buildFeed({ ...TEST_CONFIG, exploreShare: 0.25 });
+    expect(feed.filter((post) => post.explore).map((post) => post.id)).toEqual([302, 304]);
+  });
+
+  it("never labels a post the taste model also returned as exploration", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    // Post 301 is far enough from the favorite to pass the exploration
+    // cutoff, but the taste retrieval returned it as well.
+    mocks.nearest.mockResolvedValue([
+      { postId: 101, score: 0.95 },
+      { postId: 102, score: 0.9 },
+      { postId: 103, score: 0.85 },
+      { postId: 301, score: 0.3 },
+    ]);
+    mocks.sampleUnseen.mockResolvedValue([301, 302]);
+    mocks.prefixes.mockResolvedValue(
+      new Map([
+        [301, unit([0.3, 0.954, 0, 0])],
+        [302, unit([0, 0, 1, 0])],
+      ])
+    );
+
+    const feed = await buildFeed({ ...TEST_CONFIG, exploreShare: 0.25, pageSize: 8, pageCount: 1 });
+
+    expect(feed.find((post) => post.id === 301)?.explore).toBeUndefined();
+    expect(feed.filter((post) => post.explore).map((post) => post.id)).toEqual([302]);
+  });
+
+  it("caps exploration at its share of what the taste model can fill", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    // Three taste candidates and plenty of exploration candidates, on pages
+    // of eight: the empty slots must not fill up with exploration.
+    mocks.nearest.mockResolvedValue([
+      { postId: 101, score: 0.95 },
+      { postId: 102, score: 0.9 },
+      { postId: 103, score: 0.85 },
+    ]);
+    const sampled = Array.from({ length: 12 }, (_, index) => 301 + index);
+    mocks.sampleUnseen.mockResolvedValue(sampled);
+    mocks.prefixes.mockResolvedValue(
+      new Map(sampled.map((id, index) => [id, unit([0, Math.cos(index), Math.sin(index), 1])]))
+    );
+    const config = { ...TEST_CONFIG, pageSize: 8, pageCount: 2, maxFeedSize: 16 };
+
+    const quarter = await buildFeed({ ...config, exploreShare: 0.25 });
+    // A quarter of a feed with three taste posts is one exploration post.
+    expect(quarter.filter((post) => !post.explore).map((post) => post.id)).toEqual([101, 102, 103]);
+    expect(quarter.filter((post) => post.explore)).toHaveLength(1);
+
+    const half = await buildFeed({ ...config, exploreShare: 0.5 });
+    expect(half.filter((post) => post.explore)).toHaveLength(3);
+
+    // No taste candidates at all: no exploration-only feed.
+    mocks.nearest.mockResolvedValue([]);
+    expect(await buildFeed({ ...config, exploreShare: 0.5 })).toEqual([]);
+  });
+
+  it("reorders only the most relevant candidates of a long list for variety", async () => {
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    const ids = Array.from({ length: 10 }, (_, index) => 11 + index);
+    mocks.nearest.mockResolvedValue(ids.map((postId, index) => ({ postId, score: 0.9 - index * 0.02 })));
+    // 12 and 13 are near-twins of 11; 14 is unlike them. Depth 2 gives a pool of six.
+    mocks.prefixes.mockImplementation(({ postIds }: { postIds: number[] }) =>
+      Promise.resolve(
+        new Map(postIds.map((id) => [id, id === 14 ? unit([0, 1]) : unit([1, (id - 11) * 0.01])]))
+      )
+    );
+
+    const feed = await buildFeed({
+      ...TEST_CONFIG,
+      diversityLambda: 0.7,
+      diversityDepth: 2,
+      pageSize: 10,
+      pageCount: 1,
+      maxFeedSize: 10,
+    });
+
+    // Prefixes are read for the pool only, however long the list is...
+    expect([...mocks.prefixes.mock.calls[0][0].postIds].sort()).toEqual([11, 12, 13, 14, 15, 16]);
+    // ...the distinct post moves up within it, and the rest keeps its order.
+    expect(feed.map((post) => post.id)).toEqual([11, 14, 12, 13, 15, 16, 17, 18, 19, 20]);
+  });
+
+  it("flattens page quotas with the quota exponent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    // Two single-favorite clusters; the second favorite is two half-lives
+    // old, so its cluster has a quarter of the mass.
+    mocks.favoriteFindMany.mockResolvedValue([
+      favorite(1),
+      favorite(2, 2 * TEST_CONFIG.recencyHalfLifeDays),
+    ]);
+    useAxisNeighbors(10);
+    const config = { ...TEST_CONFIG, pageSize: 10, pageCount: 1, maxFeedSize: 10 };
+    const split = async (quotaExponent: number) => {
+      const feed = await buildFeed({ ...config, quotaExponent });
+      const heavy = feed.filter((post) => Math.floor(post.id / 100) === 1).length;
+      return [heavy, feed.length - heavy];
+    };
+
+    expect(await split(1)).toEqual([8, 2]);
+    expect(await split(0.5)).toEqual([7, 3]);
+    expect(await split(0)).toEqual([5, 5]);
+  });
+
+  it("reports a degraded build when the prefix lookup rejects", async () => {
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    mocks.nearest.mockResolvedValue([
+      { postId: 10, score: 0.9 },
+      { postId: 11, score: 0.8 },
+      { postId: 12, score: 0.7 },
+    ]);
+    mocks.prefixes.mockRejectedValue(new Error("vector store down"));
+
+    await expect(buildFeed({ ...TEST_CONFIG, diversityLambda: 0.7 })).resolves.toEqual([]);
+    // Off, the same store state builds normally.
+    const feed = await buildFeed(TEST_CONFIG);
+    expect(feed.map((post) => post.id)).toEqual([10, 11, 12]);
+  });
+});
+
+describe("options set in the admin panel", () => {
+  const stored = (pairs: Record<string, string>) =>
+    mocks.settingsFindMany.mockResolvedValue(Object.entries(pairs).map(([key, value]) => ({ key, value })));
+  function useNeighborLists() {
+    mocks.related.mockImplementation(({ postIds }: { postIds: number[] }) =>
+      Promise.resolve(new Map(postIds.map((postId) => [postId, [{ ...card(postId * 100 + 1), score: 0.9 }]])))
+    );
+  }
+
+  it("builds the app's feed with the stored options", async () => {
+    stored({ "feed.retrieval": "favorites", "feed.exploreShare": "0.25" });
+    useNeighborLists();
+
+    const page = await getFeedPage(1, 48);
+
+    // Favorites retrieval instead of the centroid scan, and an exploration sample.
+    expect(mocks.related).toHaveBeenCalled();
+    expect(mocks.nearest).not.toHaveBeenCalled();
+    expect(mocks.sampleUnseen).toHaveBeenCalledTimes(1);
+    expect(page.posts.map((post) => post.id).sort()).toEqual([101, 201]);
+    expect(mocks.settingsFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads them for buildFeed() without a config, never for an explicit one", async () => {
+    stored({ "feed.retrieval": "favorites" });
+    useNeighborLists();
+
+    await buildFeed(TEST_CONFIG);
+    expect(mocks.settingsFindMany).not.toHaveBeenCalled();
+    expect(mocks.related).not.toHaveBeenCalled();
+
+    await buildFeed();
+    expect(mocks.settingsFindMany).toHaveBeenCalledTimes(1);
+    expect(mocks.related).toHaveBeenCalled();
+  });
+
+  it("ignores stored values that are not valid", async () => {
+    stored({ "feed.retrieval": "sideways", "feed.exploreShare": "0.9" });
+
+    await getFeedPage(1, 48);
+
+    expect(mocks.nearest).toHaveBeenCalled();
+    expect(mocks.related).not.toHaveBeenCalled();
+    expect(mocks.sampleUnseen).not.toHaveBeenCalled();
+  });
+
+  it("does not cache a feed built while the options could not be read", async () => {
+    mocks.settingsFindMany.mockRejectedValueOnce(new Error("database unavailable"));
+
+    expect((await getFeedPage(1, 48)).posts).toEqual([]);
+    // The next read builds again instead of serving the failed result.
+    expect((await getFeedPage(1, 48)).posts.length).toBeGreaterThan(0);
+    expect(mocks.settingsFindMany).toHaveBeenCalledTimes(2);
   });
 });
 
