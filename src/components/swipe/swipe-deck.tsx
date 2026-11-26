@@ -92,7 +92,7 @@ export function SwipeDeck() {
   const topCardRef = useRef<SwipeCardHandle>(null);
   const historyRef = useRef<SwipeHistoryEntry[]>([]);
   const queueRef = useRef<DeckPost[]>([]);
-  const fetchingRef = useRef(false);
+  /** The in-flight deck request, if any. Aborted requests no longer count as in flight. */
   const abortRef = useRef<AbortController | null>(null);
   const pendingByHash = useRef(new Map<string, Promise<unknown>>());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -122,8 +122,10 @@ export function SwipeDeck() {
   }, []);
 
   const refill = useCallback(async () => {
-    if (fetchingRef.current) return;
-    fetchingRef.current = true;
+    // One live request at a time, but an aborted one (effect cleanup on
+    // Strict Mode remount or a hidden <Activity>) must not block the request
+    // the re-run effect starts: its own finally only settles later.
+    if (abortRef.current && !abortRef.current.signal.aborted) return;
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -141,6 +143,7 @@ export function SwipeDeck() {
       });
       if (!response.ok) throw new Error(`Deck request failed: ${response.status}`);
       const data = (await response.json()) as DeckResult;
+      if (controller.signal.aborted) return;
 
       const seen = new Set(historyRef.current.map((entry) => entry.hash));
       setQueue((current) => {
@@ -166,7 +169,6 @@ export function SwipeDeck() {
       setLoadState("error");
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
-      fetchingRef.current = false;
     }
   }, []);
 
