@@ -132,6 +132,7 @@ model Post {
   embeddings      PostEmbedding[]
   favorite        Favorite?
   feedDismissal   FeedDismissal?
+  feedSwipe       FeedSwipe?
   view            PostView?
 
   @@index([rating])
@@ -431,6 +432,27 @@ model FeedDismissal {
   dismissedAt DateTime @default(now())
 
   @@index([dismissedAt(sort: Desc)])
+}
+
+/// Outcome of one card in the swipe feed (/recommended/swipe): the latest
+/// swipe per post. A record of what was shown and how it was answered, so
+/// exploration can be judged; a skip is not a taste signal and never changes
+/// the ranking of taste cards. Posts with a row are no longer "unseen" for
+/// exploration.
+model FeedSwipe {
+  postId   Int             @id
+  post     Post            @relation(fields: [postId], references: [id], onDelete: Cascade)
+  action   FeedSwipeAction
+  /// Dealt as an exploration card (outside the taste model's reach).
+  explore  Boolean         @default(false)
+  swipedAt DateTime        @default(now())
+
+  @@index([swipedAt(sort: Desc)])
+}
+
+enum FeedSwipeAction {
+  LIKE
+  SKIP
 }
 
 // Implicit engagement signal: opening a post's detail page records a view.
