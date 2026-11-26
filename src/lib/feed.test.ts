@@ -63,6 +63,7 @@ import {
   applyFreshnessBoost,
   applyViewedPenalty,
   collapseSignalsByGroup,
+  interleaveExploration,
   dedupeRankedByBlurhash,
   dedupeRankedByGroup,
   feedRebuildInFlight,
@@ -1249,6 +1250,83 @@ describe("variety pass and exploration", () => {
     expect(feed.filter((post) => post.explore).map((post) => post.id)).toEqual([302, 304]);
   });
 
+  it("adds exploration per page in proportion to the taste posts on it", () => {
+    type Item = { id: number; explore?: true };
+    const taste = (id: number): Item => ({ id });
+    const explore = (id: number): Item => ({ id, explore: true });
+    const tasteItems = Array.from({ length: 11 }, (_, index) => taste(index + 1));
+    const exploreItems = Array.from({ length: 10 }, (_, index) => explore(91 + index));
+    const options = { tastePerPage: 8, explorePerPage: 2, exploreShare: 0.2 };
+
+    const feed = interleaveExploration(tasteItems, exploreItems, options);
+
+    // Page one: 8 taste + 2 exploration. Page two has 3 taste posts left, a
+    // fifth of which rounds to one exploration post, not the two a full page gets.
+    const pageOne = feed.slice(0, 10);
+    const pageTwo = feed.slice(10);
+    expect(pageOne.filter((item) => item.explore).map((item) => item.id)).toEqual([91, 92]);
+    expect(pageOne.filter((item) => !item.explore)).toHaveLength(8);
+    expect(pageTwo.map((item) => item.id).sort((a, b) => a - b)).toEqual([9, 10, 11, 93]);
+    expect(feed.filter((item) => !item.explore).map((item) => item.id)).toEqual(tasteItems.map((item) => item.id));
+
+    // Nothing to add, or nothing to add it to.
+    expect(interleaveExploration(tasteItems, [], options)).toEqual(tasteItems);
+    expect(interleaveExploration([], exploreItems, options)).toEqual([]);
+    expect(interleaveExploration(tasteItems, exploreItems, { ...options, explorePerPage: 0 })).toEqual(tasteItems);
+  });
+
+  it("skips exploration posts that duplicate a taste post or an earlier exploration post", () => {
+    type Item = { id: number; explore?: true };
+    const taste: Item[] = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+    const explore: Item[] = [91, 92, 93, 94, 2].map((id) => ({ id, explore: true }));
+    const groups = new Map([
+      [1, [7]],
+      [91, [7]], // same group as taste post 1
+      [93, [8]],
+      [94, [8]], // same group as exploration post 93
+    ]);
+    const keys = new Map([
+      [3, "same-picture"],
+      [92, "same-picture"], // same image as taste post 3
+    ]);
+
+    const feed = interleaveExploration(taste, explore, {
+      tastePerPage: 4,
+      explorePerPage: 4,
+      exploreShare: 0.5,
+      groupIdsByPostId: groups,
+      dedupeKeyByPostId: keys,
+    });
+
+    expect(feed.filter((item) => item.explore).map((item) => item.id)).toEqual([93]);
+    expect(feed.map((item) => item.id).filter((id) => id === 2)).toHaveLength(1);
+  });
+
+  it("keeps exploration at its share when most taste candidates collapse into one group", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    // Twenty taste candidates, all pages of the same post group: one survives.
+    const tasteIds = Array.from({ length: 20 }, (_, index) => 101 + index);
+    mocks.nearest.mockResolvedValue(tasteIds.map((postId, index) => ({ postId, score: 0.95 - index * 0.01 })));
+    mocks.postGroupFindMany.mockImplementation(
+      (args: { where?: { group?: unknown; postId?: { in: number[] } } }) =>
+        Promise.resolve(
+          args.where?.group ? [] : (args.where?.postId?.in ?? []).filter((id) => id < 200).map((postId) => ({ postId, groupId: 5 }))
+        )
+    );
+    const sampled = Array.from({ length: 20 }, (_, index) => 301 + index);
+    mocks.sampleUnseen.mockResolvedValue(sampled);
+    mocks.prefixes.mockResolvedValue(
+      new Map(sampled.map((id, index) => [id, unit([0, Math.cos(index), Math.sin(index), 1])]))
+    );
+
+    const feed = await buildFeed({ ...TEST_CONFIG, exploreShare: 0.5, pageSize: 8, pageCount: 3, maxFeedSize: 24 });
+
+    expect(feed.filter((post) => !post.explore)).toHaveLength(1);
+    expect(feed.filter((post) => post.explore)).toHaveLength(1);
+  });
+
   it("never labels a post the taste model also returned as exploration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -1275,7 +1353,7 @@ describe("variety pass and exploration", () => {
     expect(feed.filter((post) => post.explore).map((post) => post.id)).toEqual([302]);
   });
 
-  it("caps exploration at its share of what the taste model can fill", async () => {
+  it("gives a page the taste model cannot fill proportionally less exploration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);

@@ -409,7 +409,7 @@ export function rankMemberNeighbors(
   return ranked.sort((a, b) => b.score - a.score || a.id - b.id);
 }
 
-/** Allocation key of the exploration list; real cluster indices are >= 0. */
+/** Key of the exploration candidates next to the taste clusters'; real cluster indices are >= 0. */
 const EXPLORE_CLUSTER = -1;
 
 /**
@@ -467,11 +467,9 @@ export function selectExploration(
 
 /**
  * Place each page's exploration posts at even intervals among its other
- * posts. Allocation emits clusters heaviest first in every round, and the
- * exploration list outweighs any single cluster, so it would otherwise open
- * every page; spaced out, a page (or a swipe deck walking the ranking) meets
- * one every `pageSize / count` posts. Which posts are on which page, and the
- * order within each kind, are unchanged.
+ * posts, so a page (or a swipe deck walking the ranking) meets one every
+ * `pageSize / count` posts instead of in a block. Which posts are on which
+ * page, and the order within each kind, are unchanged.
  */
 export function spaceExploration<T extends { explore?: true }>(
   items: readonly T[],
@@ -498,6 +496,71 @@ export function spaceExploration<T extends { explore?: true }>(
         nextOther >= others.length || (slots.has(slot) && nextExplore < explore.length);
       result.push(takeExplore ? explore[nextExplore++] : others[nextOther++]);
     }
+  }
+  return result;
+}
+
+/**
+ * Add exploration posts to pages of taste posts that are already chosen.
+ *
+ * `taste` is the allocated ranking, `tastePerPage` posts to a page. Each page
+ * gets at most `explorePerPage` exploration posts, and no more than its share
+ * of the taste posts actually on that page: a page the taste model could only
+ * part-fill gets proportionally fewer, and a page with none gets none. So
+ * exploration can never take over a page, however few taste posts survive
+ * deduplication. Exploration posts that share a group or a dedupe key with
+ * any taste post, or with an earlier exploration post, are skipped. Within a
+ * page they are spaced evenly ({@link spaceExploration}).
+ */
+export function interleaveExploration<T extends { id: number; explore?: true }>(
+  taste: readonly T[],
+  explore: readonly T[],
+  options: {
+    tastePerPage: number;
+    explorePerPage: number;
+    exploreShare: number;
+    groupIdsByPostId?: ReadonlyMap<number, number[]>;
+    dedupeKeyByPostId?: ReadonlyMap<number, string>;
+  }
+): T[] {
+  const tastePerPage = Math.floor(options.tastePerPage);
+  const explorePerPage = Math.floor(options.explorePerPage);
+  const share = Math.min(0.5, Math.max(0, options.exploreShare));
+  if (tastePerPage <= 0 || explorePerPage <= 0 || share <= 0 || explore.length === 0) {
+    return [...taste];
+  }
+  const takenIds = new Set<number>();
+  const takenGroups = new Set<number>();
+  const takenKeys = new Set<string>();
+  const claim = (item: T): boolean => {
+    const groupIds = options.groupIdsByPostId?.get(item.id) ?? [];
+    const key = options.dedupeKeyByPostId?.get(item.id);
+    if (
+      takenIds.has(item.id) ||
+      groupIds.some((groupId) => takenGroups.has(groupId)) ||
+      (key !== undefined && takenKeys.has(key))
+    ) {
+      return false;
+    }
+    takenIds.add(item.id);
+    for (const groupId of groupIds) takenGroups.add(groupId);
+    if (key !== undefined) takenKeys.add(key);
+    return true;
+  };
+  // Taste posts are already deduplicated among themselves; they all claim first.
+  for (const item of taste) claim(item);
+
+  const result: T[] = [];
+  let cursor = 0;
+  for (let start = 0; start < taste.length; start += tastePerPage) {
+    const page = taste.slice(start, start + tastePerPage);
+    const wanted = Math.min(explorePerPage, Math.round((page.length * share) / (1 - share)));
+    const picked: T[] = [];
+    while (picked.length < wanted && cursor < explore.length) {
+      const candidate = explore[cursor++];
+      if (claim(candidate)) picked.push(candidate);
+    }
+    result.push(...spaceExploration([...page, ...picked], page.length + picked.length));
   }
   return result;
 }
@@ -1364,20 +1427,15 @@ async function buildFeedUnsafe(
     }
     // Exploration keeps the order selectExploration gave it (already spread
     // farthest-first), so it takes no freshness, viewed or variety pass.
-    // Two limits. A post the taste model also retrieved is a taste post: the
-    // exploration cutoff sits above the taste floor, so the two can overlap,
-    // and it must not be shown or counted as exploration. And exploration is
-    // capped at its share of what taste can fill: allocation backfills empty
-    // slots from any list, so an uncapped list would take over whole pages
-    // once a small library's taste candidates ran out.
+    // A post the taste model also retrieved is a taste post (the exploration
+    // cutoff sits above the taste floor, so the two can overlap); it must not
+    // be shown or counted as exploration.
     const tasteIds = new Set<number>();
     for (const ranked of rankedByCluster.values()) {
       for (const post of ranked) tasteIds.add(post.id);
     }
-    const exploreCap = Math.ceil((tasteIds.size * exploreShare) / (1 - exploreShare));
     const explore: FeedPost[] = [];
     for (const candidate of candidatesByCluster.get(EXPLORE_CLUSTER) ?? []) {
-      if (explore.length >= exploreCap) break;
       if (tasteIds.has(candidate.id)) continue;
       const post = postsById.get(candidate.id);
       if (!post) continue;
@@ -1392,34 +1450,38 @@ async function buildFeedUnsafe(
         explore: true,
       });
     }
-    if (explore.length > 0) {
-      let totalMass = 0;
-      for (const mass of massByCluster.values()) totalMass += mass;
-      // Sized so the list holds exploreShare of the mass a page is divided by.
-      rankedByCluster.set(EXPLORE_CLUSTER, explore);
-      massByCluster.set(
-        EXPLORE_CLUSTER,
-        (totalMass * exploreShare) / (1 - exploreShare)
-      );
-    }
+    // Exploration never enters allocation: taste fills its part of each page
+    // first (allocation deduplicates and backfills among taste clusters only),
+    // then exploration is added per page in proportion to the taste posts
+    // that page really has. Inside allocation it would be backfilled into
+    // every slot taste could not fill.
+    const pageSize = Math.max(0, Math.floor(config.pageSize));
+    const explorePerPage =
+      explore.length > 0 ? Math.min(pageSize, Math.round(pageSize * exploreShare)) : 0;
+    const dedupeKeyByPostId = perceptualKeyByPostId(postRows);
     const allocated = allocateAcrossClusters(
       rankedByCluster,
       massByCluster,
       groupIdsByPostId,
       {
-        pageSize: config.pageSize,
+        pageSize: pageSize - explorePerPage,
         pageCount: config.pageCount,
         floorShare: config.floorShare,
       },
-      perceptualKeyByPostId(postRows)
+      dedupeKeyByPostId
     );
-    return {
-      feed: spaceExploration(
-        allocated.map(({ item }) => item),
-        config.pageSize
-      ).slice(0, config.maxFeedSize),
-      degraded: false,
-    };
+    const feed = interleaveExploration(
+      allocated.map(({ item }) => item),
+      explore,
+      {
+        tastePerPage: pageSize - explorePerPage,
+        explorePerPage,
+        exploreShare,
+        groupIdsByPostId,
+        dedupeKeyByPostId,
+      }
+    );
+    return { feed: feed.slice(0, config.maxFeedSize), degraded: false };
 }
 
 /**
