@@ -16,8 +16,9 @@ vi.mock('next/link', () => ({
 
 const hash = (n: number) => n.toString(16).padStart(64, '0');
 
-function deckPost(n: number): DeckPost {
+function deckPost(n: number, explore = false): DeckPost {
   return {
+    explore,
     id: n,
     hash: hash(n),
     width: 800,
@@ -51,6 +52,9 @@ let container: HTMLDivElement;
 let root: Root;
 let deckReplies: Array<Response | Promise<Response>>;
 let favoriteCalls: string[];
+let favoriteStatus: number;
+/** Swipe outcome reports as `METHOD hash-number body`. */
+let swipeCalls: string[];
 
 function cardLabels(): string[] {
   return [...container.querySelectorAll('[aria-roledescription="card"]')]
@@ -101,12 +105,19 @@ describe('SwipeDeck exhaustion after likes', () => {
 
     deckReplies = [];
     favoriteCalls = [];
+    favoriteStatus = 200;
+    swipeCalls = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url.includes('/favorite')) {
           favoriteCalls.push(init?.method ?? 'GET');
+          return new Response('{}', { status: favoriteStatus });
+        }
+        if (url.endsWith('/swipe')) {
+          const postNumber = parseInt(url.split('/').at(-2) ?? '', 16);
+          swipeCalls.push([init?.method, postNumber, init?.body].filter((part) => part !== undefined).join(' '));
           return new Response('{}', { status: 200 });
         }
         if (url.includes('/api/feed/deck')) {
@@ -189,5 +200,60 @@ describe('SwipeDeck exhaustion after likes', () => {
     expect(cardLabels()).toEqual([]);
     expect(container.textContent).toContain("You're all caught up");
     expect(deckReplies).toHaveLength(0);
+  });
+
+  it('reports each answered card, and whether it was an exploration card', async () => {
+    deckReplies.push(deckResponse([deckPost(1), deckPost(2, true), deckPost(3)], { remaining: 0 }), deckResponse([]));
+
+    await act(async () => root.render(<SwipeDeck />));
+    await flush();
+    await press('Skip');
+    await advance(150);
+    await press('Like');
+    await advance(150);
+
+    expect(swipeCalls).toEqual([
+      'PUT 1 {"action":"skip","explore":false}',
+      'PUT 2 {"action":"like","explore":true}',
+    ]);
+    // The like was saved as a favorite before it was reported.
+    expect(favoriteCalls).toEqual(['PUT']);
+  });
+
+  it('shows an exploration card like any other card', async () => {
+    deckReplies.push(deckResponse([deckPost(1, true), deckPost(2)]), deckResponse([]));
+
+    await act(async () => root.render(<SwipeDeck />));
+    await flush();
+
+    const card = (label: string) => container.querySelector(`[aria-roledescription="card"][aria-label="${label}"]`);
+    const explore = card('Post by artist 1');
+    const normal = card('Post by artist 2');
+    expect(explore).not.toBeNull();
+    expect(normal).not.toBeNull();
+    // Same caption, nothing extra: only the artist differs.
+    expect(explore?.textContent?.replace('artist 1', '')).toBe(normal?.textContent?.replace('artist 2', ''));
+  });
+
+  it('withdraws the report on undo and never reports a like that failed to save', async () => {
+    deckReplies.push(deckResponse([deckPost(1), deckPost(2)]), deckResponse([]), deckResponse([]));
+
+    await act(async () => root.render(<SwipeDeck />));
+    await flush();
+    await press('Skip');
+    await advance(150);
+    await press('Undo');
+    await flush();
+    expect(swipeCalls).toEqual(['PUT 1 {"action":"skip","explore":false}', 'DELETE 1']);
+    expect(topCardLabel()).toBe('Post by artist 1');
+
+    favoriteStatus = 500;
+    swipeCalls = [];
+    await press('Like');
+    await advance(150);
+    expect(favoriteCalls).toEqual(['PUT']);
+    expect(swipeCalls).toEqual([]);
+    // The card is back on top for another try.
+    expect(topCardLabel()).toBe('Post by artist 1');
   });
 });

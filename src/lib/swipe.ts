@@ -142,10 +142,11 @@ export function formatTagName(name: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Skips leave no trace on the server (they are "next", not "not interested"),
- * so the device remembers what it has swiped to avoid re-dealing the same
- * cards. Entries expire so skipped posts can resurface later; likes become
- * favorites and drop out of the server ranking on their own.
+ * A skip is "next", not "not interested": the server records that the card was
+ * shown and skipped, but never ranks a post lower for it. So the device
+ * remembers what it has swiped to avoid re-dealing the same cards. Entries
+ * expire so skipped posts can resurface later; likes become favorites and
+ * drop out of the server ranking on their own.
  */
 export interface SwipeHistoryEntry {
   hash: string;
