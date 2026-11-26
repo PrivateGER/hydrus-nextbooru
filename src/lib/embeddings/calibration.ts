@@ -138,6 +138,31 @@ async function readCalibrationGeneration(): Promise<number> {
 }
 
 /**
+ * The stored baseline for a config, if {@link getEmbeddingBaseline} would use
+ * it: same config identity, full sample, current invalidation generation.
+ * Null otherwise. Never estimates and never writes, so read-only tools can
+ * report the cutoffs the live feed is actually using.
+ */
+export async function readStoredEmbeddingBaseline(
+  config: EmbeddingConfig
+): Promise<{ baseline: number; computedAt: string } | null> {
+  const generation = await readCalibrationGeneration();
+  const row = await prisma.settings.findUnique({
+    where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+    select: { value: true },
+  });
+  if (!row) return null;
+  try {
+    const parsed: unknown = JSON.parse(row.value);
+    return isCalibrationForConfig(parsed, config, generation)
+      ? { baseline: parsed.baseline, computedAt: parsed.computedAt }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Estimate the random-pair similarity baseline from the stored embeddings.
  *
  * Samples {@link CALIBRATION_SAMPLE_SIZE} embeddings for the config

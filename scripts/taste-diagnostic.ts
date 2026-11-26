@@ -104,12 +104,11 @@ async function main(): Promise<void> {
     getEmbeddingVectorsForPosts,
     getMaxSimilarityToReferences,
   } = await import("@/lib/embeddings/store");
-  const { calibrateEmbeddingScore, estimateEmbeddingBaseline } = await import(
+  const { calibrateEmbeddingScore, estimateEmbeddingBaseline, readStoredEmbeddingBaseline } = await import(
     "@/lib/embeddings/calibration"
   );
   const { getEmbeddingOpenRouterSettings, isEmbeddingProviderConfigured, toEmbeddingConfig } =
     await import("@/lib/embeddings/settings");
-  const { SETTINGS_KEYS } = await import("@/lib/openrouter/types");
 
   const config: FeedConfig = FEED_CONFIG;
 
@@ -135,29 +134,12 @@ async function main(): Promise<void> {
     // otherwise a fresh estimate (never persisted here).
     let baseline = 0;
     let baselineSource = "none (identity rescale)";
-    const calibrationRow = await prisma.settings.findUnique({
-      where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
-      select: { value: true },
-    });
-    if (calibrationRow) {
-      try {
-        const stored = JSON.parse(calibrationRow.value) as {
-          baseline?: number;
-          model?: string;
-          dimensions?: number;
-          computedAt?: string;
-        };
-        if (
-          typeof stored.baseline === "number" &&
-          stored.model === embeddingConfig.model &&
-          stored.dimensions === dimensions
-        ) {
-          baseline = stored.baseline;
-          baselineSource = `stored ${stored.computedAt ?? ""}`.trim();
-        }
-      } catch {
-        // Corrupt row: fall through to estimation.
-      }
+    // The same acceptance test as the live feed (config identity, full sample,
+    // current invalidation generation), so the cutoffs below are the feed's.
+    const storedBaseline = await readStoredEmbeddingBaseline(embeddingConfig);
+    if (storedBaseline) {
+      baseline = storedBaseline.baseline;
+      baselineSource = `stored ${storedBaseline.computedAt}`.trim();
     }
     if (baseline === 0) {
       const estimate = await estimateEmbeddingBaseline(embeddingConfig);

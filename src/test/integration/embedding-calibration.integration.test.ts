@@ -7,6 +7,7 @@ import {
   estimateEmbeddingBaseline,
   getEmbeddingBaseline,
   invalidateEmbeddingCalibration,
+  readStoredEmbeddingBaseline,
 } from "@/lib/embeddings/calibration";
 import { SETTINGS_KEYS } from "@/lib/openrouter/types";
 
@@ -182,5 +183,47 @@ describe("embedding calibration (integration)", () => {
     // A second invalidation moves the fence again and drops the row.
     await invalidateEmbeddingCalibration();
     expect(await getEmbeddingBaseline(config)).toBe(0);
+  });
+
+  it("reads a stored baseline only when the live feed would use it, without estimating or writing", async () => {
+    const prisma = getTestPrisma();
+    const liveConfig = { ...config, videoEnabled: false };
+    const store = (overrides: Record<string, unknown>) =>
+      prisma.settings.upsert({
+        where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+        create: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION, value: "" },
+        update: {},
+      }).then(() =>
+        prisma.settings.update({
+          where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION },
+          data: {
+            value: JSON.stringify({
+              baseline: 0.42,
+              sampleSize: 48,
+              computedAt: "2026-01-01T00:00:00.000Z",
+              generation: 0,
+              ...config,
+              ...overrides,
+            }),
+          },
+        })
+      );
+
+    // Nothing stored: null, and nothing gets stored by asking.
+    expect(await readStoredEmbeddingBaseline(liveConfig)).toBeNull();
+    expect(await prisma.settings.count({ where: { key: SETTINGS_KEYS.EMBEDDING_CALIBRATION } })).toBe(0);
+
+    await store({});
+    expect(await readStoredEmbeddingBaseline(liveConfig)).toEqual({ baseline: 0.42, computedAt: "2026-01-01T00:00:00.000Z" });
+    // Same model and dimensions are not enough.
+    for (const mismatch of [{ imageMaxResolution: 2048 }, { baseUrl: "http://other.local/v1" }, { generation: 3 }, { sampleSize: 20 }]) {
+      await store(mismatch);
+      expect(await readStoredEmbeddingBaseline(liveConfig)).toBeNull();
+    }
+    // A row from before an invalidation is stale.
+    await store({});
+    await invalidateEmbeddingCalibration();
+    await store({});
+    expect(await readStoredEmbeddingBaseline(liveConfig)).toBeNull();
   });
 });
