@@ -112,6 +112,12 @@ export function SwipeDeck() {
   const hintCheckedRef = useRef(false);
   const rebuildRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const rebuildRetries = useRef(0);
+  /**
+   * Successful likes so far. A refill whose request was in flight while a
+   * like settled may have been answered from the pre-like ranking (before the
+   * server even knew to rebuild), so its "nothing left" cannot be trusted.
+   */
+  const likesSettled = useRef(0);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -143,6 +149,7 @@ export function SwipeDeck() {
     if (abortRef.current && !abortRef.current.signal.aborted) return;
     const controller = new AbortController();
     abortRef.current = controller;
+    const likesAtStart = likesSettled.current;
     try {
       // Queued cards first, then history newest-first, so the server's cap
       // drops the oldest swipes if it ever applies.
@@ -168,15 +175,17 @@ export function SwipeDeck() {
       });
       setRemaining(data.remaining);
       setTotalCount(data.totalCount);
-      // "Nothing left" from a ranking that is being rebuilt (a like just
-      // changed the taste model) is provisional: re-read once it lands.
+      // "Nothing left" is provisional when the ranking is being rebuilt (a
+      // like changed the taste model) or a like settled while this request
+      // was in flight (the answer may predate it): re-read until it lands.
       const ranOut = data.posts.length === 0 || data.remaining === 0;
-      setExhausted(ranOut && !data.rebuilding);
+      const provisional = data.rebuilding || likesSettled.current !== likesAtStart;
+      setExhausted(ranOut && !provisional);
       clearTimeout(rebuildRetryTimer.current);
-      if (ranOut && data.rebuilding && rebuildRetries.current < MAX_REBUILD_RETRIES) {
+      if (ranOut && provisional && rebuildRetries.current < MAX_REBUILD_RETRIES) {
         rebuildRetries.current++;
         rebuildRetryTimer.current = setTimeout(() => void refillDeck(), REBUILD_RETRY_MS);
-      } else if (!data.rebuilding) {
+      } else if (!provisional) {
         rebuildRetries.current = 0;
       } else {
         // Out of retries: settle on what we have.
@@ -294,6 +303,7 @@ export function SwipeDeck() {
           if (ok) {
             // A like re-ranks the feed and can surface posts the deck has
             // not seen, so "caught up" no longer holds.
+            likesSettled.current++;
             rebuildRetries.current = 0;
             setExhausted(false);
             return;
