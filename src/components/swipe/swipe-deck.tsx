@@ -31,6 +31,10 @@ const BATCH_SIZE = 10;
 /** Cards rendered in the stack: top, the one beneath, and one more preloading. */
 const STACK_DEPTH = 3;
 const UNDO_DEPTH = 30;
+/** While the server is re-ranking (after a like), ask again this often... */
+const REBUILD_RETRY_MS = 2000;
+/** ...but give up after this many tries and trust the last answer. */
+const MAX_REBUILD_RETRIES = 8;
 const HINT_KEY = "swipe-feed-hint-seen-v1";
 
 type LoadState = "loading" | "ready" | "error";
@@ -106,6 +110,8 @@ export function SwipeDeck() {
   const nextSwipeId = useRef(1);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hintCheckedRef = useRef(false);
+  const rebuildRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const rebuildRetries = useRef(0);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -130,7 +136,7 @@ export function SwipeDeck() {
     else delete stack.dataset.dragging;
   }, []);
 
-  const refill = useCallback(async () => {
+  const refill = useCallback(async function refillDeck(): Promise<void> {
     // One live request at a time, but an aborted one (effect cleanup on
     // Strict Mode remount or a hidden <Activity>) must not block the request
     // the re-run effect starts: its own finally only settles later.
@@ -162,7 +168,20 @@ export function SwipeDeck() {
       });
       setRemaining(data.remaining);
       setTotalCount(data.totalCount);
-      setExhausted(data.posts.length === 0 || data.remaining === 0);
+      // "Nothing left" from a ranking that is being rebuilt (a like just
+      // changed the taste model) is provisional: re-read once it lands.
+      const ranOut = data.posts.length === 0 || data.remaining === 0;
+      setExhausted(ranOut && !data.rebuilding);
+      clearTimeout(rebuildRetryTimer.current);
+      if (ranOut && data.rebuilding && rebuildRetries.current < MAX_REBUILD_RETRIES) {
+        rebuildRetries.current++;
+        rebuildRetryTimer.current = setTimeout(() => void refillDeck(), REBUILD_RETRY_MS);
+      } else if (!data.rebuilding) {
+        rebuildRetries.current = 0;
+      } else {
+        // Out of retries: settle on what we have.
+        setExhausted(ranOut);
+      }
       setLoadState("ready");
       if (!hintCheckedRef.current) {
         hintCheckedRef.current = true;
@@ -193,6 +212,7 @@ export function SwipeDeck() {
     html.style.overscrollBehavior = "none"; // no pull-to-refresh mid-swipe
     return () => {
       abortRef.current?.abort();
+      clearTimeout(rebuildRetryTimer.current);
       document.body.style.overflow = previousOverflow;
       html.style.overscrollBehavior = previousOverscroll;
     };
@@ -264,7 +284,13 @@ export function SwipeDeck() {
 
       if (action === "like") {
         void setFavorite(post.hash, true).then((ok) => {
-          if (ok) return;
+          if (ok) {
+            // A like re-ranks the feed and can surface posts the deck has
+            // not seen, so "caught up" no longer holds.
+            rebuildRetries.current = 0;
+            setExhausted(false);
+            return;
+          }
           // Superseded by a later undo or swipe of this post: leave its state alone.
           if (latestSwipeByHash.current.get(post.hash) !== id) return;
           latestSwipeByHash.current.delete(post.hash);

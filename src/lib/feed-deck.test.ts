@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeedPost } from "./feed";
 
-const { mockQueryRaw, mockGetFeedPage } = vi.hoisted(() => ({
+const { mockQueryRaw, mockGetFeedPage, mockFeedRebuildInFlight } = vi.hoisted(() => ({
   mockQueryRaw: vi.fn(),
   mockGetFeedPage: vi.fn(),
+  mockFeedRebuildInFlight: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: { $queryRaw: mockQueryRaw } }));
 vi.mock("@/lib/feed", () => ({
   FEED_CONFIG: { maxFeedSize: 528 },
   getFeedPage: mockGetFeedPage,
+  feedRebuildInFlight: mockFeedRebuildInFlight,
 }));
 
 import {
@@ -85,6 +87,7 @@ describe("getFeedDeck", () => {
   beforeEach(() => {
     mockQueryRaw.mockReset();
     mockGetFeedPage.mockReset();
+    mockFeedRebuildInFlight.mockReset().mockReturnValue(false);
   });
 
   it("enriches the batch in one query and reports what is left", async () => {
@@ -121,6 +124,14 @@ describe("getFeedDeck", () => {
 
     const result = await getFeedDeck(new Set([hash(1)]), 10);
     expect(mockQueryRaw).not.toHaveBeenCalled();
-    expect(result).toEqual({ posts: [], remaining: 0, totalCount: 1 });
+    expect(result).toEqual({ posts: [], remaining: 0, totalCount: 1, rebuilding: false });
+  });
+
+  it("flags a batch served from a ranking that is being rebuilt", async () => {
+    mockGetFeedPage.mockResolvedValue({ posts: [feedPost(1)], totalCount: 1, totalPages: 1 });
+    mockFeedRebuildInFlight.mockReturnValue(true);
+
+    const result = await getFeedDeck(new Set([hash(1)]), 10);
+    expect(result).toMatchObject({ posts: [], remaining: 0, rebuilding: true });
   });
 });

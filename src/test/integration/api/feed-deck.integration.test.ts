@@ -81,7 +81,7 @@ describe('POST /api/feed/deck (Integration)', () => {
   it('returns an empty deck when there are no favorites', async () => {
     await createPostWithTags(getTestPrisma(), TASTE_TAGS);
     const data = await fetchDeck();
-    expect(data).toEqual({ posts: [], remaining: 0, totalCount: 0 });
+    expect(data).toEqual({ posts: [], remaining: 0, totalCount: 0, rebuilding: false });
   });
 
   it('deals unseen recommendations enriched for full-screen cards', async () => {
@@ -129,6 +129,33 @@ describe('POST /api/feed/deck (Integration)', () => {
     const none = await fetchDeck({ exclude: candidates.map((c) => c.hash) });
     expect(none.posts).toEqual([]);
     expect(none.remaining).toBe(0);
+  });
+
+  it('flags a stale ranking after a like, then deals what the like unlocked', async () => {
+    const prisma = getTestPrisma();
+    // seed -> A (shares t1, t2); A -> B (shares only t3). B is unreachable
+    // until A is liked.
+    const seed = await createPostWithTags(prisma, ['unlock t1', 'unlock t2']);
+    const a = await createPostWithTags(prisma, ['unlock t1', 'unlock t2', 'unlock t3']);
+    const b = await createPostWithTags(prisma, ['unlock t3', 'unlock t4']);
+    await prisma.tag.updateMany({ data: { idfWeight: 1.0 } });
+    await recalculatePostTagNorms();
+    await favorite(seed.hash);
+    clearFeedCache();
+
+    const first = await fetchDeck();
+    expect(first.posts.map((p) => p.hash)).toEqual([a.hash]);
+    expect(first).toMatchObject({ remaining: 0, rebuilding: false });
+
+    await favorite(a.hash);
+    const stale = await fetchDeck({ exclude: [a.hash] });
+    expect(stale.posts).toEqual([]);
+    expect(stale.rebuilding).toBe(true);
+
+    await settleFeedRebuild();
+    const fresh = await fetchDeck({ exclude: [a.hash] });
+    expect(fresh.posts.map((p) => p.hash)).toEqual([b.hash]);
+    expect(fresh.rebuilding).toBe(false);
   });
 
   it('respects the batch limit and reports the remainder', async () => {

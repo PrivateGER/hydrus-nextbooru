@@ -1074,9 +1074,10 @@ export async function settleFeedRebuild(): Promise<void> {
 /**
  * Whether any feed rebuild is currently live (in-flight or detached).
  *
- * Test hook: lets a test assert the non-blocking stale-while-revalidate
- * contract — a read that served the stale entry must resolve WHILE the
- * rebuild it triggered is still live, not after it.
+ * Lets the swipe deck (@/lib/feed-deck) tell clients that the ranking they
+ * just read is stale and worth re-reading shortly. Also a test hook: a read
+ * that served the stale entry must resolve WHILE the rebuild it triggered is
+ * still live, not after it.
  */
 export function feedRebuildInFlight(): boolean {
   return feedCache().liveBuilds.size > 0;

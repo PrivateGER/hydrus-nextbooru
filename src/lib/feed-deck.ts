@@ -11,7 +11,7 @@
  */
 
 import { prisma } from "@/lib/db";
-import { FEED_CONFIG, getFeedPage, type FeedPost } from "@/lib/feed";
+import { FEED_CONFIG, feedRebuildInFlight, getFeedPage, type FeedPost } from "@/lib/feed";
 
 /** Largest batch a single deck request may return. */
 export const MAX_DECK_LIMIT = 30;
@@ -44,6 +44,12 @@ export interface DeckResult {
   remaining: number;
   /** Size of the whole ranked feed, seen or not. */
   totalCount: number;
+  /**
+   * A rebuild (e.g. after a like) is running, so this batch came from the
+   * previous ranking. An empty or final batch is provisional: ask again
+   * shortly and the rebuilt ranking may hold new posts.
+   */
+  rebuilding: boolean;
 }
 
 /**
@@ -128,6 +134,8 @@ async function getDeckDetails(postIds: number[]): Promise<Map<number, DeckDetail
  */
 export async function getFeedDeck(exclude: ReadonlySet<string>, limit: number): Promise<DeckResult> {
   const { posts: feed, totalCount } = await getFeedPage(1, FEED_CONFIG.maxFeedSize);
+  // Read right after the page: serving a stale entry is what starts a rebuild.
+  const rebuilding = feedRebuildInFlight();
   const { picked, unseen } = selectDeckCandidates(feed, exclude, limit);
   const details = await getDeckDetails(picked.map((post) => post.id));
 
@@ -151,5 +159,5 @@ export async function getFeedDeck(exclude: ReadonlySet<string>, limit: number): 
     });
   }
 
-  return { posts, remaining: unseen - picked.length, totalCount };
+  return { posts, remaining: unseen - picked.length, totalCount, rebuilding };
 }
