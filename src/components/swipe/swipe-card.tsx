@@ -211,6 +211,9 @@ export function SwipeCard({
     ref,
     () => ({
       fling(action) {
+        // A finger or mouse is mid-drag/scroll: it owns the card. Flinging now
+        // would race applyDrag(), which overwrites the exit transition.
+        if (drag.current.pointerId !== null && drag.current.mode !== "pending") return;
         onInteract();
         flyOut(action);
       },
