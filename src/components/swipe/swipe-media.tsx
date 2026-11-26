@@ -9,7 +9,7 @@ import {
   useState,
   type Ref,
 } from "react";
-import { ChevronDoubleDownIcon, PhotoIcon } from "@heroicons/react/24/outline";
+import { ChevronDoubleDownIcon, FilmIcon, PhotoIcon } from "@heroicons/react/24/outline";
 import { PlayIcon, SpeakerWaveIcon, SpeakerXMarkIcon } from "@heroicons/react/24/solid";
 import { BlurhashImage } from "@/components/blurhash-image";
 import type { DeckPost } from "@/lib/feed-deck";
@@ -269,6 +269,8 @@ function SwipeVideo({
   const progressRef = useRef<HTMLDivElement>(null);
   const [paused, setPaused] = useState(false);
   const [ready, setReady] = useState(false);
+  // Missing file or unsupported codec: no loadeddata ever fires.
+  const [failed, setFailed] = useState(false);
   // Brief play glyph after resuming; the paused state shows its own.
   const [flash, setFlash] = useState(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -282,15 +284,18 @@ function SwipeVideo({
   // Reads the latest mute preference without re-running the play effect.
   const startPlayback = useEffectEvent((video: HTMLVideoElement) => {
     video.muted = muted;
-    video.play().catch(() => {
-      if (!video.muted) {
+    video.play().catch((error: unknown) => {
+      const blocked = error instanceof DOMException && error.name === "NotAllowedError";
+      if (blocked && !video.muted) {
         // Unmuted autoplay needs a fresh user gesture on some browsers.
         video.muted = true;
         onAutoplayBlocked();
         video.play().catch(() => setPaused(true));
-      } else {
+      } else if (blocked) {
         setPaused(true);
       }
+      // Anything else (NotSupportedError, AbortError) is a media failure
+      // that the element's error event reports, or a superseded play().
     });
   });
   useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -354,7 +359,7 @@ function SwipeVideo({
   return (
     <>
       {/* Underneath cards show a still; only the top card loads the stream. */}
-      {(!active || !ready) && (
+      {(!active || !ready || failed) && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={thumbnailUrl(post.hash)}
@@ -363,7 +368,7 @@ function SwipeVideo({
           className="absolute inset-0 h-full w-full object-contain"
         />
       )}
-      {active && (
+      {active && !failed && (
         <video
           ref={videoRef}
           src={fileUrl(post)}
@@ -374,13 +379,20 @@ function SwipeVideo({
           preload="auto"
           disablePictureInPicture
           onLoadedData={() => setReady(true)}
+          onError={() => setFailed(true)}
           onPlay={() => setPaused(false)}
           onPause={() => setPaused(true)}
         />
       )}
-      {active && !ready && <Spinner />}
+      {active && !ready && !failed && <Spinner />}
+      {active && failed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 text-zinc-200">
+          <FilmIcon className="h-10 w-10" aria-hidden />
+          <p className="text-sm">Couldn&apos;t play this video</p>
+        </div>
+      )}
 
-      {active && post.hasAudio && (
+      {active && !failed && post.hasAudio && (
         <button
           type="button"
           data-no-swipe
@@ -393,7 +405,7 @@ function SwipeVideo({
         </button>
       )}
 
-      {active && (paused || flash) && (
+      {active && !failed && (paused || flash) && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur">
             <PlayIcon className="ml-1 h-8 w-8" aria-hidden />
@@ -401,7 +413,7 @@ function SwipeVideo({
         </div>
       )}
 
-      {active && (
+      {active && !failed && (
         <div className="absolute inset-x-0 bottom-0 z-10 h-0.5 bg-white/20" aria-hidden>
           <div ref={progressRef} className="h-full origin-left bg-white" style={{ transform: "scaleX(0)" }} />
         </div>
