@@ -239,6 +239,10 @@ export function SwipeCard({
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if ((event.target as HTMLElement).closest("[data-no-swipe]")) return;
     cancelAnimationFrame(inertiaFrame.current); // a touch stops a coasting scroll
+    // Capture immediately, not once the drag is recognised: otherwise a
+    // mouse released outside the card inside the slop radius is never seen,
+    // and the stale gesture resumes on the next hover.
+    event.currentTarget.setPointerCapture(event.pointerId);
     const scroller = mediaRef.current?.scroller() ?? null;
     drag.current = {
       pointerId: event.pointerId,
@@ -263,7 +267,6 @@ export function SwipeCard({
     const dy = event.clientY - state.startY;
     if (state.mode === "pending") {
       if (Math.abs(dx) < DRAG_SLOP_PX && Math.abs(dy) < DRAG_SLOP_PX) return;
-      event.currentTarget.setPointerCapture(event.pointerId);
       onInteract();
       if (Math.abs(dy) > Math.abs(dx)) {
         // Vertical intent: scroll a tall image, otherwise ignore the gesture.
@@ -314,6 +317,10 @@ export function SwipeCard({
     reset();
   };
 
+  // Capture can also end without pointerup/cancel (element hidden, window
+  // blur); never leave a gesture half-open.
+  const onLostPointerCapture = onPointerCancel;
+
   const isVideo = post.mimeType.startsWith("video/");
   const duration = isVideo ? formatDuration(post.duration) : null;
   const artistLine = post.artists.map(formatTagName).join(", ");
@@ -337,6 +344,7 @@ export function SwipeCard({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onLostPointerCapture={onLostPointerCapture}
       onDragStart={(event) => event.preventDefault()}
     >
       <SwipeMedia
