@@ -8,7 +8,7 @@ import { createPostWithTags, createTag } from '../factories';
 import * as deckRoute from '@/app/api/feed/deck/route';
 import * as favoriteRoute from '@/app/api/posts/[hash]/favorite/route';
 import { clearFeedCache, settleFeedRebuild } from '@/lib/feed';
-import type { DeckResult } from '@/lib/feed-deck';
+import { MAX_DECK_EXCLUDE, type DeckResult } from '@/lib/feed-deck';
 import { startQueryCapture, stopQueryCapture, countableStatements } from '@/test/guards/query-capture';
 
 const TASTE_TAGS = ['deck taste a', 'deck taste b', 'deck taste c'];
@@ -211,9 +211,11 @@ describe('POST /api/feed/deck (Integration)', () => {
     expect((await response.json()).posts).toHaveLength(1);
   });
 
-  it('refuses oversized bodies', async () => {
-    const huge = JSON.stringify({ exclude: Array.from({ length: 3000 }, () => 'f'.repeat(64)) });
-    const response = await deckRoute.POST(deckRequest(huge, true));
-    expect(response.status).toBe(413);
+  it('honors only the first MAX_DECK_EXCLUDE hashes of an oversized exclude list', async () => {
+    const { candidates } = await seedFeed(1);
+    // The cap bounds the work a request can cause; entries past it are ignored.
+    const filler = Array.from({ length: MAX_DECK_EXCLUDE }, (_, i) => `f${i.toString(16).padStart(63, '0')}`);
+    const data = await fetchDeck({ exclude: [...filler, candidates[0].hash] });
+    expect(data.posts.map((p) => p.hash)).toEqual([candidates[0].hash]);
   });
 });

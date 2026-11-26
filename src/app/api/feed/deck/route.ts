@@ -15,9 +15,6 @@ const RATE_LIMIT_CONFIG = {
   windowMs: 60 * 1000,
 };
 
-/** Upper bound on the JSON body: MAX_DECK_EXCLUDE hashes plus framing. */
-const MAX_BODY_BYTES = 128 * 1024;
-
 /**
  * Swipe deck: the next unseen posts of the "For You" feed.
  *
@@ -32,17 +29,9 @@ export async function POST(request: NextRequest) {
   const rateLimitResponse = checkApiRateLimit(request, RATE_LIMIT_CONFIG);
   if (rateLimitResponse) return rateLimitResponse;
 
-  const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) {
-    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
-  }
-
   let body: unknown;
   try {
     const text = await request.text();
-    if (text.length > MAX_BODY_BYTES) {
-      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
-    }
     body = text.length === 0 ? {} : JSON.parse(text);
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
