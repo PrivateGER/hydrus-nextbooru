@@ -8,6 +8,7 @@ import {
 } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
+import { FEED_CONFIG, invalidateFeedCache, settleFeedRebuild } from '@/lib/feed';
 import {
   PERF_EMBEDDING_CONFIG,
   getRandomTagNames,
@@ -106,6 +107,20 @@ const QUERY_BUDGETS = {
   // fall below the calibrated floor before gate or card hydration. ANN/gate
   // statements scale with clusters and reference chunks, never with seeds.
   feedWithEmbeddings: 26,
+  // Same 17-favorite fixture with FEED_CONFIG.retrieval = "favorites". The
+  // K centroid ANN statements and K gate statements are replaced by one
+  // neighbor-lookup statement per 16 members (ceil(17/16) = 2 here), issued
+  // only for members whose list is not cached: 5 signal statements + 2 group
+  // reads + 1 settings read + 1 vector fetch + 4 calibration + 2 neighbor
+  // lookups + 0 dismissal-radius + 3 candidate batches = 18. Unlike the
+  // centroid path, the cold count grows with the member count (one statement
+  // per 16 members, run 64 members at a time), while a rebuild after a
+  // favorite or dismissal issues none for members already cached — pinned by
+  // the warm assertion in the guard below. The current fixture observes 13:
+  // the calibration row persisted by the preceding guard saves 2 statements,
+  // and its neighbors fall below the calibrated member gate before card
+  // hydration.
+  feedWithFavoriteRetrieval: 18,
   // PUT = getPostIdByHash + the setFavorite/setDismissal transaction:
   // advisory-lock SELECT, delete-opposite, upsert-self. Prisma 7.8 plants
   // SELECT-then-INSERT/UPDATE (2 statements) for this upsert instead of a
@@ -305,7 +320,8 @@ describe('Query count guards', () => {
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedDeck);
   });
 
-  it('feed build with embeddings stays within the taste-cluster budget', async () => {
+  /** 17 embedded favorites under the perf embedding config, no dismissals. */
+  async function seedEmbeddedFeedFavorites(): Promise<number[]> {
     const prisma = getTestPrisma();
     const seeds = await prisma.post.findMany({
       orderBy: { id: 'asc' },
@@ -341,6 +357,11 @@ describe('Query count guards', () => {
       ],
     });
     await prisma.favorite.createMany({ data: seedIds.map((postId) => ({ postId })) });
+    return seedIds;
+  }
+
+  it('feed build with embeddings stays within the taste-cluster budget', async () => {
+    const seedIds = await seedEmbeddedFeedFavorites();
 
     const count = await countQueries('feed (cold, embeddings)', () =>
       feedGET(apiRequest('http://localhost/api/feed'))
@@ -349,6 +370,36 @@ describe('Query count guards', () => {
     expect(seedIds).toHaveLength(17);
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithEmbeddings);
+  });
+
+  it('feed build with favorites retrieval stays within budget and reuses neighbor lists', async () => {
+    const seedIds = await seedEmbeddedFeedFavorites();
+    const isNeighborLookup = (sql: string) => sql.includes('seed_embeddings');
+    const previousRetrieval = FEED_CONFIG.retrieval;
+    FEED_CONFIG.retrieval = 'favorites';
+    try {
+      const count = await countQueries('feed (cold, favorites retrieval)', () =>
+        feedGET(apiRequest('http://localhost/api/feed'))
+      );
+      expect(seedIds).toHaveLength(17);
+      expect(count).toBeGreaterThan(0);
+      expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithFavoriteRetrieval);
+
+      // A favorite/dismissal invalidation keeps the neighbor cache: the
+      // rebuild it triggers must not repeat any neighbor lookup.
+      invalidateFeedCache();
+      startQueryCapture();
+      try {
+        await feedGET(apiRequest('http://localhost/api/feed'));
+        await settleFeedRebuild();
+      } finally {
+        const warm = countableStatements(stopQueryCapture());
+        expect(warm.length).toBeGreaterThan(0);
+        expect(warm.filter((statement) => isNeighborLookup(statement.text))).toHaveLength(0);
+      }
+    } finally {
+      FEED_CONFIG.retrieval = previousRetrieval;
+    }
   });
 
   it('favorite PUT stays within budget', async () => {

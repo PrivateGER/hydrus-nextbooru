@@ -232,6 +232,112 @@ describe('GET /api/feed (Integration)', () => {
     expect(filtered.some((post) => clusterBHashes.has(post.hash))).toBe(true);
   });
 
+  it('favorites retrieval reaches an outlying favorite\'s neighbors that the centroid scan misses', async () => {
+    const prisma = getTestPrisma();
+    const dimensions = 768;
+    const embeddingConfig = {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'google/gemini-embedding-2-preview',
+      dimensions,
+      imageMaxResolution: 1024,
+    };
+    const zeroTail = Array.from({ length: dimensions - 2 }, () => 0);
+    const coreFavorites = await Promise.all(
+      [0, 0.02, -0.02].map((offset) =>
+        createPostWithTags(prisma, [`core favorite ${offset}`]).then(
+          (post) => [post, [1, offset, ...zeroTail]] as const
+        )
+      )
+    );
+    const coreCandidates = await Promise.all(
+      [1, 2, 3, 4].map((step) =>
+        createPostWithTags(prisma, [`core candidate ${step}`]).then(
+          (post) => [post, [1, step / 100, ...zeroTail]] as const
+        )
+      )
+    );
+    // One favorite far from the other three, with one close neighbor and one
+    // group sibling. A single cluster's centroid sits with the core.
+    const outlierFavorite = await createPostWithTags(prisma, ['outlier favorite']);
+    const outlierCandidate = await createPostWithTags(prisma, ['outlier candidate']);
+    const outlierSibling = await createPostWithTags(prisma, ['outlier sibling']);
+    const group = await prisma.group.create({
+      data: { sourceType: 'PIXIV', sourceId: 'outlier-favorite-group' },
+    });
+    await prisma.postGroup.createMany({
+      data: [
+        { postId: outlierFavorite.id, groupId: group.id, position: 0 },
+        { postId: outlierSibling.id, groupId: group.id, position: 1 },
+      ],
+    });
+    const rows: Array<readonly [Post, number[]]> = [
+      ...coreFavorites,
+      ...coreCandidates,
+      [outlierFavorite, [0.5, 0.866, ...zeroTail]],
+      [outlierCandidate, [0.5, 0.87, ...zeroTail]],
+      [outlierSibling, [0.5, 0.86, ...zeroTail]],
+    ];
+    for (const [post, embedding] of rows) {
+      await upsertCompleteEmbedding({
+        postId: post.id,
+        config: embeddingConfig,
+        embedding,
+        sourceWidth: 100,
+        sourceHeight: 100,
+        processedWidth: 100,
+        processedHeight: 100,
+      });
+    }
+    await prisma.settings.createMany({
+      data: [
+        { key: 'openrouter.apiKey', value: 'sk-or-v1-test' },
+        { key: 'openrouter.embedding.model', value: embeddingConfig.model },
+        { key: 'openrouter.embedding.dimensions', value: String(dimensions) },
+        {
+          key: 'openrouter.embedding.imageMaxResolution',
+          value: String(embeddingConfig.imageMaxResolution),
+        },
+      ],
+    });
+    for (const [post] of coreFavorites) await favorite(post.hash);
+    await favorite(outlierFavorite.hash);
+
+    const oneCluster = {
+      ...FEED_CONFIG,
+      clusterCount: 1,
+      minClusterSize: 1,
+      // Enough for the core (3 favorites + 4 candidates) but not the outlier.
+      neighborsPerCluster: 6,
+      pageSize: 8,
+      pageCount: 1,
+      maxFeedSize: 8,
+    };
+    const coreHashes = coreCandidates.map(([post]) => post.hash);
+
+    clearFeedCache();
+    const centroid = (await buildFeed({ ...oneCluster, retrieval: 'centroid' })).map((post) => post.hash);
+    expect(centroid.some((hash) => coreHashes.includes(hash))).toBe(true);
+    expect(centroid).not.toContain(outlierCandidate.hash);
+
+    clearFeedCache();
+    const fromFavorites = (await buildFeed({ ...oneCluster, retrieval: 'favorites' })).map((post) => post.hash);
+    expect(fromFavorites).toContain(outlierCandidate.hash);
+    expect(fromFavorites).toEqual(expect.arrayContaining(coreHashes));
+    expect(fromFavorites).not.toContain(outlierSibling.hash);
+    expect(fromFavorites).not.toContain(outlierFavorite.hash);
+    for (const [post] of coreFavorites) expect(fromFavorites).not.toContain(post.hash);
+
+    // A dismissal removes its visual near-neighbors in this mode too, and the
+    // rebuild reuses the cached neighbor lists.
+    await dismiss(coreCandidates[0][0].hash);
+    const { result: afterDismissal, count } = await captureCountedStatements(() =>
+      buildFeed({ ...oneCluster, retrieval: 'favorites' })
+    );
+    expect(afterDismissal.some((post) => coreHashes.includes(post.hash))).toBe(false);
+    expect(afterDismissal.map((post) => post.hash)).toContain(outlierCandidate.hash);
+    expect(count).toBeGreaterThan(0);
+  });
+
   it('reflects a new favorite after revalidation, serving the stale feed meanwhile', async () => {
     const prisma = getTestPrisma();
     const seed = await createPostWithTags(prisma, TASTE_TAGS);

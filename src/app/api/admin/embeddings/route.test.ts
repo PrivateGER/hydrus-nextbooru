@@ -11,6 +11,7 @@ const {
   mockUpdateEmbeddingSettings,
   mockInvalidateFeedCache,
   mockClearTasteCaches,
+  mockClearFeedNeighborCache,
   mockInvalidateEmbeddingCalibration,
 } = vi.hoisted(() => ({
   mockVerifyAdminSession: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockUpdateEmbeddingSettings: vi.fn(),
   mockInvalidateFeedCache: vi.fn(),
   mockClearTasteCaches: vi.fn(),
+  mockClearFeedNeighborCache: vi.fn(),
   mockInvalidateEmbeddingCalibration: vi.fn(),
 }));
 
@@ -49,6 +51,7 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/lib/feed", () => ({
   invalidateFeedCache: mockInvalidateFeedCache,
   clearTasteCaches: mockClearTasteCaches,
+  clearFeedNeighborCache: mockClearFeedNeighborCache,
 }));
 
 vi.mock("@/lib/embeddings/calibration", () => ({
@@ -145,6 +148,12 @@ describe("admin embeddings route", () => {
     expect(mockInvalidateEmbeddingCalibration.mock.invocationCallOrder[0]).toBeLessThan(
       mockInvalidateFeedCache.mock.invocationCallOrder[0]
     );
+    // Newly embedded posts reach "favorites" retrieval only through refetched
+    // neighbor lists, and the lists must be gone before the rebuild is allowed.
+    expect(mockClearFeedNeighborCache).toHaveBeenCalledTimes(1);
+    expect(mockClearFeedNeighborCache.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInvalidateFeedCache.mock.invocationCallOrder[0]
+    );
   });
 
   it("POST reports a failed batch and still invalidates the feed cache", async () => {
@@ -160,6 +169,7 @@ describe("admin embeddings route", () => {
     expect(mockInvalidateFeedCache).toHaveBeenCalledTimes(1);
     // Even a failed batch commits partial rows before dying — re-sample.
     expect(mockInvalidateEmbeddingCalibration).toHaveBeenCalledTimes(1);
+    expect(mockClearFeedNeighborCache).toHaveBeenCalledTimes(1);
   });
 
   it.each([
