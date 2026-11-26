@@ -20,6 +20,7 @@ function Slider({
   max,
   step,
   display,
+  disabled,
   onChange,
 }: {
   id: string;
@@ -30,6 +31,7 @@ function Slider({
   max: number;
   step: number;
   display: string;
+  disabled: boolean;
   onChange: (value: number) => void;
 }) {
   return (
@@ -47,9 +49,10 @@ function Slider({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-describedby={`${id}-hint`}
-        className="w-full accent-blue-600"
+        className="w-full accent-blue-600 disabled:opacity-50"
       />
       <p id={`${id}-hint`} className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
         {hint}
@@ -96,8 +99,9 @@ export function FeedSection({ feed }: FeedSectionProps) {
     <button
       type="button"
       aria-pressed={draft.retrieval === mode}
+      disabled={isSaving}
       onClick={() => setDraft({ retrieval: mode })}
-      className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
         draft.retrieval === mode
           ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-sm"
           : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
@@ -138,6 +142,7 @@ export function FeedSection({ feed }: FeedSectionProps) {
             max={100}
             step={5}
             display={variety === 0 ? "Off" : `${variety}%`}
+            disabled={isSaving}
             onChange={(value) => setDraft({ diversityLambda: (100 - value) / 100 })}
           />
           <Slider
@@ -148,6 +153,7 @@ export function FeedSection({ feed }: FeedSectionProps) {
             max={50}
             step={5}
             display={explore === 0 ? "Off" : `${explore}% of each page`}
+            disabled={isSaving}
             onChange={(value) => setDraft({ exploreShare: value / 100 })}
           />
           <Slider
@@ -158,6 +164,7 @@ export function FeedSection({ feed }: FeedSectionProps) {
             max={100}
             step={10}
             display={flatten === 0 ? "Off" : `${flatten}%`}
+            disabled={isSaving}
             onChange={(value) => setDraft({ quotaExponent: (100 - value) / 100 })}
           />
 

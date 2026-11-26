@@ -105,4 +105,22 @@ describe('FeedSection', () => {
     expect(setMessage).toHaveBeenLastCalledWith({ type: 'error', text: 'exploreShare must be a number from 0 to 0.5' });
     expect(button('Save').disabled).toBe(false);
   });
+
+  it('locks the controls while a save is in flight, so no edit can be overwritten by its result', async () => {
+    await act(async () => root.render(<Harness />));
+    await flush();
+    let respond!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => { respond = resolve; }));
+    const controls = () => [...container.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input[type="range"], button[aria-pressed]')];
+
+    await click('Use recommended');
+    expect(controls().length).toBe(5);
+    expect(controls().every((control) => !control.disabled)).toBe(true);
+    await act(async () => button('Save').click());
+    expect(controls().every((control) => control.disabled)).toBe(true);
+
+    await act(async () => respond(new Response(JSON.stringify({ settings: { ...DEFAULTS, retrieval: 'favorites' } }), { status: 200 })));
+    await flush();
+    expect(controls().every((control) => !control.disabled)).toBe(true);
+  });
 });
