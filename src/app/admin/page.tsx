@@ -16,6 +16,7 @@ import { usePhash } from "@/hooks/admin/use-phash";
 import { useTranslation } from "@/hooks/admin/use-translation";
 import { useEmbeddings } from "@/hooks/admin/use-embeddings";
 import { useOcr } from "@/hooks/admin/use-ocr";
+import { useFeedSettings } from "@/hooks/admin/use-feed-settings";
 
 // UI Components
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -28,6 +29,7 @@ import { SyncSection } from "@/components/admin/sync-section";
 import { ThumbnailsSection } from "@/components/admin/thumbnails-section";
 import { PhashSection } from "@/components/admin/phash-section";
 import { EmbeddingsSection } from "@/components/admin/embeddings-section";
+import { FeedSection } from "@/components/admin/feed-section";
 import { TranslationSection } from "@/components/admin/translation-section";
 import { OcrSection } from "@/components/admin/ocr-section";
 import { MaintenanceSection } from "@/components/admin/maintenance-section";
@@ -84,6 +86,7 @@ export default function AdminPage() {
   const translation = useTranslation(setMessage, triggerSuccessAnimation);
   const embeddings = useEmbeddings(setMessage, triggerSuccessAnimation);
   const ocr = useOcr(setMessage, triggerSuccessAnimation);
+  const feed = useFeedSettings(setMessage, triggerSuccessAnimation);
 
   // Handlers
   const handleLogout = async () => {
@@ -217,6 +220,8 @@ export default function AdminPage() {
             openConfirmModal={openConfirmModal}
           />
         );
+      case "feed":
+        return <FeedSection feed={feed} />;
       case "translation":
         return (
           <TranslationSection
