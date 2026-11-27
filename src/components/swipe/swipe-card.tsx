@@ -10,6 +10,7 @@ import {
   releaseVelocity,
   resolveSwipe,
   swipeProgress,
+  type MediaPreload,
   type SwipeAction,
 } from "@/lib/swipe";
 import { HeartIcon, XMarkIcon } from "@heroicons/react/24/solid";
@@ -26,6 +27,10 @@ export interface SwipeCardHandle {
 interface SwipeCardProps {
   post: DeckPost;
   active: boolean;
+  /** How much of the media to load while waiting in the stack. */
+  preload: MediaPreload;
+  /** The card's media is up; see {@link SwipeMedia}. */
+  onReady?: () => void;
   muted: boolean;
   /** Undo: slide in from this side instead of appearing in place. */
   enterFrom?: "left" | "right";
@@ -76,6 +81,8 @@ function haptic(ms: number) {
 export function SwipeCard({
   post,
   active,
+  preload,
+  onReady,
   muted,
   enterFrom,
   onToggleMute,
@@ -367,6 +374,8 @@ export function SwipeCard({
       <SwipeMedia
         post={post}
         active={active}
+        preload={preload}
+        onReady={onReady}
         muted={muted}
         onToggleMute={onToggleMute}
         onAutoplayBlocked={onAutoplayBlocked}

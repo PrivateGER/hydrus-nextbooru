@@ -19,6 +19,7 @@ import {
   parseHistory,
   recordSwipe,
   removeSwipe,
+  stackPreload,
   type SwipeAction,
   type SwipeHistoryEntry,
 } from "@/lib/swipe";
@@ -28,8 +29,13 @@ import { fileUrl, thumbnailUrl } from "./swipe-media";
 /** Refill when this few cards are left in the local queue. */
 const REFILL_AT = 5;
 const BATCH_SIZE = 10;
-/** Cards rendered in the stack: top, the one beneath, and one more preloading. */
+/**
+ * Cards rendered in the stack: top, the one beneath, and one more preloading.
+ * All of them mount their media (videos buffer; see `stackPreload`).
+ */
 const STACK_DEPTH = 3;
+/** Cards past the stack whose images (and video thumbnails) are fetched ahead. */
+const LOOKAHEAD = 3;
 const UNDO_DEPTH = 30;
 /** While the server is re-ranking (after a like), ask again this often... */
 const REBUILD_RETRY_MS = 2000;
@@ -44,6 +50,12 @@ interface UndoEntry {
   id: number;
   post: DeckPost;
   action: SwipeAction;
+}
+
+/** The browser's Data Saver / "Lite mode" flag (Chromium only). */
+function readSaveData(): boolean {
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+  return connection?.saveData === true;
 }
 
 function readHistory(): SwipeHistoryEntry[] {
@@ -94,6 +106,9 @@ export function SwipeDeck() {
   const [toast, setToast] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [showHint, setShowHint] = useState(false);
+  /** Stacked cards whose media is up; the next card buffers once all above are. */
+  const [readyHashes, setReadyHashes] = useState<ReadonlySet<string>>(() => new Set());
+  const [saveData, setSaveData] = useState(false);
   const router = useRouter();
 
   const stackRef = useRef<HTMLDivElement>(null);
@@ -126,6 +141,25 @@ export function SwipeDeck() {
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => {
+    setSaveData(readSaveData());
+    const connection = (navigator as Navigator & { connection?: EventTarget }).connection;
+    const onChange = () => setSaveData(readSaveData());
+    connection?.addEventListener?.("change", onChange);
+    return () => connection?.removeEventListener?.("change", onChange);
+  }, []);
+
+  const markReady = useCallback((hash: string) => {
+    setReadyHashes((current) => {
+      if (current.has(hash)) return current;
+      // Only queued cards matter; forget the rest so the set stays small.
+      const queued = new Set(queueRef.current.map((post) => post.hash));
+      const next = new Set([...current].filter((h) => queued.has(h)));
+      next.add(hash);
+      return next;
+    });
+  }, []);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -245,13 +279,32 @@ export function SwipeDeck() {
     if (loadState === "ready" && !exhausted && queue.length <= REFILL_AT) void refill();
   }, [queue.length, loadState, exhausted, refill]);
 
-  // Warm the cache for the card after the rendered stack.
+  // Once the whole stack has its media, warm the HTTP cache for the cards
+  // after it (files are served immutable, so the card's own <img> hits the
+  // cache). Videos can't be cached this way; they buffer once in the stack.
+  const stackReady = queue.slice(0, STACK_DEPTH).every((post) => readyHashes.has(post.hash));
+  const warming = useRef(new Map<string, HTMLImageElement>());
+  const warmed = useRef(new Set<string>());
   useEffect(() => {
-    const next = queue[STACK_DEPTH];
-    if (!next) return;
-    const image = new Image();
-    image.src = next.mimeType.startsWith("video/") ? thumbnailUrl(next.hash) : fileUrl(next);
-  }, [queue]);
+    if (!stackReady || saveData) return;
+    for (const post of queue.slice(STACK_DEPTH, STACK_DEPTH + LOOKAHEAD)) {
+      const urls = [thumbnailUrl(post.hash)];
+      if (!post.mimeType.startsWith("video/")) urls.push(fileUrl(post));
+      for (const url of urls) {
+        if (warmed.current.has(url)) continue;
+        warmed.current.add(url);
+        const image = new Image();
+        image.fetchPriority = "low";
+        // Hold a reference until it settles so the fetch is not collected.
+        const settle = () => warming.current.delete(url);
+        image.onload = settle;
+        image.onerror = settle;
+        warming.current.set(url, image);
+        image.src = url;
+      }
+    }
+    if (warmed.current.size > 200) warmed.current = new Set([...warmed.current].slice(-100));
+  }, [queue, stackReady, saveData]);
 
   /** Run `task` after the previous one queued for the same post in `queue`. */
   const enqueue = useCallback(
@@ -493,8 +546,9 @@ export function SwipeDeck() {
         >
           {queue
             .slice(0, STACK_DEPTH)
-            .map((post, index) => {
+            .map((post, index, stack) => {
               const isTop = index === 0;
+              const readyAbove = stack.slice(0, index).every((above) => readyHashes.has(above.hash));
               // Beneath cards scale up as the top card is dragged away.
               const style: CSSProperties | undefined = isTop
                 ? { zIndex: STACK_DEPTH }
@@ -515,6 +569,8 @@ export function SwipeDeck() {
                     ref={isTop ? topCardRef : undefined}
                     post={post}
                     active={isTop}
+                    preload={stackPreload(index, readyAbove, saveData)}
+                    onReady={() => markReady(post.hash)}
                     muted={muted}
                     enterFrom={entering?.hash === post.hash ? entering.from : undefined}
                     onToggleMute={() => setMuted((value) => !value)}

@@ -119,6 +119,30 @@ export function fitMode(
 }
 
 // ---------------------------------------------------------------------------
+// Preloading
+// ---------------------------------------------------------------------------
+
+/** Same vocabulary as the `<video preload>` attribute. */
+export type MediaPreload = "auto" | "metadata" | "none";
+
+/**
+ * How eagerly the card at `index` in the rendered stack (0 = top) loads its
+ * media. `auto` loads the full file (a video buffers ahead so it plays the
+ * moment it reaches the top), `metadata` only what a still needs (a video's
+ * first frame; an image's preview thumbnail), `none` nothing beyond the
+ * thumbnail.
+ *
+ * Cards load in order: a card buffers fully only once every card above it
+ * has its media up (`readyAbove`), so preloading never slows down what the
+ * user is looking at. Data Saver keeps it to the next card's still.
+ */
+export function stackPreload(index: number, readyAbove: boolean, saveData: boolean): MediaPreload {
+  if (index <= 0) return "auto";
+  if (readyAbove && !saveData) return "auto";
+  return index === 1 ? "metadata" : "none";
+}
+
+// ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
 

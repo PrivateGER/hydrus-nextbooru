@@ -92,7 +92,7 @@ async function press(label: string) {
   });
 }
 
-describe('SwipeDeck exhaustion after likes', () => {
+describe('SwipeDeck', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -142,68 +142,172 @@ describe('SwipeDeck exhaustion after likes', () => {
     await act(async () => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it('reopens a caught-up deck when a like re-ranks the feed', async () => {
-    deckReplies.push(
-      deckResponse([deckPost(1)]), // whole feed: one card, nothing after it
-      deckResponse([], { rebuilding: true }), // read after the like: stale ranking, rebuild running
-      deckResponse([deckPost(2)]) // rebuilt ranking surfaces a new post
-    );
+  describe('exhaustion after likes', () => {
+    it('reopens a caught-up deck when a like re-ranks the feed', async () => {
+      deckReplies.push(
+        deckResponse([deckPost(1)]), // whole feed: one card, nothing after it
+        deckResponse([], { rebuilding: true }), // read after the like: stale ranking, rebuild running
+        deckResponse([deckPost(2)]) // rebuilt ranking surfaces a new post
+      );
 
-    await act(async () => root.render(<SwipeDeck />));
-    await flush();
-    expect(topCardLabel()).toBe('Post by artist 1');
+      await act(async () => root.render(<SwipeDeck />));
+      await flush();
+      expect(topCardLabel()).toBe('Post by artist 1');
 
-    await press('Like');
-    await advance(150); // fly-out ends, like commits and is saved
-    expect(favoriteCalls).toEqual(['PUT']);
-    expect(container.textContent).not.toContain("You're all caught up");
+      await press('Like');
+      await advance(150); // fly-out ends, like commits and is saved
+      expect(favoriteCalls).toEqual(['PUT']);
+      expect(container.textContent).not.toContain("You're all caught up");
 
-    await advance(2000); // provisional answer: re-read once
-    expect(topCardLabel()).toBe('Post by artist 2');
-    expect(deckReplies).toHaveLength(0);
+      await advance(2000); // provisional answer: re-read once
+      expect(topCardLabel()).toBe('Post by artist 2');
+      expect(deckReplies).toHaveLength(0);
+    });
+
+    it('does not trust a "nothing left" answer that raced a like', async () => {
+      const racing = deferred();
+      deckReplies.push(
+        deckResponse([deckPost(1), deckPost(3)], { remaining: 1 }),
+        racing.promise, // refill fired right away (queue is short), still in flight
+        deckResponse([deckPost(2)]) // the re-read after the like
+      );
+
+      await act(async () => root.render(<SwipeDeck />));
+      await flush();
+      expect(topCardLabel()).toBe('Post by artist 1');
+
+      await press('Like');
+      await advance(150);
+      expect(favoriteCalls).toEqual(['PUT']);
+
+      // The in-flight refill was answered from the pre-like ranking.
+      racing.resolve(deckResponse([], { rebuilding: false }));
+      await flush();
+      await advance(2000);
+
+      await press('Skip');
+      await advance(150);
+      expect(topCardLabel()).toBe('Post by artist 2');
+      expect(container.textContent).not.toContain("You're all caught up");
+    });
+
+    it('still reports caught up when nothing new appears', async () => {
+      deckReplies.push(deckResponse([deckPost(1)]));
+
+      await act(async () => root.render(<SwipeDeck />));
+      await flush();
+      await press('Skip');
+      await advance(150);
+
+      expect(cardLabels()).toEqual([]);
+      expect(container.textContent).toContain("You're all caught up");
+      expect(deckReplies).toHaveLength(0);
+    });
   });
 
-  it('does not trust a "nothing left" answer that raced a like', async () => {
-    const racing = deferred();
-    deckReplies.push(
-      deckResponse([deckPost(1), deckPost(3)], { remaining: 1 }),
-      racing.promise, // refill fired right away (queue is short), still in flight
-      deckResponse([deckPost(2)]) // the re-read after the like
-    );
+  describe('media preloading', () => {
+    const videoPost = (n: number): DeckPost => ({
+      ...deckPost(n),
+      mimeType: 'video/mp4',
+      extension: '.mp4',
+      duration: 12_000,
+    });
+    let play: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    let warmed: string[];
 
-    await act(async () => root.render(<SwipeDeck />));
-    await flush();
-    expect(topCardLabel()).toBe('Post by artist 1');
+    beforeEach(() => {
+      play = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(play);
+      vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+      warmed = [];
+      vi.stubGlobal(
+        'Image',
+        class {
+          fetchPriority = 'auto';
+          onload: (() => void) | null = null;
+          onerror: (() => void) | null = null;
+          set src(url: string) {
+            warmed.push(url);
+          }
+        }
+      );
+    });
 
-    await press('Like');
-    await advance(150);
-    expect(favoriteCalls).toEqual(['PUT']);
+    function videoFor(n: number): HTMLVideoElement {
+      const video = container.querySelector<HTMLVideoElement>(`video[src="/api/files/${hash(n)}.mp4"]`);
+      if (!video) throw new Error(`no video for post ${n}`);
+      return video;
+    }
 
-    // The in-flight refill was answered from the pre-like ranking.
-    racing.resolve(deckResponse([], { rebuilding: false }));
-    await flush();
-    await advance(2000);
+    async function loaded(element: HTMLElement, event: 'loadeddata' | 'load') {
+      await act(async () => {
+        element.dispatchEvent(new Event(event));
+      });
+      await flush();
+    }
 
-    await press('Skip');
-    await advance(150);
-    expect(topCardLabel()).toBe('Post by artist 2');
-    expect(container.textContent).not.toContain("You're all caught up");
-  });
+    it('buffers the videos under the top card in order, then plays the next one without reloading it', async () => {
+      deckReplies.push(
+        deckResponse([videoPost(1), videoPost(2), videoPost(3), deckPost(4), videoPost(5)], { remaining: 20 }),
+        deckResponse([], { remaining: 20 })
+      );
+      await act(async () => root.render(<SwipeDeck />));
+      await flush();
 
-  it('still reports caught up when nothing new appears', async () => {
-    deckReplies.push(deckResponse([deckPost(1)]));
+      // The top card gets the bandwidth first; beneath only stills.
+      expect(videoFor(1).getAttribute('preload')).toBe('auto');
+      expect(videoFor(2).getAttribute('preload')).toBe('metadata');
+      expect(videoFor(3).getAttribute('preload')).toBe('none');
+      expect(warmed).toEqual([]);
 
-    await act(async () => root.render(<SwipeDeck />));
-    await flush();
-    await press('Skip');
-    await advance(150);
+      await loaded(videoFor(1), 'loadeddata');
+      expect(videoFor(2).getAttribute('preload')).toBe('auto');
+      expect(videoFor(3).getAttribute('preload')).toBe('none');
 
-    expect(cardLabels()).toEqual([]);
-    expect(container.textContent).toContain("You're all caught up");
-    expect(deckReplies).toHaveLength(0);
+      await loaded(videoFor(2), 'loadeddata');
+      expect(videoFor(3).getAttribute('preload')).toBe('auto');
+      expect(warmed).toEqual([]);
+
+      // Whole stack up: warm the cards after it (image file, video thumbnail).
+      await loaded(videoFor(3), 'loadeddata');
+      expect(warmed).toEqual(
+        expect.arrayContaining([
+          `/api/thumbnails/${hash(4)}.webp?size=preview`,
+          `/api/files/${hash(4)}.jpg`,
+          `/api/thumbnails/${hash(5)}.webp?size=preview`,
+        ])
+      );
+      expect(warmed).not.toContain(`/api/files/${hash(5)}.mp4`);
+
+      const second = videoFor(2);
+      play.mockClear();
+      await press('Skip');
+      await advance(150);
+      expect(topCardLabel()).toBe('Post by artist 2');
+      // Same element that buffered underneath: no remount, no spinner.
+      expect(videoFor(2)).toBe(second);
+      expect(play).toHaveBeenCalled();
+      const topCard = container.querySelector('[aria-roledescription="card"][aria-hidden="false"]');
+      expect(topCard?.contains(second)).toBe(true);
+      expect(topCard?.querySelector('.animate-spin')).toBeNull();
+    });
+
+    it('holds the full image of a card beneath until the top card is up', async () => {
+      deckReplies.push(deckResponse([deckPost(1), deckPost(2)], { remaining: 20 }), deckResponse([], { remaining: 20 }));
+      await act(async () => root.render(<SwipeDeck />));
+      await flush();
+
+      const fullImage = (n: number) => container.querySelector<HTMLImageElement>(`img[src="/api/files/${hash(n)}.jpg"]`);
+      expect(fullImage(1)).not.toBeNull();
+      expect(fullImage(2)).toBeNull();
+
+      await loaded(fullImage(1)!, 'load');
+      expect(fullImage(2)).not.toBeNull();
+    });
   });
 
   it('reports each answered card, and whether it was an exploration card', async () => {

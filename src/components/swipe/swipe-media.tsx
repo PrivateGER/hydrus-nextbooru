@@ -13,7 +13,7 @@ import { ChevronDoubleDownIcon, FilmIcon, PhotoIcon } from "@heroicons/react/24/
 import { PlayIcon, SpeakerWaveIcon, SpeakerXMarkIcon } from "@heroicons/react/24/solid";
 import { BlurhashImage } from "@/components/blurhash-image";
 import type { DeckPost } from "@/lib/feed-deck";
-import { fitMode, type FitMode } from "@/lib/swipe";
+import { fitMode, type FitMode, type MediaPreload } from "@/lib/swipe";
 
 export interface SwipeMediaHandle {
   /** Play/pause a video card; no-op for images. */
@@ -30,6 +30,13 @@ interface SwipeMediaProps {
   post: DeckPost;
   /** Only the top card plays video and receives input. */
   active: boolean;
+  /**
+   * How much to load ahead of time (see {@link stackPreload}). Cards beneath
+   * the top buffer their file so a swipe reveals media that is already there.
+   */
+  preload: MediaPreload;
+  /** The media is up (or failed for good): the deck may start on the next card. */
+  onReady?: () => void;
   muted: boolean;
   onToggleMute: () => void;
   /** Unmuted autoplay was refused by the browser; the deck falls back to muted. */
@@ -58,7 +65,16 @@ export function fileUrl(post: Pick<DeckPost, "hash" | "extension">): string {
  * Very tall stills switch to a vertically scrolling full-width layout (see
  * {@link fitMode}); everything else is shown whole.
  */
-export function SwipeMedia({ post, active, muted, onToggleMute, onAutoplayBlocked, ref }: SwipeMediaProps) {
+export function SwipeMedia({
+  post,
+  active,
+  preload,
+  onReady,
+  muted,
+  onToggleMute,
+  onAutoplayBlocked,
+  ref,
+}: SwipeMediaProps) {
   const isVideo = post.mimeType.startsWith("video/");
   const containerRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<FitMode>("contain");
@@ -81,13 +97,15 @@ export function SwipeMedia({ post, active, muted, onToggleMute, onAutoplayBlocke
         <SwipeVideo
           post={post}
           active={active}
+          preload={preload}
+          onReady={onReady}
           muted={muted}
           onToggleMute={onToggleMute}
           onAutoplayBlocked={onAutoplayBlocked}
           ref={ref}
         />
       ) : (
-        <SwipeImage post={post} mode={mode} active={active} ref={ref} />
+        <SwipeImage post={post} mode={mode} active={active} preload={preload} onReady={onReady} ref={ref} />
       )}
     </div>
   );
@@ -131,11 +149,15 @@ function SwipeImage({
   post,
   mode,
   active,
+  preload,
+  onReady,
   ref,
 }: {
   post: DeckPost;
   mode: FitMode;
   active: boolean;
+  preload: MediaPreload;
+  onReady?: () => void;
   ref?: Ref<SwipeMediaHandle>;
 }) {
   const [state, setState] = useState<LayeredImageState>({
@@ -146,6 +168,15 @@ function SwipeImage({
   });
   const [scrolled, setScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Latched: once the full file is requested it stays, even if an undo pushes
+  // this card back down the stack.
+  const [wantFull, setWantFull] = useState(preload === "auto");
+  if (preload === "auto" && !wantFull) setWantFull(true);
+
+  const reportReady = useEffectEvent(() => onReady?.());
+  useEffect(() => {
+    if (state.fullLoaded || state.fullFailed) reportReady();
+  }, [state.fullLoaded, state.fullFailed]);
 
   useImperativeHandle(ref, () => ({ togglePlay() {}, scroller: () => scrollRef.current }), []);
 
@@ -181,7 +212,7 @@ function SwipeImage({
           }`}
         />
       )}
-      {!state.fullFailed && (
+      {wantFull && !state.fullFailed && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           ref={settle("fullLoaded")}
@@ -189,6 +220,7 @@ function SwipeImage({
           alt=""
           draggable={false}
           decoding="async"
+          fetchPriority={active ? "high" : "low"}
           onLoad={() => set({ fullLoaded: true })}
           onError={() => set({ fullFailed: true })}
           className={`absolute inset-0 h-full w-full ${fit} transition-opacity duration-300 ${
@@ -253,6 +285,8 @@ function Spinner() {
 function SwipeVideo({
   post,
   active,
+  preload,
+  onReady,
   muted,
   onToggleMute,
   onAutoplayBlocked,
@@ -260,6 +294,8 @@ function SwipeVideo({
 }: {
   post: DeckPost;
   active: boolean;
+  preload: MediaPreload;
+  onReady?: () => void;
   muted: boolean;
   onToggleMute: () => void;
   onAutoplayBlocked: () => void;
@@ -271,6 +307,8 @@ function SwipeVideo({
   const [ready, setReady] = useState(false);
   // Missing file or unsupported codec: no loadeddata ever fires.
   const [failed, setFailed] = useState(false);
+  // Playback ran past the buffered data (slow network) and is waiting.
+  const [buffering, setBuffering] = useState(false);
   // Brief play glyph after resuming; the paused state shows its own.
   const [flash, setFlash] = useState(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -299,6 +337,18 @@ function SwipeVideo({
     });
   });
   useEffect(() => () => clearTimeout(flashTimer.current), []);
+
+  const reportReady = useEffectEvent(() => onReady?.());
+  useEffect(() => {
+    if (ready || failed) reportReady();
+  }, [ready, failed]);
+
+  // Pushed back down the stack (an undo put another card on top): start over
+  // when it returns, as it did back when only the top card had a <video>.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!active && video && video.currentTime > 0) video.currentTime = 0;
+  }, [active]);
 
   useImperativeHandle(
     ref,
@@ -358,8 +408,10 @@ function SwipeVideo({
 
   return (
     <>
-      {/* Underneath cards show a still; only the top card loads the stream. */}
-      {(!active || !ready || failed) && (
+      {/* Every stacked card mounts its <video> so it buffers while it waits
+          (as far as `preload` allows); the thumbnail covers it until the
+          first frame is decoded. Only the top card plays. */}
+      {(!ready || failed) && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={thumbnailUrl(post.hash)}
@@ -368,7 +420,7 @@ function SwipeVideo({
           className="absolute inset-0 h-full w-full object-contain"
         />
       )}
-      {active && !failed && (
+      {!failed && (
         <video
           ref={videoRef}
           src={fileUrl(post)}
@@ -376,15 +428,18 @@ function SwipeVideo({
           loop
           muted
           playsInline
-          preload="auto"
+          preload={preload}
           disablePictureInPicture
           onLoadedData={() => setReady(true)}
           onError={() => setFailed(true)}
           onPlay={() => setPaused(false)}
           onPause={() => setPaused(true)}
+          onWaiting={() => setBuffering(true)}
+          onPlaying={() => setBuffering(false)}
+          onCanPlay={() => setBuffering(false)}
         />
       )}
-      {active && !ready && !failed && <Spinner />}
+      {active && (!ready || buffering) && !failed && <Spinner />}
       {active && failed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 text-zinc-200">
           <FilmIcon className="h-10 w-10" aria-hidden />
