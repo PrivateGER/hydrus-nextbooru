@@ -212,7 +212,24 @@ describe('GET /api/similar (Integration)', () => {
         blurhash: 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH',
         mimeType: 'image/png',
         distance: 0,
+        favorited: false,
       });
+    });
+
+    it('should mark favorited matches', async () => {
+      const phash = 0xBEEFn;
+      const source = await createPostWithPhash(phash);
+      const favorited = await createPostWithPhash(phash);
+      const plain = await createPostWithPhash(phash);
+      await getTestPrisma().favorite.create({ data: { postId: favorited.id } });
+
+      const request = new NextRequest(`http://localhost/api/similar?hash=${source.hash}&threshold=0`);
+      const response = await GET(request);
+      const data = await response.json();
+
+      const byId = new Map(data.results.map((r: { id: number; favorited: boolean }) => [r.id, r.favorited]));
+      expect(byId.get(favorited.id)).toBe(true);
+      expect(byId.get(plain.id)).toBe(false);
     });
   });
 
