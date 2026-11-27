@@ -1256,7 +1256,7 @@ describe("variety pass and exploration", () => {
     const explore = (id: number): Item => ({ id, explore: true });
     const tasteItems = Array.from({ length: 11 }, (_, index) => taste(index + 1));
     const exploreItems = Array.from({ length: 10 }, (_, index) => explore(91 + index));
-    const options = { tastePerPage: 8, explorePerPage: 2, exploreShare: 0.2 };
+    const options = { pageSize: 10, explorePerPage: 2, exploreShare: 0.2 };
 
     const feed = interleaveExploration(tasteItems, exploreItems, options);
 
@@ -1275,6 +1275,27 @@ describe("variety pass and exploration", () => {
     expect(interleaveExploration(tasteItems, exploreItems, { ...options, explorePerPage: 0 })).toEqual(tasteItems);
   });
 
+  it("fills exploration slots it cannot use with taste posts, keeping every page full", () => {
+    type Item = { id: number; explore?: true };
+    const taste: Item[] = Array.from({ length: 40 }, (_, index) => ({ id: index + 1 }));
+    const one: Item[] = [{ id: 91, explore: true }];
+
+    // Half of each eight-post page is reserved for exploration, but only one
+    // exploration post exists: the feed is still three full pages.
+    const feed = interleaveExploration(taste, one, { pageSize: 8, pageCount: 3, explorePerPage: 4, exploreShare: 0.5 });
+
+    expect(feed).toHaveLength(24);
+    expect(feed.filter((item) => item.explore).map((item) => item.id)).toEqual([91]);
+    expect(feed.filter((item) => !item.explore).map((item) => item.id)).toEqual(taste.slice(0, 23).map((item) => item.id));
+    // With plenty of both, a page holds exactly its allowance.
+    const many: Item[] = Array.from({ length: 30 }, (_, index) => ({ id: 91 + index, explore: true }));
+    const full = interleaveExploration(taste, many, { pageSize: 8, pageCount: 3, explorePerPage: 4, exploreShare: 0.5 });
+    expect(full).toHaveLength(24);
+    for (const start of [0, 8, 16]) {
+      expect(full.slice(start, start + 8).filter((item) => item.explore)).toHaveLength(4);
+    }
+  });
+
   it("skips exploration posts that duplicate a taste post or an earlier exploration post", () => {
     type Item = { id: number; explore?: true };
     const taste: Item[] = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
@@ -1291,7 +1312,7 @@ describe("variety pass and exploration", () => {
     ]);
 
     const feed = interleaveExploration(taste, explore, {
-      tastePerPage: 4,
+      pageSize: 8,
       explorePerPage: 4,
       exploreShare: 0.5,
       groupIdsByPostId: groups,
@@ -1325,6 +1346,26 @@ describe("variety pass and exploration", () => {
 
     expect(feed.filter((post) => !post.explore)).toHaveLength(1);
     expect(feed.filter((post) => post.explore)).toHaveLength(1);
+  });
+
+  it("returns a full-length feed when few exploration posts survive", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mocks.favoriteFindMany.mockResolvedValue([favorite(1)]);
+    mocks.nearest.mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({ postId: 101 + index, score: 0.95 - index * 0.01 }))
+    );
+    mocks.sampleUnseen.mockResolvedValue([301]);
+    mocks.prefixes.mockResolvedValue(new Map([[301, unit([0, 0, 1, 0])]]));
+    const config = { ...TEST_CONFIG, pageSize: 4, pageCount: 3, maxFeedSize: 12 };
+
+    const withExploration = await buildFeed({ ...config, exploreShare: 0.5 });
+    const without = await buildFeed(config);
+
+    // Same length as without exploration: the unused exploration slots hold taste posts.
+    expect(without).toHaveLength(12);
+    expect(withExploration).toHaveLength(12);
+    expect(withExploration.filter((post) => post.explore).map((post) => post.id)).toEqual([301]);
   });
 
   it("never labels a post the taste model also returned as exploration", async () => {

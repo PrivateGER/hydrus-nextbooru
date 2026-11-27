@@ -501,34 +501,38 @@ export function spaceExploration<T extends { explore?: true }>(
 }
 
 /**
- * Add exploration posts to pages of taste posts that are already chosen.
+ * Build pages from the allocated taste ranking and the exploration list.
  *
- * `taste` is the allocated ranking, `tastePerPage` posts to a page. Each page
- * gets at most `explorePerPage` exploration posts, and no more than its share
- * of the taste posts actually on that page: a page the taste model could only
- * part-fill gets proportionally fewer, and a page with none gets none. So
- * exploration can never take over a page, however few taste posts survive
- * deduplication. Exploration posts that share a group or a dedupe key with
- * any taste post, or with an earlier exploration post, are skipped. Within a
- * page they are spaced evenly ({@link spaceExploration}).
+ * Every page has `pageSize` slots. It takes up to `explorePerPage`
+ * exploration posts and fills ALL remaining slots with the next taste posts,
+ * so a slot exploration cannot use (too few exploration posts survive) goes
+ * to taste instead of shortening the feed. When the taste posts left cannot
+ * fill their part of a page, exploration shrinks with them (to its share of
+ * the taste posts on that page), and once taste is exhausted the feed ends:
+ * exploration never takes over a page. Exploration posts that share a group
+ * or a dedupe key with any taste post, or with an earlier exploration post,
+ * are skipped. Within a page they are spaced evenly ({@link spaceExploration}).
  */
 export function interleaveExploration<T extends { id: number; explore?: true }>(
   taste: readonly T[],
   explore: readonly T[],
   options: {
-    tastePerPage: number;
+    pageSize: number;
     explorePerPage: number;
     exploreShare: number;
+    /** Stop after this many pages (default: until taste runs out). */
+    pageCount?: number;
     groupIdsByPostId?: ReadonlyMap<number, number[]>;
     dedupeKeyByPostId?: ReadonlyMap<number, string>;
   }
 ): T[] {
-  const tastePerPage = Math.floor(options.tastePerPage);
-  const explorePerPage = Math.floor(options.explorePerPage);
+  const pageSize = Math.floor(options.pageSize);
+  const explorePerPage = Math.min(pageSize, Math.floor(options.explorePerPage));
   const share = Math.min(0.5, Math.max(0, options.exploreShare));
-  if (tastePerPage <= 0 || explorePerPage <= 0 || share <= 0 || explore.length === 0) {
+  if (pageSize <= 0 || explorePerPage <= 0 || share <= 0 || explore.length === 0) {
     return [...taste];
   }
+  const pageLimit = options.pageCount === undefined ? Infinity : Math.floor(options.pageCount);
   const takenIds = new Set<number>();
   const takenGroups = new Set<number>();
   const takenKeys = new Set<string>();
@@ -551,16 +555,25 @@ export function interleaveExploration<T extends { id: number; explore?: true }>(
   for (const item of taste) claim(item);
 
   const result: T[] = [];
-  let cursor = 0;
-  for (let start = 0; start < taste.length; start += tastePerPage) {
-    const page = taste.slice(start, start + tastePerPage);
-    const wanted = Math.min(explorePerPage, Math.round((page.length * share) / (1 - share)));
+  let tasteCursor = 0;
+  let exploreCursor = 0;
+  for (let page = 0; page < pageLimit && tasteCursor < taste.length; page++) {
+    const tasteLeft = taste.length - tasteCursor;
+    // A full page of taste earns the full exploration allowance; a part-filled
+    // one earns its share of the taste posts it has.
+    const allowed =
+      tasteLeft >= pageSize - explorePerPage
+        ? explorePerPage
+        : Math.min(explorePerPage, Math.round((tasteLeft * share) / (1 - share)));
     const picked: T[] = [];
-    while (picked.length < wanted && cursor < explore.length) {
-      const candidate = explore[cursor++];
+    while (picked.length < allowed && exploreCursor < explore.length) {
+      const candidate = explore[exploreCursor++];
       if (claim(candidate)) picked.push(candidate);
     }
-    result.push(...spaceExploration([...page, ...picked], page.length + picked.length));
+    const tasteCount = Math.min(tasteLeft, pageSize - picked.length);
+    const pageTaste = taste.slice(tasteCursor, tasteCursor + tasteCount);
+    tasteCursor += tasteCount;
+    result.push(...spaceExploration([...pageTaste, ...picked], pageTaste.length + picked.length));
   }
   return result;
 }
@@ -1450,21 +1463,18 @@ async function buildFeedUnsafe(
         explore: true,
       });
     }
-    // Exploration never enters allocation: taste fills its part of each page
-    // first (allocation deduplicates and backfills among taste clusters only),
-    // then exploration is added per page in proportion to the taste posts
-    // that page really has. Inside allocation it would be backfilled into
-    // every slot taste could not fill.
+    // Exploration never enters allocation (there it would be backfilled into
+    // every slot taste could not fill). Taste is allocated exactly as it is
+    // without exploration, enough for every page in full; each page then
+    // takes its exploration and fills the rest of its slots with taste.
     const pageSize = Math.max(0, Math.floor(config.pageSize));
-    const explorePerPage =
-      explore.length > 0 ? Math.min(pageSize, Math.round(pageSize * exploreShare)) : 0;
     const dedupeKeyByPostId = perceptualKeyByPostId(postRows);
     const allocated = allocateAcrossClusters(
       rankedByCluster,
       massByCluster,
       groupIdsByPostId,
       {
-        pageSize: pageSize - explorePerPage,
+        pageSize: config.pageSize,
         pageCount: config.pageCount,
         floorShare: config.floorShare,
       },
@@ -1474,8 +1484,9 @@ async function buildFeedUnsafe(
       allocated.map(({ item }) => item),
       explore,
       {
-        tastePerPage: pageSize - explorePerPage,
-        explorePerPage,
+        pageSize,
+        pageCount: config.pageCount,
+        explorePerPage: Math.round(pageSize * exploreShare),
         exploreShare,
         groupIdsByPostId,
         dedupeKeyByPostId,
