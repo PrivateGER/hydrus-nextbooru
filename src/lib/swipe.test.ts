@@ -18,6 +18,7 @@ import {
   resolveSwipe,
   swipeProgress,
   swipeThreshold,
+  stackPreload,
   type SwipeHistoryEntry,
 } from "./swipe";
 
@@ -197,5 +198,24 @@ describe("swipe history", () => {
       42,
     ]);
     expect(parseHistory(raw, now).map((e) => e.hash)).toEqual([hash(1), hash(2)]);
+  });
+});
+
+describe("stackPreload", () => {
+  it("always loads the top card in full", () => {
+    expect(stackPreload(0, false, false)).toBe("auto");
+    expect(stackPreload(0, false, true)).toBe("auto");
+  });
+
+  it("holds cards beneath back until everything above is up", () => {
+    expect(stackPreload(1, false, false)).toBe("metadata");
+    expect(stackPreload(2, false, false)).toBe("none");
+    expect(stackPreload(1, true, false)).toBe("auto");
+    expect(stackPreload(2, true, false)).toBe("auto");
+  });
+
+  it("keeps Data Saver to the next card's still", () => {
+    expect(stackPreload(1, true, true)).toBe("metadata");
+    expect(stackPreload(2, true, true)).toBe("none");
   });
 });
