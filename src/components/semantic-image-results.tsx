@@ -9,6 +9,7 @@ interface SemanticImageResult extends PostSummary {
   id: number;
   distance: number;
   score?: number;
+  favorited: boolean;
 }
 
 /**
@@ -157,9 +158,11 @@ export function SemanticImageResults({ source, page }: SemanticImageResultsProps
                 blurhash={post.blurhash}
                 mimeType={post.mimeType}
                 layout="grid"
+                favorited={post.favorited}
               />
+              {/* Bottom-left: PostCard's VIDEO/GIF badge owns bottom-right. */}
               {post.score != null && (
-                <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white tabular-nums">
+                <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white tabular-nums">
                   {Math.round(post.score * 100)}%
                 </span>
               )}

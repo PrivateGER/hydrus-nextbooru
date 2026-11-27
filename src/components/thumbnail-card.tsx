@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, type ReactNode } from "react";
 import { BlurhashImage } from "@/components/blurhash-image";
+import { FavoriteBadge } from "@/components/favorite-badge";
 
 interface ThumbnailCardProps {
   hash: string;
@@ -13,6 +14,8 @@ interface ThumbnailCardProps {
   heightClass?: string;
   /** Show VIDEO/GIF badge for media types */
   showMediaBadge?: boolean;
+  /** Read-only favorited badge state; omit to never show the badge. */
+  favorited?: boolean;
   /** Additional content overlays (e.g., position badges) */
   children?: ReactNode;
   /** Additional classes for the container */
@@ -31,6 +34,7 @@ export function ThumbnailCard({
   mimeType,
   heightClass = "h-24",
   showMediaBadge = true,
+  favorited,
   children,
   className = "",
 }: ThumbnailCardProps) {
@@ -95,6 +99,10 @@ export function ThumbnailCard({
         <div className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
           {isVideo ? "VIDEO" : "GIF"}
         </div>
+      )}
+
+      {favorited !== undefined && (
+        <FavoriteBadge hash={hash} favorited={favorited} className="right-1.5 top-1.5" />
       )}
 
       {/* Custom overlays from parent */}

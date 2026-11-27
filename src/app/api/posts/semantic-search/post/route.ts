@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchSemanticPostsByPostHash } from "@/lib/search";
 import { checkApiRateLimit, type ApiRateLimitConfig } from "@/lib/rate-limit";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    posts: result.posts,
+    posts: await mergeFavoritedState(result.posts),
     totalCount: result.totalCount,
     totalPages: result.totalPages,
   });

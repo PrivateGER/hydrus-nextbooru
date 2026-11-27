@@ -7,6 +7,7 @@ import {
   SEMANTIC_SEARCH_RATE_LIMIT_CONFIG,
 } from "@/lib/search";
 import { checkApiRateLimit } from "@/lib/rate-limit";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 /**
  * Search posts by natural-language text using multimodal image embeddings.
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    posts: result.posts,
+    posts: await mergeFavoritedState(result.posts),
     totalCount: result.totalCount,
     totalPages: result.totalPages,
   });

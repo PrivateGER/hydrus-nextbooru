@@ -6,6 +6,7 @@ import {
   findRelatedPostsByEmbedding,
   type EmbeddedRelatedPost,
 } from "@/lib/embeddings/store";
+import { getFavoritedPostIdSet } from "@/lib/favorites";
 import { RelatedPostsClient } from "./related-posts-client";
 
 interface RelatedPostsProps {
@@ -42,11 +43,18 @@ export async function RelatedPosts({ hash, limit = 10 }: RelatedPostsProps) {
     return null;
   }
 
+  // One query covers both tabs. Merged after retrieval because
+  // recommendations are served from a 24h cache.
+  const favoritedIds = await getFavoritedPostIdSet([
+    ...recommendations.map((post) => post.id),
+    ...semanticPosts.map((post) => post.id),
+  ]);
+
   return (
     <RelatedPostsClient
       hash={hash}
-      recommendations={recommendations}
-      semanticPosts={semanticPosts}
+      recommendations={recommendations.map((post) => ({ ...post, favorited: favoritedIds.has(post.id) }))}
+      semanticPosts={semanticPosts.map((post) => ({ ...post, favorited: favoritedIds.has(post.id) }))}
     />
   );
 }

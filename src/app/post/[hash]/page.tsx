@@ -18,6 +18,7 @@ import { RelatedPosts, RelatedPostsSkeleton } from "@/components/post/related-po
 import { RecordView } from "@/components/post/record-view";
 import { GroupFilmstrip } from "@/components/post/group-filmstrip";
 import { dedupeFilmstripGroups, windowFilmstrip } from "@/lib/filmstrip-groups";
+import { getFavoritedPostIdSet } from "@/lib/favorites";
 import {
   selectNavigationGroup,
   buildPostUrl,
@@ -190,6 +191,17 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
       ...pg.group,
       currentPosition: pg.position,
     }))
+  );
+
+  // Each multi-post group renders a bounded filmstrip window; favorite state
+  // is resolved for exactly the thumbnails shown, in one query for all groups.
+  const filmstrips = new Map(
+    groups
+      .filter((group) => group.posts.length > 1)
+      .map((group) => [group.id, windowFilmstrip(group.posts, post.hash)])
+  );
+  const filmstripFavoritedIds = await getFavoritedPostIdSet(
+    [...filmstrips.values()].flatMap((filmstrip) => filmstrip.posts.map((pg) => pg.post.id))
   );
 
   // Prev/next follow ONE deterministic context, carried on every navigation
@@ -384,12 +396,12 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
 
         {/* Related images from groups - horizontal filmstrip */}
         {groups.map((group) => {
-          if (group.posts.length <= 1) return null;
+          const filmstrip = filmstrips.get(group.id);
+          if (!filmstrip) return null;
 
           const sourceUrl = getCanonicalSourceUrl(group.sourceType, group.sourceId);
           const ordinalInGroup = group.posts.findIndex((pg) => pg.post.hash === post.hash) + 1;
           const isActiveNav = !hasListingContext && navGroup?.id === group.id;
-          const filmstrip = windowFilmstrip(group.posts, post.hash);
 
           return (
             <div key={group.id} className="rounded-lg bg-white border border-zinc-200 dark:bg-zinc-800 dark:border-transparent p-4">
@@ -442,7 +454,10 @@ export default async function PostPage({ params, searchParams }: PostPageProps) 
                 </Link>
               </div>
               <GroupFilmstrip
-                posts={filmstrip.posts}
+                posts={filmstrip.posts.map((pg) => ({
+                  ...pg,
+                  favorited: filmstripFavoritedIds.has(pg.post.id),
+                }))}
                 offset={filmstrip.offset}
                 total={filmstrip.total}
                 currentHash={post.hash}

@@ -11,6 +11,8 @@ import type { PostSummary } from "@/types/post";
 interface GroupPost {
   post: PostSummary;
   position: number | null;
+  /** Shows the read-only favorited badge; omit to hide it. */
+  favorited?: boolean;
 }
 
 interface GroupFilmstripProps {
@@ -142,11 +144,14 @@ export function GroupFilmstrip({
                 mimeType={pg.post.mimeType}
                 heightClass={heightClass}
                 showMediaBadge={true}
+                favorited={pg.favorited}
                 className="rounded-lg"
               >
                 {/* Ordinal badge (1-based reading order; raw Hydrus positions
-                    can be sparse or duplicated, so show the ordinal) */}
-                <span className={`absolute bottom-1.5 right-1.5 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                    can be sparse or duplicated, so show the ordinal). Bottom-
+                    left: the VIDEO/GIF badge owns bottom-right, the favorite
+                    badge top-right. */}
+                <span className={`absolute bottom-1.5 left-1.5 rounded-md px-2 py-0.5 text-xs font-semibold ${
                   isCurrent
                     ? "bg-blue-500 text-white"
                     : "bg-black/70 text-white"

@@ -14,6 +14,14 @@ vi.mock("@/lib/rate-limit", () => ({
   checkApiRateLimit: mocks.checkApiRateLimit,
 }));
 
+// Favorite state is merged at the route layer; mark odd ids favorited so the
+// test can tell the merge ran without touching the database.
+vi.mock("@/lib/favorites", () => ({
+  mergeFavoritedState: vi.fn(async (posts: { id: number }[]) =>
+    posts.map((post) => ({ ...post, favorited: post.id % 2 === 1 })),
+  ),
+}));
+
 import { GET } from "./route";
 
 const VALID_HASH = "a".repeat(64);
@@ -48,6 +56,7 @@ describe("GET /api/posts/semantic-search/post", () => {
     const data = await res.json();
     expect(data.totalCount).toBe(1);
     expect(data.posts).toHaveLength(1);
+    expect(data.posts[0].favorited).toBe(true);
   });
 
   it("lowercases the hash and passes pagination through to the search helper", async () => {

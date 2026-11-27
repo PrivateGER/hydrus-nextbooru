@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { computePhashFromBuffer, PHASH_SUPPORTED_MIMES } from "@/lib/phash";
 import { checkApiRateLimit } from "@/lib/rate-limit";
 import { apiLog } from "@/lib/logger";
+import { mergeFavoritedState } from "@/lib/favorites";
 
 const DEFAULT_THRESHOLD = 10;
 const DEFAULT_LIMIT = 20;
@@ -130,7 +131,7 @@ export async function POST(request: NextRequest) {
 /**
  * Find posts with similar perceptual hashes using Hamming distance.
  *
- * JOINs PhashEntry with Post for result data.
+ * JOINs PhashEntry with Post for result data, then attaches favorite state.
  * Uses PostgreSQL's bit_count() and XOR (#) for comparison.
  */
 async function findSimilarByPhash(
@@ -146,6 +147,7 @@ async function findSimilarByPhash(
   blurhash: string | null;
   mimeType: string;
   distance: number;
+  favorited: boolean;
 }>> {
   type ResultRow = {
     id: number;
@@ -179,8 +181,10 @@ async function findSimilarByPhash(
       `;
 
   // Convert BigInt distance to number for JSON serialization
-  return results.map((r) => ({
-    ...r,
-    distance: Number(r.distance),
-  }));
+  return mergeFavoritedState(
+    results.map((r) => ({
+      ...r,
+      distance: Number(r.distance),
+    }))
+  );
 }
