@@ -8,6 +8,7 @@ import {
 } from '../integration/setup';
 import { setTestPrisma } from '@/lib/db';
 import { invalidateAllCaches } from '@/lib/cache';
+import { FEED_CONFIG, invalidateFeedCache, settleFeedRebuild } from '@/lib/feed';
 import {
   PERF_EMBEDDING_CONFIG,
   getRandomTagNames,
@@ -77,6 +78,9 @@ const QUERY_BUDGETS = {
   // Compute path + the generation-fence Settings reads (before and after SQL)
   // + cache-write transaction (postRecommendation deleteMany + createMany).
   recommendationsCold: 9,
+  // Every feed build also reads the admin panel's feed options (one Settings
+  // statement, issued alongside the signal reads so it adds no wait). The feed
+  // budgets below are the enumerations in their comments plus that one.
   // Cold no-embeddings fixture: 5 signal statements (favorites plus Post
   // hydration, dismissals, views plus Post hydration), 2 group reads (signal
   // collapse and favorite/dismissal sibling exclusion), and 1 embedding
@@ -85,12 +89,12 @@ const QUERY_BUDGETS = {
   // hydration, and the generation-lock/delete/create write transaction. A
   // non-empty fallback adds 3 candidate batches (importedAt, groups, views).
   // Total: 5 + 2 + 1 + 8 + 3 = 19, constant in the favorite count.
-  feed: 19,
+  feed: 20,
   // Swipe deck over the same cold fallback feed: the feed build above plus
   // ONE enrichment statement for the dealt batch (extension, video metadata
   // and headline tags aggregated in a single GROUP BY), constant in batch
   // size. A warm deck (feed cached) is that single statement.
-  feedDeck: 20,
+  feedDeck: 21,
   // Cold configured cluster fixture with 17 embedded favorites. Enumeration:
   // 5 signal statements + 2 group reads + 1 settings read + 1 vector fetch;
   // calibration's 3 reads (generation, cached baseline, sample) + 1 upsert;
@@ -102,10 +106,32 @@ const QUERY_BUDGETS = {
   // With minClusterSize=3, K <= floor(17/3)=5 after merging and every
   // cluster has <200 favorites, so THIS FIXTURE's worst case is
   // 5 + 2 + 1 + 1 + 4 + 2K + 0 + 3 = 26 — a fixture bound, not a production
-  // ceiling. The current fixture observes 14 because K=1 and its ANN rows
+  // ceiling. The current fixture observes 15 (14 + the feed options read) because K=1 and its ANN rows
   // fall below the calibrated floor before gate or card hydration. ANN/gate
   // statements scale with clusters and reference chunks, never with seeds.
-  feedWithEmbeddings: 26,
+  feedWithEmbeddings: 27,
+  // Same 17-favorite fixture with FEED_CONFIG.retrieval = "favorites". The
+  // K centroid ANN statements and K gate statements are replaced by one
+  // neighbor-lookup statement per 16 members (ceil(17/16) = 2 here), issued
+  // only for members whose list is not cached: 5 signal statements + 2 group
+  // reads + 1 settings read + 1 vector fetch + 4 calibration + 2 neighbor
+  // lookups + 0 dismissal-radius + 3 candidate batches = 18. Unlike the
+  // centroid path, the cold count grows with the member count (one statement
+  // per 16 members, run 64 members at a time), while a rebuild after a
+  // favorite or dismissal issues none for members already cached — pinned by
+  // the warm assertion in the guard below. The current fixture observes 14
+  // (13 + the feed options read):
+  // the calibration row persisted by the preceding guard saves 2 statements,
+  // and its neighbors fall below the calibrated member gate before card
+  // hydration.
+  feedWithFavoriteRetrieval: 19,
+  // FEED_CONFIG.exploreShare > 0 adds two statements to a build, whatever the
+  // library size or the number of favorites: one seeded sample of unseen
+  // embedded posts (a single sequential pass, ~0.2 s at 177k on prod) and one
+  // prefix read for that sample (exploreSampleSize is below the 2,000-row
+  // chunk). Worst case for the 17-favorite centroid fixture is therefore
+  // feedWithEmbeddings + 2.
+  feedWithExploration: 29,
   // PUT = getPostIdByHash + the setFavorite/setDismissal transaction:
   // advisory-lock SELECT, delete-opposite, upsert-self. Prisma 7.8 plants
   // SELECT-then-INSERT/UPDATE (2 statements) for this upsert instead of a
@@ -305,7 +331,8 @@ describe('Query count guards', () => {
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedDeck);
   });
 
-  it('feed build with embeddings stays within the taste-cluster budget', async () => {
+  /** 17 embedded favorites under the perf embedding config, no dismissals. */
+  async function seedEmbeddedFeedFavorites(): Promise<number[]> {
     const prisma = getTestPrisma();
     const seeds = await prisma.post.findMany({
       orderBy: { id: 'asc' },
@@ -341,6 +368,11 @@ describe('Query count guards', () => {
       ],
     });
     await prisma.favorite.createMany({ data: seedIds.map((postId) => ({ postId })) });
+    return seedIds;
+  }
+
+  it('feed build with embeddings stays within the taste-cluster budget', async () => {
+    const seedIds = await seedEmbeddedFeedFavorites();
 
     const count = await countQueries('feed (cold, embeddings)', () =>
       feedGET(apiRequest('http://localhost/api/feed'))
@@ -349,6 +381,60 @@ describe('Query count guards', () => {
     expect(seedIds).toHaveLength(17);
     expect(count).toBeGreaterThan(0);
     expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithEmbeddings);
+  });
+
+  it('feed build with favorites retrieval stays within budget and reuses neighbor lists', async () => {
+    const seedIds = await seedEmbeddedFeedFavorites();
+    const isNeighborLookup = (sql: string) => sql.includes('seed_embeddings');
+    const previousRetrieval = FEED_CONFIG.retrieval;
+    FEED_CONFIG.retrieval = 'favorites';
+    try {
+      const count = await countQueries('feed (cold, favorites retrieval)', () =>
+        feedGET(apiRequest('http://localhost/api/feed'))
+      );
+      expect(seedIds).toHaveLength(17);
+      expect(count).toBeGreaterThan(0);
+      expect(count).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithFavoriteRetrieval);
+
+      // A favorite/dismissal invalidation keeps the neighbor cache: the
+      // rebuild it triggers must not repeat any neighbor lookup.
+      invalidateFeedCache();
+      startQueryCapture();
+      try {
+        await feedGET(apiRequest('http://localhost/api/feed'));
+        await settleFeedRebuild();
+      } finally {
+        const warm = countableStatements(stopQueryCapture());
+        expect(warm.length).toBeGreaterThan(0);
+        expect(warm.filter((statement) => isNeighborLookup(statement.text))).toHaveLength(0);
+      }
+    } finally {
+      FEED_CONFIG.retrieval = previousRetrieval;
+    }
+  });
+
+  it('exploration adds one sample statement and one prefix read to a feed build', async () => {
+    const seedIds = await seedEmbeddedFeedFavorites();
+    const isUnseenSample = (sql: string) => sql.includes('"FeedSwipe"') && sql.includes('md5(');
+    const isPrefixRead = (sql: string) => sql.includes('subvector(');
+    const previousShare = FEED_CONFIG.exploreShare;
+    FEED_CONFIG.exploreShare = 0.1;
+    try {
+      startQueryCapture();
+      let statements: ReturnType<typeof countableStatements>;
+      try {
+        await feedGET(apiRequest('http://localhost/api/feed'));
+      } finally {
+        statements = countableStatements(stopQueryCapture());
+      }
+      console.log(`query count [feed (cold, exploration)]: ${statements.length}`);
+      expect(seedIds).toHaveLength(17);
+      expect(statements.length).toBeLessThanOrEqual(QUERY_BUDGETS.feedWithExploration);
+      expect(statements.filter((statement) => isUnseenSample(statement.text))).toHaveLength(1);
+      expect(statements.filter((statement) => isPrefixRead(statement.text))).toHaveLength(1);
+    } finally {
+      FEED_CONFIG.exploreShare = previousShare;
+    }
   });
 
   it('favorite PUT stays within budget', async () => {

@@ -28,7 +28,14 @@ export const DECK_TAGS_PER_CATEGORY = 3;
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
-export interface DeckPost extends Omit<FeedPost, "score"> {
+export interface DeckPost extends Omit<FeedPost, "score" | "explore"> {
+  /**
+   * Dealt as exploration: a post not seen before and unlike anything
+   * favorited so far. The card looks like any other; the client reports the
+   * flag back with the swipe, so exploration can be judged by how its cards
+   * are answered.
+   */
+  explore: boolean;
   extension: string;
   /** Milliseconds, videos only. */
   duration: number | null;
@@ -150,6 +157,7 @@ export async function getFeedDeck(exclude: ReadonlySet<string>, limit: number): 
       height: post.height,
       blurhash: post.blurhash,
       mimeType: post.mimeType,
+      explore: post.explore === true,
       extension: detail.extension,
       duration: detail.duration,
       hasAudio: detail.hasAudio,

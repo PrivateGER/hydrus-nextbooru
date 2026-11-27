@@ -8,6 +8,7 @@ import {
   LanguageIcon,
   PhotoIcon,
   QuestionMarkCircleIcon,
+  SparklesIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 import type { Section, NavItem } from "@/types/admin";
@@ -17,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "thumbnails", label: "Thumbnails", icon: PhotoIcon, description: "Generate preview images" },
   { id: "phash", label: "Similarity", icon: FingerPrintIcon, description: "Perceptual image hashing" },
   { id: "embeddings", label: "Embeddings", icon: CircleStackIcon, description: "Semantic image search" },
+  { id: "feed", label: "For You", icon: SparklesIcon, description: "Recommendation feed tuning" },
   { id: "translation", label: "Translation", icon: LanguageIcon, description: "Configure AI translation" },
   { id: "ocr", label: "OCR", icon: DocumentMagnifyingGlassIcon, description: "Positioned text recognition & overlay" },
   { id: "maintenance", label: "Maintenance", icon: WrenchScrewdriverIcon, description: "Database utilities" },

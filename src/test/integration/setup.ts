@@ -185,6 +185,7 @@ export async function cleanDatabase(): Promise<void> {
   await p.postRecommendation.deleteMany();
   await p.favorite.deleteMany();
   await p.feedDismissal.deleteMany();
+  await p.feedSwipe.deleteMany();
   await p.postTag.deleteMany();
   await p.postGroup.deleteMany();
   await p.thumbnail.deleteMany();
@@ -197,12 +198,13 @@ export async function cleanDatabase(): Promise<void> {
   await p.tag.deleteMany();
   await p.group.deleteMany();
   await p.syncState.deleteMany();
-  // Clear settings for test isolation (stats and OpenRouter settings)
+  // Clear settings for test isolation (stats, OpenRouter and feed settings)
   await p.settings.deleteMany({
     where: {
       OR: [
         { key: { startsWith: 'stats.' } },
         { key: { startsWith: 'openrouter.' } },
+        { key: { startsWith: 'feed.' } },
       ],
     },
   });

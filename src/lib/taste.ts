@@ -492,3 +492,95 @@ export function allocateAcrossClusters<T extends { id: number }>(
 
   return result;
 }
+
+export interface DiversifyOptions {
+  /** 1 keeps pure relevance order; lower values weigh novelty more. */
+  lambda: number;
+  /** Items ordered by MMR; everything after keeps its relevance order. */
+  depth: number;
+  /** Maps a cosine between two items onto the scale of `score`. */
+  similarity?: (cosine: number) => number;
+}
+
+/**
+ * Maximal-marginal-relevance reordering (Carbonell & Goldstein, 1998) of a
+ * relevance-ranked list: each pick maximizes
+ * `lambda * relevance - (1 - lambda) * (highest similarity to anything already picked)`,
+ * so a near-twin of an earlier pick is pushed down instead of following it.
+ *
+ * `relevance` is the item's score divided by the list's highest score, which
+ * puts it on the same 0..1 scale as a similarity whatever the scorer's own
+ * scale is (a calibrated cosine, or a sum of several members' contributions).
+ * Without that, a scorer with large values would drown the penalty.
+ *
+ * `vectorById` holds unit vectors; an item without one is never penalized
+ * and never penalizes others. The input is not mutated, every item is
+ * returned exactly once, and ties keep the earlier (more relevant) item.
+ */
+export function diversifyRanked<T extends { id: number; score: number }>(
+  ranked: readonly T[],
+  vectorById: ReadonlyMap<number, Float32Array>,
+  options: DiversifyOptions,
+): T[] {
+  const count = ranked.length;
+  const depth = Math.min(count, Math.max(0, Math.floor(options.depth)));
+  const lambda = Math.min(1, Math.max(0, options.lambda));
+  if (count <= 2 || depth <= 1 || lambda >= 1) {
+    return [...ranked];
+  }
+  const similarity = options.similarity ?? ((cosine: number) => cosine);
+  let topScore = 0;
+  for (const item of ranked) {
+    if (item.score > topScore) topScore = item.score;
+  }
+  const scale = topScore > 0 ? 1 / topScore : 1;
+  const vectors = ranked.map((item) => vectorById.get(item.id));
+  const highestSimilarity = new Float64Array(count);
+  const taken = new Uint8Array(count);
+  const result: T[] = [];
+  for (let step = 0; step < depth; step += 1) {
+    let best = -1;
+    let bestValue = -Infinity;
+    for (let index = 0; index < count; index += 1) {
+      if (taken[index] !== 0) {
+        continue;
+      }
+      const value =
+        lambda * ranked[index].score * scale -
+        (1 - lambda) * highestSimilarity[index];
+      if (value > bestValue) {
+        bestValue = value;
+        best = index;
+      }
+    }
+    if (best === -1) {
+      break;
+    }
+    taken[best] = 1;
+    result.push(ranked[best]);
+    const pickedVector = vectors[best];
+    if (!pickedVector) {
+      continue;
+    }
+    for (let index = 0; index < count; index += 1) {
+      const vector = vectors[index];
+      if (taken[index] !== 0 || !vector || vector.length !== pickedVector.length) {
+        continue;
+      }
+      let cosine = 0;
+      for (let dimension = 0; dimension < vector.length; dimension += 1) {
+        cosine += vector[dimension] * pickedVector[dimension];
+      }
+      const scaled = similarity(cosine);
+      if (scaled > highestSimilarity[index]) {
+        highestSimilarity[index] = scaled;
+      }
+    }
+  }
+  for (let index = 0; index < count; index += 1) {
+    if (taken[index] === 0) {
+      result.push(ranked[index]);
+    }
+  }
+  return result;
+}

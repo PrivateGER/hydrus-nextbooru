@@ -65,9 +65,11 @@ function writeHistory(entries: SwipeHistoryEntry[]) {
 /**
  * Full-screen, Tinder-style deck over the "For You" ranking.
  *
- * Swipe right likes (favorites) the post, swipe left skips it. Skips are not
- * sent to the server; the device remembers swiped hashes (see
- * {@link SwipeHistoryEntry}) and excludes them when asking for more cards.
+ * Swipe right likes (favorites) the post, swipe left skips it. The device
+ * remembers swiped hashes (see {@link SwipeHistoryEntry}) and excludes them
+ * when asking for more cards. Every swipe's outcome is also reported to the
+ * server as a record of what was shown (not as "not interested"), which is
+ * how exploration cards are judged.
  */
 export function SwipeDeck() {
   const [queue, setQueue] = useState<DeckPost[]>([]);
@@ -101,6 +103,8 @@ export function SwipeDeck() {
   /** The in-flight deck request, if any. Aborted requests no longer count as in flight. */
   const abortRef = useRef<AbortController | null>(null);
   const pendingByHash = useRef(new Map<string, Promise<unknown>>());
+  /** Swipe reports queue separately: they must never delay a favorite write. */
+  const pendingReportsByHash = useRef(new Map<string, Promise<unknown>>());
   /**
    * The newest swipe per post. A like's failure handler rolls back only if
    * its swipe is still the newest: after an undo (or undo + re-swipe) while
@@ -249,16 +253,25 @@ export function SwipeDeck() {
     image.src = next.mimeType.startsWith("video/") ? thumbnailUrl(next.hash) : fileUrl(next);
   }, [queue]);
 
-  /** Serialize requests per post so an undo never overtakes its like. */
-  const chain = useCallback((hash: string, task: () => Promise<boolean>): Promise<boolean> => {
-    const previous = pendingByHash.current.get(hash) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(task);
-    pendingByHash.current.set(hash, next);
-    void next.finally(() => {
-      if (pendingByHash.current.get(hash) === next) pendingByHash.current.delete(hash);
-    });
-    return next;
-  }, []);
+  /** Run `task` after the previous one queued for the same post in `queue`. */
+  const enqueue = useCallback(
+    (queue: Map<string, Promise<unknown>>, hash: string, task: () => Promise<boolean>): Promise<boolean> => {
+      const previous = queue.get(hash) ?? Promise.resolve();
+      const next = previous.catch(() => {}).then(task);
+      queue.set(hash, next);
+      void next.finally(() => {
+        if (queue.get(hash) === next) queue.delete(hash);
+      });
+      return next;
+    },
+    []
+  );
+
+  /** Serialize favorite requests per post so an undo never overtakes its like. */
+  const chain = useCallback(
+    (hash: string, task: () => Promise<boolean>) => enqueue(pendingByHash.current, hash, task),
+    [enqueue]
+  );
 
   const setFavorite = useCallback(
     (hash: string, favorited: boolean) =>
@@ -271,6 +284,33 @@ export function SwipeDeck() {
         }
       }),
     [chain]
+  );
+
+  /**
+   * Report how a card was answered, or (action null) that the answer was
+   * undone. A record only: failures are ignored, since nothing the user sees
+   * depends on it.
+   */
+  const reportSwipe = useCallback(
+    (post: DeckPost, action: SwipeAction | null) =>
+      enqueue(pendingReportsByHash.current, post.hash, async () => {
+        try {
+          const response = await fetch(
+            `/api/posts/${post.hash}/swipe`,
+            action === null
+              ? { method: "DELETE" }
+              : {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action, explore: post.explore === true }),
+                }
+          );
+          return response.ok;
+        } catch {
+          return false;
+        }
+      }),
+    [enqueue]
   );
 
   const dismissHint = useCallback(() => {
@@ -306,6 +346,8 @@ export function SwipeDeck() {
             likesSettled.current++;
             rebuildRetries.current = 0;
             setExhausted(false);
+            // Only a like that was actually saved counts as one.
+            if (latestSwipeByHash.current.get(post.hash) === id) void reportSwipe(post, "like");
             return;
           }
           // Superseded by a later undo or swipe of this post: leave its state alone.
@@ -319,9 +361,11 @@ export function SwipeDeck() {
           revive(post.hash, "right");
           showToast("Couldn't save that like. Try again.");
         });
+      } else {
+        void reportSwipe(post, "skip");
       }
     },
-    [setFavorite, showToast, setProgress, revive]
+    [setFavorite, reportSwipe, showToast, setProgress, revive]
   );
 
   const undo = useCallback(() => {
@@ -336,12 +380,13 @@ export function SwipeDeck() {
     revive(last.post.hash, last.action === "like" ? "right" : "left");
     setExhausted(false);
     setAnnouncement("Undone");
+    void reportSwipe(last.post, null);
     if (last.action === "like") {
       void setFavorite(last.post.hash, false).then((ok) => {
         if (!ok) showToast("Couldn't remove that like. It's still in your favorites.");
       });
     }
-  }, [undoStack, setFavorite, showToast, revive]);
+  }, [undoStack, setFavorite, reportSwipe, showToast, revive]);
 
   const swipe = useCallback(
     (action: SwipeAction) => {

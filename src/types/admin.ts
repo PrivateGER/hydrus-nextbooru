@@ -147,7 +147,7 @@ export interface OcrStats {
   };
 }
 
-export type Section = "sync" | "thumbnails" | "translation" | "phash" | "embeddings" | "ocr" | "maintenance" | "help";
+export type Section = "sync" | "thumbnails" | "translation" | "phash" | "embeddings" | "feed" | "ocr" | "maintenance" | "help";
 
 export interface Message {
   type: "success" | "error";

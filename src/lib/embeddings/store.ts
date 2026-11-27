@@ -79,6 +79,10 @@ const RELATED_EMBEDDING_CANDIDATE_LIMIT = 200;
 // per LATERAL query keeps multi-core parallelism with about seven round trips.
 const RELATED_EMBEDDING_SEED_CHUNK_SIZE = 16;
 const EMBEDDING_VECTOR_POST_CHUNK_SIZE = 500;
+// Prefix rows are a few KB each, so far larger chunks stay cheap per statement.
+const EMBEDDING_PREFIX_POST_CHUNK_SIZE = 2000;
+/** Most posts one exploration sample may return. */
+const UNSEEN_SAMPLE_MAX = 2000;
 const MAX_SIMILARITY_CANDIDATE_CHUNK_SIZE = 1000;
 /**
  * Clamp an optional similarity floor to [-1, 1]; null disables it.
@@ -473,6 +477,125 @@ export async function getEmbeddingVectorsForPosts(options: {
       ),
     }))
   );
+}
+
+/**
+ * Read the leading `prefixDimensions` of each post's COMPLETE embedding under
+ * the active config, renormalized to unit length. Missing posts are omitted.
+ *
+ * For comparing many candidates with each other, where the full vectors are
+ * too much data to move (3072-d rows are ~35 KB of text each). A prefix
+ * cosine is an estimate of the full cosine: on Matryoshka-trained models
+ * (the Gemini embedding family) 256 leading dimensions track it closely
+ * (measured on prod at 3072-d: correlation 0.978, mean absolute error
+ * 0.014); on other models it is a noisier coordinate sample. Good for
+ * judging redundancy and for a coarse "near a favorite or nowhere near one"
+ * test (exploration); not a relevance score, and not a fine-grained gate.
+ */
+export async function getEmbeddingPrefixesForPosts(options: {
+  postIds: number[];
+  config: EmbeddingConfig;
+  prefixDimensions: number;
+}): Promise<Map<number, Float32Array>> {
+  const { config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+  const requested = Number.isFinite(options.prefixDimensions)
+    ? Math.floor(options.prefixDimensions)
+    : config.dimensions;
+  const prefixDimensions = Math.min(Math.max(1, requested), config.dimensions);
+
+  const uniquePostIds = new Set<number>();
+  for (const postId of options.postIds) {
+    if (Number.isInteger(postId)) uniquePostIds.add(postId);
+  }
+  const postIds = [...uniquePostIds];
+  const prefixes = new Map<number, Float32Array>();
+  if (postIds.length === 0) return prefixes;
+
+  const chunks: number[][] = [];
+  for (let index = 0; index < postIds.length; index += EMBEDDING_PREFIX_POST_CHUNK_SIZE) {
+    chunks.push(postIds.slice(index, index + EMBEDDING_PREFIX_POST_CHUNK_SIZE));
+  }
+  const vectorTypeSql = vectorType(config.dimensions);
+  const chunkRows = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.$queryRaw<{ postId: number; prefix: string }[]>`
+        SELECT
+          pe."postId",
+          subvector(pe.embedding::${vectorTypeSql}, 1, ${prefixDimensions}::int)::text AS prefix
+        FROM "PostEmbedding" pe
+        WHERE pe."postId" = ANY(${chunk}::int[])
+          AND pe."baseUrl" = ${config.baseUrl}
+          AND pe.model = ${config.model}
+          AND pe.dimensions = ${config.dimensions}
+          AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
+          AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+          AND pe.embedding IS NOT NULL
+      `
+    )
+  );
+
+  for (const rows of chunkRows) {
+    for (const row of rows) {
+      const values = validateEmbeddingVector(parseVectorLiteral(row.prefix), prefixDimensions);
+      let squaredNorm = 0;
+      for (const value of values) squaredNorm += value * value;
+      if (squaredNorm === 0) continue;
+      const inverseNorm = 1 / Math.sqrt(squaredNorm);
+      const prefix = new Float32Array(prefixDimensions);
+      for (let index = 0; index < prefixDimensions; index += 1) {
+        prefix[index] = values[index] * inverseNorm;
+      }
+      prefixes.set(Number(row.postId), prefix);
+    }
+  }
+  return prefixes;
+}
+
+/**
+ * A seeded random sample of posts with a COMPLETE embedding under the active
+ * config that the user has not yet met: no favorite, dismissal, detail-page
+ * view, or swipe. Used by the feed's exploration, which looks for posts
+ * outside the taste model's reach.
+ *
+ * The same seed returns the same sample while the tables are unchanged, so a
+ * rebuild within one seed bucket does not reshuffle exploration; posts that
+ * have since been seen simply drop out. Ordering by a per-seed hash is one
+ * sequential pass over the embedding rows (about 0.2 s at 177k on prod).
+ */
+export async function sampleUnseenEmbeddedPostIds(options: {
+  config: EmbeddingConfig;
+  limit: number;
+  seed: number;
+}): Promise<number[]> {
+  const { config } = options;
+  if (!isSupportedEmbeddingDimensions(config.dimensions)) {
+    throw new Error("Unsupported embedding dimensions for vector search");
+  }
+  const requestedLimit = Number.isFinite(options.limit) ? Math.floor(options.limit) : 0;
+  const limit = Math.min(Math.max(0, requestedLimit), UNSEEN_SAMPLE_MAX);
+  if (limit === 0) return [];
+  const seed = String(Math.floor(options.seed));
+
+  const rows = await prisma.$queryRaw<{ postId: number }[]>`
+    SELECT pe."postId"
+    FROM "PostEmbedding" pe
+    WHERE pe."baseUrl" = ${config.baseUrl}
+      AND pe.model = ${config.model}
+      AND pe.dimensions = ${config.dimensions}
+      AND pe."imageMaxResolution" IN (${config.imageMaxResolution}, ${EMBEDDING_VIDEO_MAX_RESOLUTION})
+      AND pe.status = 'COMPLETE'::"EmbeddingStatus"
+      AND pe.embedding IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM "Favorite" f WHERE f."postId" = pe."postId")
+      AND NOT EXISTS (SELECT 1 FROM "FeedDismissal" d WHERE d."postId" = pe."postId")
+      AND NOT EXISTS (SELECT 1 FROM "PostView" v WHERE v."postId" = pe."postId")
+      AND NOT EXISTS (SELECT 1 FROM "FeedSwipe" s WHERE s."postId" = pe."postId")
+    ORDER BY md5(pe."postId"::text || ${seed}), pe."postId"
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => Number(row.postId));
 }
 
 /**
